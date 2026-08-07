@@ -17,11 +17,15 @@ Notes:
 
 
 ## Specifications - MPRAGE
-1. Integrated FLASH-calibration + MPRAGE wave R3x1 (SAG), 1x1x1 mm^3, 3:48 min (Adult FOV)
+1. Integrated FLASH-calibration + MPRAGE wave R3x1 (SAG), 1x1x1 mm^3
+  - 3:48 min (Adult Extended FOV & Adult FOV)
+  - 3:03 min (Kid FOV)
 
 Notes:
 - Choose "Sagittal" for the slice orientation before any rotation of FOV (Otherwise, the pulseq interpreter won't be able to assign PE to the right direction)
 - Recommend to turn neck channels off to avoid signal contamination
 - Bandwidth = 195 Hz/Px
-- Adult FOV = 220x256x256 mm^3
+- Adult Extended FOV = 220x256x256 mm^3 (recommended)
+- Adult FOV = 192x256x256 mm^3
+- Kid FOV = 172x220x256 mm^3
 
