@@ -9,7 +9,8 @@ Notes:
 - Choose "R->L" for the PE direction
 - Avoid aliasing in PE direction
 - Recommend using the adjustment volume + B0 standard shim or using B0 tune up + manual adjustments of B0 3D shim
-- TE = 20 ms, TR = 30 ms, Bandwidth = 200 Hz/Px
+- Single echo: TE = 20 ms, TR = 30 ms, Bandwidth = 200 Hz/Px
+- Dual echo: TE = 10/20 ms, TR = 30 ms, Bandwidth = 200 Hz/Px
 - Adult FOV = 220x220x160 mm^3
 - Slice oversampling = 12.5%
 
