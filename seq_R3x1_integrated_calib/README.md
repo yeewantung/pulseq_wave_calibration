@@ -2,7 +2,9 @@
 
 
 ## Specifications - GRE
-1. Integrated FLASH-calibration + GRE/SWI wave R3x1 (TRA), 1x1x1 mm^3, 3:24 min (Adult FOV)
+1. Integrated FLASH-calibration + GRE/SWI wave R3x1 (TRA), 1x1x1 mm^3
+  - 3:24 min (Adult FOV - 220x220x180)
+  - 3:41 min (Adult Extended FOV - 220x240x180)
   - Single echo: TE = 20 ms, TR = 30 ms
   - Dual echo: TE = 10/20 ms, TR = 30 ms
 
