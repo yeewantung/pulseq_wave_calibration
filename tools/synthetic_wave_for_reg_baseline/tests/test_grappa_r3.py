@@ -17,6 +17,7 @@ from grappa_r3 import (  # noqa: E402
     accumulate_normal_equations,
     apply_grappa_plane,
     apply_grappa_volume,
+    apply_grappa_volume_partitionwise,
     calibration_matrices,
     solve_weights,
     source_matrix_for_targets,
@@ -101,6 +102,37 @@ class ReconstructionTests(unittest.TestCase):
         plane[:, ~mask] = 0
         reconstructed = apply_grappa_plane(plane, mask, weights)
         np.testing.assert_array_equal(reconstructed[:, mask], plane[:, mask])
+
+    def test_partitionwise_mode_matches_independent_plane_calibrations(self) -> None:
+        """Each PE2 plane must use its own joint-multicoil ACS equations."""
+        rng = np.random.default_rng(23)
+        calibration = (
+            rng.standard_normal((20, 18, 3, 4))
+            + 1j * rng.standard_normal((20, 18, 3, 4))
+        ).astype(np.complex64)
+        mask = np.arange(calibration.shape[1]) % 3 == 1
+        undersampled = calibration.copy()
+        undersampled[:, ~mask, :, :] = 0
+
+        reconstructed = apply_grappa_volume_partitionwise(
+            undersampled,
+            calibration,
+            mask,
+        )
+        expected = []
+        for partition in range(calibration.shape[2]):
+            equations = accumulate_normal_equations(
+                calibration[:, :, partition : partition + 1, :]
+            )
+            weights = solve_weights(
+                equations, max_ncc=4, ncc=4, regularization=0.01
+            )
+            expected.append(
+                apply_grappa_plane(undersampled[:, :, partition, :], mask, weights)
+            )
+        np.testing.assert_allclose(
+            reconstructed, np.stack(expected, axis=2), rtol=1e-6, atol=1e-6
+        )
 
     def test_interior_matches_pygrappa_reference(self) -> None:
         try:

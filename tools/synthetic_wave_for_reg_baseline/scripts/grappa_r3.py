@@ -270,6 +270,56 @@ def apply_grappa_volume(
     return result
 
 
+def apply_grappa_volume_partitionwise(
+    undersampled: np.ndarray,
+    calibration: np.ndarray,
+    acquired_mask: Sequence[bool],
+    *,
+    regularization: float = 0.01,
+    acceleration: int = 3,
+    acquired_residue: int = 1,
+) -> np.ndarray:
+    """Calibrate and apply one joint-multicoil kernel per PE2 partition.
+
+    The product refscan is fully sampled in PE1 for every PE2 partition, so a
+    partition-specific kernel can be estimated without borrowing target data
+    from the accelerated imaging stream. This diagnostic mode tests whether
+    pooling one kernel across all kz partitions causes residual R=3 aliasing.
+    """
+    undersampled = np.asarray(undersampled, dtype=np.complex64)
+    calibration = np.asarray(calibration, dtype=np.complex64)
+    if undersampled.ndim != 4 or calibration.ndim != 4:
+        raise ValueError("Imaging and calibration must use [RO, PE1, PE2, coil] layout.")
+    if (
+        calibration.shape[0] != undersampled.shape[0]
+        or calibration.shape[2:] != undersampled.shape[2:]
+    ):
+        raise ValueError(
+            "Imaging and calibration must have matching RO, PE2, and coil dimensions."
+        )
+
+    result = np.empty_like(undersampled)
+    ncoil = undersampled.shape[-1]
+    for partition in range(undersampled.shape[2]):
+        equations = accumulate_normal_equations(
+            calibration[:, :, partition : partition + 1, :]
+        )
+        weights = solve_weights(
+            equations,
+            max_ncc=ncoil,
+            ncc=ncoil,
+            regularization=regularization,
+        )
+        result[:, :, partition, :] = apply_grappa_plane(
+            undersampled[:, :, partition, :],
+            acquired_mask,
+            weights,
+            acceleration=acceleration,
+            acquired_residue=acquired_residue,
+        )
+    return result
+
+
 def nrmse(numerator: float, denominator: float) -> float:
     """Return norm-ratio NRMSE from accumulated squared norms."""
     if denominator <= 0:

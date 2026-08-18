@@ -670,27 +670,31 @@ bart wave \
     recon
 ```
 
-Initial sweep:
+Because the measured λ=0 run took about 12.8 minutes on CPU, do not run a
+dense sweep by default. Start with a bounded pilot of three to five typical,
+log-spaced positive weights, reuse the saved ESPIRiT maps, and pass the saved
+maximum eigenvalue (`-e 6.70e7`) to avoid repeating BART's expensive eigenvalue
+estimation. Record both wall time and BART-reported reconstruction time. Add at
+most one or two weights around the most useful pilot result only when visual or
+quantitative comparison cannot distinguish a preferred setting.
+
+Representative pilot (subject to adjustment after the first timed run):
 
 ```text
 0
-1e-5
 1e-4
-5e-4
 1e-3
-5e-3
+1e-2
 ```
 
-- [ ] λ = 0
-- [ ] λ = 1e-5
+- [x] λ = 0
 - [ ] λ = 1e-4
-- [ ] λ = 5e-4
 - [ ] λ = 1e-3
-- [ ] λ = 5e-3
+- [ ] λ = 1e-2
 - [ ] Scripted sweep driver implemented.
 - [ ] Per-run commands, status, runtime, and output paths recorded in machine-readable metadata.
-- [ ] Best coarse interval identified.
-- [ ] Fine sweep completed.
+- [ ] Representative pilot values compared.
+- [ ] Optional one- or two-point refinement completed only if the pilot is inconclusive.
 
 **Current best λ:** `TBD`
 
@@ -1036,6 +1040,42 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 - [x] Validate held-out ACS and completed no-wave k-space.
 - [x] Save both the metric-preferred `[256,256,256,24]` comparison and user-selected active `[256,256,256,12]` complex64 k-space, each with a central RSS diagnostic.
 
+### GRAPPA visual-acceptance troubleshooting
+
+The central-slice diagnostic was insufficient. At stored axial index 180
+(the user-reported slice 75 when counted from the opposite direction), the
+same R3 ghost is present in the no-wave GRAPPA RSS image and the synthetic
+Wave λ=0 image, but not in the scanner's unfiltered product DICOM. Therefore
+the artifact originates in no-wave GRAPPA and propagates through the otherwise
+consistent Wave forward/reconstruction path.
+
+- [x] Confirm all coils are trained jointly; no coil is calibrated independently.
+- [x] Confirm raw/local PE1 residue mapping, measured-sample preservation, FFT conventions, and `pygrappa` regular-grid source geometry.
+- [x] Measure held-out ACS NRMSE per PE2 partition. The pooled Ncc=12 value
+  `0.1724` hides a range of `0.1425...1.1320` and a median of `0.5122` because
+  the energy-weighted aggregate is dominated by central kz partitions.
+- [x] Test shared-kernel Tikhonov values. Reducing the parameter from `0.01`
+  to `0.0001` changes aggregate NRMSE only from `0.1724` to `0.1690` and does
+  not explain or fix the artifact.
+- [x] Reconstruct a diagnostic Ncc=12 volume with one joint-multicoil 5×5
+  kernel calibrated from each PE2 partition's own fully sampled refscan.
+  This slightly reduces the ghost but does not remove it.
+- [x] Compare the existing Ncc=12 and Ncc=24 RSS images at the problematic
+  slice. Ncc=24 is less noisy but retains the same structured ghost.
+- [x] Use `pygrappa` only as an ACS oracle for wider 2D kernels. A 7×9 kernel
+  improves representative self-fit NRMSE only modestly and does not justify a
+  second large 2D reconstruction.
+- [x] Use `pygrappa.mdgrappa` only as a small ACS oracle for 3D support. A
+  5×5×3 kernel improves representative NRMSE by about 9% in outer partitions
+  and 34% centrally, but is substantially slower and remains unproven as a
+  visual fix. A full 3D GRAPPA branch is not the default next step.
+- [ ] Do not use the current GRAPPA-derived volume for the positive-λ BART
+  comparison unless its residual aliasing is explicitly accepted.
+- [ ] Recommended next step: after explicit approval, replace no-wave GRAPPA
+  completion with the previously clean no-wave CG-SENSE approach, then repeat
+  Wave synthesis and the bounded BART pilot. Keep the GRAPPA results as a
+  documented method-dependence comparison rather than the primary baseline.
+
 ## Phase D — synthetic Wave
 
 - [x] Center-embed the Ncc=12 coil images from 256 to 1024 readout voxels.
@@ -1053,9 +1093,11 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 - [x] Run `bart ecalib -m 1` to generate calibrated `[256,256,256,12,1]` ESPIRiT maps.
 - [x] Save and inspect ESPIRiT magnitude/phase diagnostics before Wave reconstruction.
 - [x] Run λ=0 using BART's unregularized CG branch and export TWIX-oriented magnitude/phase NIfTIs.
-- [ ] Run coarse wavelet λ sweep.
-- [ ] Identify useful interval.
-- [ ] Run fine sweep.
+- [x] Trace the λ=0 R3 ghost to the GRAPPA-completed no-wave input.
+- [ ] Keep positive-λ runs paused until a visually acceptable no-wave completion is selected.
+- [ ] Run a bounded pilot of three to five representative wavelet λ values; do not launch a dense sweep by default.
+- [ ] Reuse the saved ESPIRiT maps and saved maximum eigenvalue, and record wall/BART reconstruction time for every run.
+- [ ] If needed, refine with only one or two additional λ values around the most useful pilot result.
 - [ ] Optional LLR comparison.
 
 ## Phase F — evaluation
@@ -1074,6 +1116,10 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 - [ ] Compare optimal parameters with GRAPPA branch.
 
 Do not begin Phase G without an explicit request.
+
+GRAPPA troubleshooting now makes SENSE the recommended primary continuation,
+not merely an optional scientific comparison. This recommendation does not by
+itself authorize the large SENSE/Wave rerun; begin it after explicit approval.
 
 ## Phase H — future R3×2 and R3×3 synthetic masks (deferred)
 
@@ -1094,6 +1140,33 @@ The theoretical PSF and full Wave k-space must remain identical across accelerat
 - [ ] Implement and validate an R3×3 synthetic sampling mask.
 - [ ] Compare reconstruction stability and preferred regularization across acceleration factors.
 - [ ] Do not begin Phase H unless explicitly requested.
+
+## Phase I — final cleanup
+
+Perform this only after the requested reconstruction and evaluation work is
+complete, so cleanup does not disrupt reproducibility while the experiment is
+still changing.
+
+- [ ] Inventory tracked files whose names contain pipeline stage labels such as
+  `phase_a` or `phase_e`, rename them to descriptive task-based names, and
+  update imports, tests, documentation, and command examples. Preserve names
+  where “phase” is scientifically meaningful, such as magnitude/phase image
+  components.
+- [ ] Add a concise leading docstring or maintenance comment to every function
+  in experiment scripts and utilities. Explain purpose and non-obvious MRI,
+  array-layout, or external-interface conventions without narrating obvious
+  statements.
+- [ ] Audit code derived from the pinned external repositories. When an
+  external repository already exposes the function needed, import and call it
+  directly instead of maintaining a regenerated local copy; retain a local
+  adapter only when layout, streaming, or interface conversion requires one,
+  and document that boundary.
+- [ ] Inventory temporary and intermediate outputs, verify which artifacts are
+  required for provenance or downstream reconstruction, then remove unneeded
+  files from the dataset output directory without deleting source data or the
+  final calibrated/reconstructed results.
+- [ ] Run the complete test suite, verify documented commands and output paths,
+  and finish with a clean Git worktree.
 
 ---
 

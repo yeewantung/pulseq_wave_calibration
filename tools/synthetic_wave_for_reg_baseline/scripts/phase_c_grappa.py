@@ -21,6 +21,7 @@ from grappa_r3 import (
     accumulate_normal_equations,
     apply_grappa_plane,
     apply_grappa_volume,
+    apply_grappa_volume_partitionwise,
     nrmse,
     solve_weights,
 )
@@ -36,8 +37,9 @@ PYGRAPPA_REFERENCE = "pygrappa.grappa 0.26.3, kernel_size=(5,5)"
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the shared or partition-specific GRAPPA command-line interface."""
     parser = argparse.ArgumentParser(
-        description="Run held-out ACS validation and full shared-weight R=3 GRAPPA."
+        description="Run held-out ACS validation and full R=3 GRAPPA."
     )
     parser.add_argument("--twix", required=True, type=Path)
     parser.add_argument("--coil-basis", required=True, type=Path, help="Phase B .npz file.")
@@ -48,6 +50,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reconstruction-pe2-chunk", type=int, default=4)
     parser.add_argument("--holdout-stride", type=int, default=8)
     parser.add_argument("--holdout-remainder", type=int, default=0)
+    parser.add_argument(
+        "--weight-mode",
+        choices=("shared", "partitionwise"),
+        default="shared",
+        help=(
+            "Use the pooled baseline kernel or calibrate one joint-multicoil "
+            "kernel from each PE2 partition's fully sampled refscan."
+        ),
+    )
     parser.add_argument(
         "--reuse-normal-equations",
         action="store_true",
@@ -265,8 +276,15 @@ def reconstruct_full_volume(
     *,
     pe2_chunk: int,
     acquired_residue: int,
+    weight_mode: str = "shared",
+    regularization: float = 0.01,
 ) -> dict[str, Any]:
-    """Merge product image/refscan data and fill every missing PE1 line."""
+    """Merge product image/refscan data and fill every missing PE1 line.
+
+    Partitionwise mode retains joint use of all virtual coils but estimates
+    the kernel from the matching PE2 refscan plane instead of sharing one
+    kernel across the complete kz extent.
+    """
     configure_stream(image)
     configure_stream(refscan)
     ncc = basis.shape[1]
@@ -303,6 +321,9 @@ def reconstruct_full_volume(
             )
 
         planes = np.zeros((nro, npe1, stop - start, ncc), dtype=np.complex64)
+        calibration = np.empty(
+            (nro, ref_npe1, stop - start, ncc), dtype=np.complex64
+        )
         for local in range(stop - start):
             image_plane = np.transpose(image_raw[:, :, :, local], (0, 2, 1))
             ref_plane = np.transpose(ref_raw[:, :, :, local], (0, 2, 1))
@@ -311,15 +332,29 @@ def reconstruct_full_volume(
             )
             # The PAT refscan is authoritative in its 24-line support, matching
             # the established Wave loader convention of overwriting ACS lines.
-            planes[:, ref_start : ref_start + ref_npe1, local, :] = apply_coil_compression_coillast(
+            calibration[:, :, local, :] = apply_coil_compression_coillast(
                 ref_plane, basis
             )
-        reconstructed = apply_grappa_volume(
-            planes,
-            acquired_mask,
-            weights,
-            acquired_residue=acquired_residue,
-        )
+            planes[:, ref_start : ref_start + ref_npe1, local, :] = calibration[
+                :, :, local, :
+            ]
+        if weight_mode == "partitionwise":
+            reconstructed = apply_grappa_volume_partitionwise(
+                planes,
+                calibration,
+                acquired_mask,
+                regularization=regularization,
+                acquired_residue=acquired_residue,
+            )
+        elif weight_mode == "shared":
+            reconstructed = apply_grappa_volume(
+                planes,
+                acquired_mask,
+                weights,
+                acquired_residue=acquired_residue,
+            )
+        else:
+            raise ValueError(f"Unsupported GRAPPA weight mode: {weight_mode}.")
         measured_unchanged &= bool(
             np.array_equal(
                 reconstructed[:, acquired_mask, :, :], planes[:, acquired_mask, :, :]
@@ -361,6 +396,8 @@ def reconstruct_full_volume(
         "all_output_samples_finite": finite,
         "nonzero_reconstructed_missing_sample_count": reconstructed_missing_sample_count,
         "expected_missing_sample_count": int(nro * np.count_nonzero(~acquired_mask) * npe2 * ncc),
+        "weight_mode": weight_mode,
+        "partitionwise_regularization": regularization if weight_mode == "partitionwise" else None,
         "central_rss_diagnostics": str(diagnostics_path),
         "runtime_seconds": time.perf_counter() - started,
     }
@@ -454,7 +491,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     report: dict[str, Any] = {
         "format_version": 1,
-        "phase": "C - shared 2D R=3 GRAPPA",
+        "phase": f"C - {args.weight_mode} 2D R=3 GRAPPA",
         "twix": str(twix_path),
         "measurement_index": measurement_index,
         "coil_basis": str(basis_path),
@@ -480,6 +517,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "heldout_validation": validation_info,
         "heldout_metrics": metrics,
         "full_reconstruction": None,
+        "weight_mode": args.weight_mode,
     }
     report["report_file"] = str(report_path)
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -494,6 +532,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             output_path,
             pe2_chunk=args.reconstruction_pe2_chunk,
             acquired_residue=1,
+            weight_mode=args.weight_mode,
+            regularization=args.regularization,
         )
 
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
