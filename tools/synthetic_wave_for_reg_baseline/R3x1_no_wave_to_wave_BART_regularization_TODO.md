@@ -1069,6 +1069,14 @@ consistent Wave forward/reconstruction path.
   5×5×3 kernel improves representative NRMSE by about 9% in outer partitions
   and 34% centrally, but is substantially slower and remains unproven as a
   visual fix. A full 3D GRAPPA branch is not the default next step.
+- [x] After explicit discussion, implement one final local 5×5×3 attempt as a
+  resumable command-line job. `scripts/run_grappa_3d.py` checkpoints the
+  compressed ACS, pooled normal equations, and flushed reconstruction
+  partitions; all 12 source coils jointly predict all 12 target coils.
+- [ ] Run the final 5×5×3 job in `tmux`, export its RSS NIfTI, and inspect the
+  reported axial location before deciding whether GRAPPA is acceptable.
+- [ ] If interrupted, rerun the identical command with `--resume`; do not
+  delete or mix individual checkpoint files before resuming.
 - [ ] Do not use the current GRAPPA-derived volume for the positive-λ BART
   comparison unless its residual aliasing is explicitly accepted.
 - [ ] Recommended next step: after explicit approval, replace no-wave GRAPPA
