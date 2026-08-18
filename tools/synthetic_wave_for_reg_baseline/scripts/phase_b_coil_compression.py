@@ -21,7 +21,7 @@ import scipy.linalg as la
 
 
 REFERENCE_UTILITY = (
-    "sources/published_code/wave-mprage/recon/utils/"
+    "external/wave-mprage/recon/utils/"
     "coil_compression_kspace.py"
 )
 

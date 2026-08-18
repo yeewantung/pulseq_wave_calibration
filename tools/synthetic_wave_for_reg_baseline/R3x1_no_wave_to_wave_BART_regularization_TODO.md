@@ -181,17 +181,19 @@ The GRAPPA calibration and application code belongs to this experiment and will 
 For Wave reconstruction and TWIX-loading conventions, inspect and reuse the useful pieces from:
 
 ```text
-sources/published_code/wave-mprage/recon
+external/wave-mprage/recon
 sources/published_code/wave-gre-flow-comp/recon
 ```
 
-The current copies share the same `utils/twix_import.py` and `bart/run_wave_recon.sh`; several other utilities are identical or closely related. For this MPRAGE dataset, start from the Wave-MPRAGE path and consult the GRE path for newer/generalized behavior where useful.
+Wave-MPRAGE is a pinned git submodule because this experiment imports its BART CFL and TWIX-to-NIfTI utilities at runtime. The current code does not import Wave-GRE utilities, so adding a second submodule would create an unused dependency; consult its sibling checkout only as a development reference. Add Wave-GRE as a submodule later if a unique utility is actually incorporated.
 
 - [x] Implement explicit local R=3 GRAPPA calibration and application routines.
 - [x] Record the relevant `pygrappa` behavior or source version used as a reference.
 - [ ] Reuse/adapt the existing BART CFL export, ESPIRiT calibration, Wave reconstruction wrapper, and NIfTI conversion instead of reimplementing them.
 - [ ] Infer ESPIRiT maps from the fully sampled no-wave ACS after applying the same coil-compression matrix used for the synthetic Wave data.
-- [ ] Decide before implementation whether these sibling repositories should be added as git submodules or whether the minimal stable utilities should be incorporated locally with provenance. Do not attempt a broader utility unification in this experiment.
+- [x] Pin Wave-MPRAGE as a git submodule at the verified utility revision used by the runtime path.
+- [x] Leave Wave-GRE as a non-runtime reference unless a unique utility is incorporated later.
+- [x] Do not attempt a broader utility unification in this experiment.
 
 ---
 
@@ -625,9 +627,22 @@ Optional later:
 -m2   # soft-SENSE / multi-map comparison
 ```
 
+Generate the ESPIRiT maps strictly from the measured **no-wave product refscan ACS**, not from the GRAPPA-completed volume and not from the synthetic Wave k-space:
+
+1. Load the `refscan` stream from the same selected product TWIX measurement, with readout oversampling removed using the established loader convention.
+2. Apply the exact leading 12 columns of the saved 64→24 compression basis used for GRAPPA and Wave synthesis. Do not estimate a new compression basis for map calibration.
+3. Preserve the measured ACS support: 256 readout samples, raw PE1 lines `115:139` (24 lines), and all 256 PE2 partitions.
+4. Insert that compressed ACS into an exact-zero logical no-wave grid `[256,256,256,12]`, keeping PE1 lines at their raw coordinates, and export it as BART `kspace_calib.{hdr,cfl}` in `[READ,PHS1,PHS2,COIL]` order.
+5. Verify the CFL payload against the compressed refscan: measured ACS values must match bitwise, samples outside the ACS support must be exact complex zero, and all values must be finite.
+6. Run `bart ecalib -m 1` on `kspace_calib`, following the pinned Wave-MPRAGE wrapper and consulting Wave-GRE only if it contains a needed newer behavior. Record the BART version, full command, calibration options, runtime, and output hash.
+7. Require the calibrated map output to have logical shape `[256,256,256,12,1]`, matching the active virtual-coil ordering. Save magnitude/phase quick looks and check finiteness, spatial support, and absence of coil-axis or PE-axis swaps before Wave reconstruction.
+
 - [ ] ESPIRiT maps generated in the same virtual-coil basis.
 - [ ] Reuse/adapt `recon/bart/bart_utils/bart_io.py` and `recon/bart/run_wave_recon.sh` from the existing Wave repositories.
-- [ ] Build the BART ESPIRiT calibration CFL from the fully sampled no-wave ACS in that same virtual-coil basis.
+- [ ] Load the measured no-wave product refscan ACS and compress it with the exact active 64→12 basis.
+- [ ] Build and validate BART `kspace_calib` from the measured no-wave ACS in that same virtual-coil basis.
+- [ ] Run `bart ecalib -m 1` and record its version, command, options, runtime, and output hash.
+- [ ] Validate `[256,256,256,12,1]` ESPIRiT-map dimensions and magnitude/phase diagnostics.
 - [ ] BART dimensions verified.
 - [ ] Unregularized Wave reconstruction completed.
 - [ ] Wavelet sweep completed.
@@ -1033,7 +1048,10 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 
 ## Phase E — BART sweep
 
-- [ ] Generate/verify ESPIRiT maps.
+- [ ] Export measured no-wave ACS as BART `kspace_calib` after applying the active 64→12 compression basis.
+- [ ] Verify exact ACS coordinates/payload, zero exterior, BART dimensions, and finiteness.
+- [ ] Run `bart ecalib -m 1` to generate calibrated `[256,256,256,12,1]` ESPIRiT maps.
+- [ ] Save and inspect ESPIRiT magnitude/phase diagnostics before Wave reconstruction.
 - [ ] Run λ=0.
 - [ ] Run coarse wavelet λ sweep.
 - [ ] Identify useful interval.

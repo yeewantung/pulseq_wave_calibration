@@ -21,11 +21,16 @@ The active result uses the leading 12 columns of the shared 64→24 nested coil-
 From the repository root:
 
 ```bash
+git submodule update --init external/wave-mprage
 python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/phase-d.txt
 python -m unittest discover \
     -s tools/synthetic_wave_for_reg_baseline/tests \
     -p 'test_*.py'
 ```
+
+Wave-MPRAGE is pinned as a submodule because the current scripts import its
+BART CFL and TWIX-to-NIfTI utilities at runtime. Wave-GRE remains an optional
+reference and is not a submodule because no current code depends on it.
 
 Run a script with `--help` for its dataset-independent CLI, for example:
 

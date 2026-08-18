@@ -45,7 +45,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--reference-recon",
         type=Path,
-        default=Path(__file__).resolve().parents[4] / "wave-mprage" / "recon",
+        default=Path(__file__).resolve().parents[3] / "external" / "wave-mprage" / "recon",
         help="Wave-MPRAGE recon folder containing utils/nifti_export_twix.py.",
     )
     parser.add_argument("--overwrite", action="store_true")
