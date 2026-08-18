@@ -1,0 +1,1143 @@
+# R3×1 No-Wave → Synthetic Wave → BART Regularization Tuning
+## Implementation To-Do and Progress Tracker
+
+**Purpose:** Build a reproducible offline experiment for tuning BART Wave reconstruction regularization using an acquired **R3×1 no-wave** dataset and its **online scanner DICOM** as the practical reference.
+
+**Primary strategy:** Reconstruct the missing no-wave k-space with **2D GRAPPA**, preserving coil-wise k-space, then apply the existing Wave forward model and retrospectively re-apply the same R3×1 sampling mask.
+
+**Deferred secondary strategy:** Repeat the experiment with **SENSE/ESPIRiT** to measure how much the synthetic Wave result depends on the no-wave completion method. Do not implement or run this branch unless explicitly requested.
+
+---
+
+## 0. Project objective
+
+We want to answer:
+
+> Which BART `wave` regularization choice and parameter value gives the best reconstruction quality for an R3×1 Wave acquisition?
+
+Use:
+
+1. Acquired **R3×1 no-wave raw data**.
+2. Corresponding **online scanner DICOM**.
+3. Raw no-wave data to synthesize **R3×1 Wave data**.
+4. BART `wave` reconstructions across regularization choices/weights.
+5. Quantitative and qualitative comparison against the reference.
+
+The correct processing order is:
+
+$$
+\text{recover/estimate full no-wave coil data}
+\rightarrow
+\text{apply Wave encoding}
+\rightarrow
+\text{apply R3×1 sampling mask}.
+$$
+
+---
+
+# 1. Core design decisions
+
+## 1.1 Do not Wave-encode already-aliased hybrid-space data
+
+For one coil, the desired Wave acquisition is
+
+$$
+d_{\mathrm{Wave}}
+=
+M F_{yz}\left[P(k_x,y,z)h(k_x,y,z)\right],
+$$
+
+where:
+
+- `M` = R3×1 sampling mask,
+- `F_yz` = Fourier transform over PE1/PE2,
+- `P` = Wave PSF in `[kx,y,z]` hybrid space,
+- `h` = fully resolved no-wave hybrid-space signal.
+
+If the no-wave data are undersampled first,
+
+$$
+\hat h_{\mathrm{alias}}
+=
+F_{yz}^{-1} M F_{yz} h,
+$$
+
+then multiplying `P * h_alias` is not equivalent to the desired Wave encoding.
+
+**Decision:** reconstruct/estimate the missing no-wave information first.
+
+- [ ] Document this ordering in the implementation comments.
+- [ ] Ensure no code path multiplies the Wave PSF into already PE-aliased hybrid-space data.
+
+## 1.2 GRAPPA first; SENSE second
+
+GRAPPA directly estimates missing k-space while preserving coil channels:
+
+$$
+d_{\mathrm{NW,R3}}
+\rightarrow
+\hat k_{\mathrm{NW,full},c}.
+$$
+
+SENSE instead reconstructs a common image and then regenerates coil data:
+
+$$
+d_{\mathrm{NW,R3},c}
+\rightarrow
+\hat x
+\rightarrow
+S_c\hat x
+\rightarrow
+\hat k_{\mathrm{NW,full},c}.
+$$
+
+**Decision:**
+
+- [ ] Implement GRAPPA branch first.
+- [ ] Implement SENSE/ESPIRiT branch second. (Deferred unless otherwise stated)
+- [ ] Compare the two synthetic Wave datasets and their preferred BART regularization. (Deferred unless otherwise stated)
+
+## 1.3 Use 2D GRAPPA on the 3D acquisition
+
+Acquisition dimensions:
+
+```text
+RO  = kx
+PE1 = ky   ← accelerated, R = 3
+PE2 = kz   ← fully sampled, R = 1
+coil
+```
+
+Baseline GRAPPA kernel:
+
+```text
+5 × 5 × 1
+RO × PE1 × PE2
+```
+
+Use no PE2 neighbor samples in the baseline.
+
+Conceptually:
+
+$$
+\hat k(k_x,k_y,k_z,c)
+=
+\sum_{\Delta k_x,\Delta k_y,c'}
+W_{\Delta k_x,\Delta k_y,c',c}
+\,k(k_x+\Delta k_x,k_y+\Delta k_y,k_z,c').
+$$
+
+- [ ] Baseline uses a 5×5 RO×PE1 kernel.
+- [ ] PE2 kernel extent is 1.
+- [ ] True 3D GRAPPA is reserved for a later optional comparison only.
+
+## 1.4 Train one shared GRAPPA model from all ACS PE2 partitions
+
+ACS region:
+
+```text
+24 × 24 × 24
+```
+
+Do not train 256 independent kernels.
+
+Instead:
+
+```text
+24 central ACS PE2 partitions
+            │
+            ├─ contribute 2D RO×PE1 training examples
+            ▼
+      one shared R3×1
+      GRAPPA model
+            │
+            ├─ apply to PE2 = 0
+            ├─ apply to PE2 = 1
+            ├─ ...
+            └─ apply to PE2 = 255
+```
+
+- [ ] Verify ACS extraction is 24×24×24.
+- [ ] Pool training examples across all 24 ACS PE2 partitions.
+- [ ] Train GRAPPA weights once.
+- [ ] Apply the same weights to all 256 PE2 partitions.
+
+## 1.5 Code clarity and comments
+
+Keep the implementation interpretable without burying the algorithm in commentary.
+
+- [ ] Add concise comments for non-obvious MRI conventions, GRAPPA source/target geometry, axis changes, FFT conventions, and preservation of acquired samples.
+- [ ] Add docstrings for public helpers and state their expected layouts.
+- [ ] Do not comment obvious assignments or repeat the code line-by-line.
+- [ ] Prefer named layout-conversion helpers and assertions over comments that compensate for ambiguous code.
+
+## 1.6 Implement GRAPPA locally; reuse established Wave/BART utilities
+
+The GRAPPA calibration and application code belongs to this experiment and will be written locally. Use `pygrappa` as an algorithmic reference, particularly for source/target geometry, but do not make the production path a thin call to `pygrappa.grappa()` and do not recalibrate once per PE2 partition.
+
+For Wave reconstruction and TWIX-loading conventions, inspect and reuse the useful pieces from:
+
+```text
+sources/published_code/wave-mprage/recon
+sources/published_code/wave-gre-flow-comp/recon
+```
+
+The current copies share the same `utils/twix_import.py` and `bart/run_wave_recon.sh`; several other utilities are identical or closely related. For this MPRAGE dataset, start from the Wave-MPRAGE path and consult the GRE path for newer/generalized behavior where useful.
+
+- [ ] Implement explicit local R=3 GRAPPA calibration and application routines.
+- [ ] Record the relevant `pygrappa` behavior or source version used as a reference.
+- [ ] Reuse/adapt the existing BART CFL export, ESPIRiT calibration, Wave reconstruction wrapper, and NIfTI conversion instead of reimplementing them.
+- [ ] Infer ESPIRiT maps from the fully sampled no-wave ACS after applying the same coil-compression matrix used for the synthetic Wave data.
+- [ ] Decide before implementation whether these sibling repositories should be added as git submodules or whether the minimal stable utilities should be incorporated locally with provenance. Do not attempt a broader utility unification in this experiment.
+
+---
+
+# 2. Coil compression
+
+## 2.1 Baseline: 64 physical coils → 12 virtual coils
+
+Use one compression matrix `C`:
+
+$$
+k_{\mathrm{cc}} = k C.
+$$
+
+The same `C` must be applied to:
+
+- accelerated imaging k-space,
+- ACS/calibration data,
+- data later used for Wave synthesis,
+- ESPIRiT calibration data used with the same synthetic Wave dataset.
+
+Do not calculate separate compression matrices for ACS and imaging data.
+
+- [ ] Compute compression matrix once.
+- [ ] Record compression matrix shape.
+- [ ] Apply identical matrix to ACS and imaging data.
+- [ ] Verify virtual-coil ordering is consistent everywhere.
+
+## 2.2 Validate that 12 coils are enough for GRAPPA
+
+Signal-energy retention alone is not sufficient; weak coil modes may still contribute parallel-imaging encoding.
+
+Test at least:
+
+```text
+Ncc = 12
+Ncc = 16
+Ncc = 24
+```
+
+Optional reference:
+
+```text
+Ncc = 64
+```
+
+Use held-out ACS reconstruction error:
+
+1. Start from fully sampled ACS.
+2. Artificially remove the R=3 PE1 lines.
+3. Train/apply GRAPPA.
+4. Compare predicted samples with the known held-out ACS samples.
+
+Metric:
+
+$$
+\mathrm{NRMSE}_{ACS}
+=
+\frac{\|\hat k_{\mathrm{heldout}}-k_{\mathrm{true}}\|_2}
+{\|k_{\mathrm{true}}\|_2}.
+$$
+
+- [ ] Ncc=12 held-out ACS NRMSE measured.
+- [ ] Ncc=16 held-out ACS NRMSE measured.
+- [ ] Ncc=24 held-out ACS NRMSE measured.
+- [ ] Optional Ncc=64 reference measured.
+- [ ] Final coil count selected.
+
+**Selected coil count:** `TBD`
+
+**Reason:** `TBD`
+
+---
+
+# 3. GRAPPA implementation
+
+## 3.1 Use pygrappa as a reference/start point, but avoid 256 independent calibrations
+
+`pygrappa.grappa()` is suitable as a 2D algorithmic reference and test oracle for small arrays, but the production GRAPPA implementation will be written in this project. Its workflow is:
+
+```text
+calibrate once
+     ↓
+save/reuse R=3 weights
+     ↓
+apply across all PE2 partitions
+```
+
+For regular R=3, there are two missing-line target geometries:
+
+```text
+X . . X . . X . . X
+
+X 1 . X 1 . X 1 . X
+X . 2 X . 2 X . 2 X
+```
+
+Prefer explicit weights for the two target offsets.
+
+- [ ] Inspect pygrappa's source/target geometry for R=3.
+- [ ] Implement the calibration and application math locally, with comments around the non-obvious source/target indexing.
+- [ ] Compare the local implementation with pygrappa on a small controlled case where their conventions match.
+- [ ] Separate calibration from application.
+- [ ] Represent target type 1 and target type 2 explicitly.
+- [ ] Do not recalibrate for each PE2 plane.
+
+## 3.2 Preserve measured samples exactly
+
+Final completed k-space must obey:
+
+$$
+\hat k(k)=
+\begin{cases}
+k_{\mathrm{measured}}(k), & k\in\Omega,\\
+k_{\mathrm{GRAPPA}}(k), & k\notin\Omega.
+\end{cases}
+$$
+
+- [ ] Build/verify acquisition sampling mask.
+- [ ] Copy measured locations unchanged.
+- [ ] Fill only missing samples.
+- [ ] Unit test verifies acquired samples before/after GRAPPA are identical within tolerance.
+
+## 3.3 Array conventions
+
+Recommended internal Python convention:
+
+```text
+[coil, RO, PE1, PE2]
+```
+
+2D GRAPPA work plane:
+
+```text
+[RO, PE1, coil]
+```
+
+BART convention:
+
+```text
+[RO, PE1, PE2, coil]
+```
+
+- [ ] Select and document one canonical internal layout.
+- [ ] Add shape assertions before/after every major operation.
+- [ ] Add explicit transpose helpers rather than ad-hoc `np.transpose` calls.
+- [ ] Verify BART layout separately.
+
+Expected matrix:
+
+```text
+RO  = 256
+PE1 = 256
+PE2 = 256
+physical coils = 64
+virtual coils  = selected Ncc
+```
+
+---
+
+# 4. GRAPPA compute strategy
+
+## 4.1 Do not use generic whole-volume 3D mdgrappa as the baseline
+
+Avoid starting with:
+
+```python
+mdgrappa(full_256x256x256_volume, ...)
+```
+
+Reasons:
+
+- no PE2 acceleration,
+- unnecessarily large temporary arrays,
+- generic missing-point enumeration,
+- poor scaling for 256³ data.
+
+- [ ] Baseline does not use a 5×5×5 kernel.
+- [ ] Baseline does not run full-volume generic 3D GRAPPA.
+
+## 4.2 Apply shared 2D weights PE2-by-PE2 or in chunks
+
+Correctness-first implementation:
+
+```text
+train once
+   ↓
+PE2 = 0
+PE2 = 1
+...
+PE2 = 255
+```
+
+Optimization later:
+
+```text
+chunk size = 4–16 PE2 partitions
+```
+
+- [ ] Start with one PE2 plane at a time.
+- [ ] Benchmark one plane.
+- [ ] Benchmark 8 planes.
+- [ ] Add chunked/vectorized application if useful.
+- [ ] Record total runtime and peak memory.
+
+## 4.3 Runtime expectations
+
+Planning range for a good 2D implementation:
+
+```text
+12 coils: a few minutes to ~10 minutes
+64 coils: several minutes to tens of minutes
+```
+
+These are engineering expectations, not guaranteed benchmarks.
+
+If runtime reaches multiple hours, check for:
+
+- repeated calibration,
+- Python loops over all 3D holes,
+- accidental 3D kernels,
+- unnecessary complex128 application arrays,
+- unnecessary copies,
+- slow memmap/temp storage,
+- unnecessary use of all 64 coils.
+
+**Runtime Ncc=12:** `TBD`
+
+**Runtime Ncc=64:** `TBD`
+
+---
+
+# 5. Build the full coil-wise no-wave k-space
+
+Target:
+
+```text
+full no-wave k-space
+[RO, PE1, PE2, Ncc]
+```
+
+Validation:
+
+- [ ] No missing samples remain in the nominal Cartesian matrix.
+- [ ] Measured locations are unchanged.
+- [ ] Filled lines have plausible magnitude/phase continuity.
+- [ ] Coil IFFTs look anatomically plausible.
+- [ ] RSS image shows no strong residual R=3 aliasing.
+- [ ] Central PE2 partitions inspected.
+- [ ] Edge PE2 partitions inspected.
+- [ ] PE1/PE2 orientation verified.
+
+Suggested intermediate outputs:
+
+```text
+grappa_full_kspace.npy or CFL
+grappa_coil_images.npy          optional
+grappa_rss_reference.nii.gz     optional
+grappa_metadata.json
+```
+
+- [ ] Save completed k-space.
+- [ ] Save metadata.
+- [ ] Save diagnostic images.
+
+---
+
+# 6. Wave synthesis from the GRAPPA-completed data
+
+Reuse the existing fully-sampled-no-wave → Wave forward model.
+
+For the current local dataset, an existing BART-formatted MPRAGE PSF is available under `mprage_bart/bart_inputs/psf`; verify its provenance, dimensions, readout oversampling, and axis conventions before selecting it as the synthetic forward-model PSF. Existing coil maps and Wave k-space in that folder are reference artifacts only: regenerate maps from the target no-wave ACS and generate new synthetic Wave k-space.
+
+Starting from full coil-wise no-wave k-space:
+
+$$
+k_{\mathrm{NW,full},c}
+\xrightarrow{F^{-1}_{PE1,PE2}}
+h_c(k_x,y,z)
+$$
+
+then
+
+$$
+h_{\mathrm{Wave},c}
+=
+P(k_x,y,z)h_c(k_x,y,z),
+$$
+
+then
+
+$$
+k_{\mathrm{Wave,full},c}
+=
+F_{PE1,PE2}h_{\mathrm{Wave},c}.
+$$
+
+Finally:
+
+$$
+d_{\mathrm{Wave,R3},c}
+=
+M_{R3\times1}k_{\mathrm{Wave,full},c}.
+$$
+
+- [ ] Verify PSF orientation/axis convention.
+- [ ] Reuse existing Wave synthesis code where possible.
+- [ ] Assert PSF dimensions.
+- [ ] Document FFT normalization convention.
+- [ ] Generate full synthetic Wave k-space.
+- [ ] Apply R3×1 mask only after Wave encoding.
+- [ ] Set unacquired BART samples to exact complex zero.
+
+---
+
+# 7. Re-apply the exact R3×1 sampling pattern
+
+Do not assume simply:
+
+```python
+mask[::3] = 1
+```
+
+unless confirmed by the actual sequence/raw-data indices.
+
+Preserve:
+
+- ACS lines,
+- acceleration offset,
+- exact acquired line set,
+- any sequence-specific edge behavior.
+
+- [ ] Extract/reconstruct the actual PE1 sampling mask.
+- [ ] Derive the mask from TWIX acquisition indices/metadata rather than treating nonzero sample magnitude as the authoritative acquisition indicator.
+- [ ] Verify ACS fully sampled region.
+- [ ] Verify R=3 offset.
+- [ ] Verify number of acquired lines matches the source scan.
+- [ ] Verify synthetic Wave unacquired positions are exact zero.
+
+---
+
+# 8. BART Wave reconstruction
+
+Expected BART dimensions:
+
+```text
+coil maps:
+[RO, PE1, PE2, Ncc, Nmaps]
+
+Wave PSF:
+[ROext, PE1, PE2, 1, 1]
+
+Wave k-space:
+[ROext, PE1, PE2, Ncc, 1]
+```
+
+Baseline ESPIRiT:
+
+```text
+-m1
+```
+
+Optional later:
+
+```text
+-m2   # soft-SENSE / multi-map comparison
+```
+
+- [ ] ESPIRiT maps generated in the same virtual-coil basis.
+- [ ] Reuse/adapt `recon/bart/bart_utils/bart_io.py` and `recon/bart/run_wave_recon.sh` from the existing Wave repositories.
+- [ ] Build the BART ESPIRiT calibration CFL from the fully sampled no-wave ACS in that same virtual-coil basis.
+- [ ] BART dimensions verified.
+- [ ] Unregularized Wave reconstruction completed.
+- [ ] Wavelet sweep completed.
+- [ ] Optional LLR sweep completed.
+- [ ] Optional multi-map ESPIRiT comparison completed.
+
+---
+
+# 9. Initial BART regularization sweep
+
+Run the sweep through a small driver script rather than invoking every reconstruction manually. The driver should accept a configurable list of regularizers/weights, create deterministic output names, record the exact BART command and runtime, stop clearly on failures, and support resuming without overwriting completed outputs unless requested.
+
+Wavelet baseline:
+
+```bash
+bart wave \
+    -g \
+    -w \
+    -f \
+    -i 50 \
+    -r <lambda> \
+    coil_sens \
+    wave_psf \
+    wave_kspace \
+    recon
+```
+
+Initial sweep:
+
+```text
+0
+1e-5
+1e-4
+5e-4
+1e-3
+5e-3
+```
+
+- [ ] λ = 0
+- [ ] λ = 1e-5
+- [ ] λ = 1e-4
+- [ ] λ = 5e-4
+- [ ] λ = 1e-3
+- [ ] λ = 5e-3
+- [ ] Scripted sweep driver implemented.
+- [ ] Per-run commands, status, runtime, and output paths recorded in machine-readable metadata.
+- [ ] Best coarse interval identified.
+- [ ] Fine sweep completed.
+
+**Current best λ:** `TBD`
+
+---
+
+# 10. Reference images and experiment interpretation
+
+Primary practical reference:
+
+```text
+online R3×1 no-wave scanner DICOM
+```
+
+Also retain:
+
+```text
+offline GRAPPA-completed no-wave reconstruction
+offline SENSE-completed no-wave reconstruction (later)
+```
+
+Important limitation:
+
+$$
+d_{\mathrm{NW,R3}}
+\rightarrow
+\hat k_{\mathrm{NW,full}}
+\rightarrow
+d_{\mathrm{Wave,R3}}^{\mathrm{synthetic}}.
+$$
+
+The no-wave completion method is part of the synthetic-data model.
+
+Interpret this primarily as a **controlled regularization-selection experiment**, not a perfect physical simulation of an acquired Wave scan.
+
+- [ ] State this limitation in analysis notes.
+- [ ] Compare GRAPPA- and SENSE-derived results to estimate method dependence.
+
+---
+
+# 11. Image registration and intensity normalization
+
+Before comparing online DICOM and offline reconstructions:
+
+- [ ] Match orientation.
+- [ ] Match voxel size/matrix/cropping.
+- [ ] Register if needed.
+- [ ] Select robust intensity normalization.
+- [ ] Apply the same normalization strategy to every λ.
+
+Possible normalization choices:
+
+- WM/brain ROI scale,
+- robust linear scale fit,
+- percentile-based scaling.
+
+Do not compare raw scanner and BART voxel values without scaling.
+
+---
+
+# 12. Evaluation metrics
+
+Do not optimize λ using naïve SNR alone: stronger regularization can decrease apparent noise while increasing bias and smoothing.
+
+## Quantitative
+
+- [ ] NRMSE against aligned reference.
+- [ ] SSIM.
+- [ ] Mean/SD in homogeneous WM ROI.
+- [ ] Edge sharpness.
+- [ ] Residual aliasing/error ROI metric.
+- [ ] Optional detail/gradient metric.
+
+## Qualitative
+
+Inspect:
+
+- [ ] cortical sharpness,
+- [ ] gray/white matter boundaries,
+- [ ] small structures/vessels if relevant,
+- [ ] residual R=3 aliasing,
+- [ ] ringing,
+- [ ] over-smoothing,
+- [ ] noise texture,
+- [ ] peripheral anatomy,
+- [ ] jaw/neck/FOV-wrap regions if relevant.
+
+Create side-by-side and difference images for the λ sweep.
+
+---
+
+# 13. SENSE/ESPIRiT comparison branch (deferred unless otherwise stated)
+
+This entire section is out of the current implementation scope. Do not implement or run it unless explicitly requested after the GRAPPA-derived experiment is complete.
+
+After GRAPPA is validated:
+
+```text
+R3×1 no-wave raw
+        ↓
+same coil compression
+        ↓
+ESPIRiT maps
+        ↓
+SENSE / PICS / CG reconstruction
+        ↓
+complex common image x
+        ↓
+x × S_c
+        ↓
+coil-wise no-wave images
+        ↓
+FFT
+        ↓
+full coil-wise no-wave k-space
+        ↓
+same Wave synthesis
+        ↓
+same R3×1 mask
+        ↓
+same BART regularization sweep
+```
+
+For multi-map ESPIRiT:
+
+$$
+x_c = S_{c,1}x_1 + S_{c,2}x_2
+$$
+
+rather than forcing a single-map model.
+
+- [ ] SENSE reconstruction implemented.
+- [ ] SENSE preprocessing kept minimally regularized to avoid pre-smoothing synthetic truth.
+- [ ] Coil-wise data regenerated.
+- [ ] Synthetic Wave data generated.
+- [ ] Same BART λ sweep repeated.
+- [ ] Preferred λ compared against GRAPPA branch.
+
+---
+
+# 14. GRAPPA vs SENSE comparison (deferred unless otherwise stated)
+
+This comparison is also out of the current scope because it depends on the deferred SENSE-derived branch.
+
+Compare:
+
+```text
+A. GRAPPA-derived synthetic Wave
+B. SENSE-derived synthetic Wave
+```
+
+Questions:
+
+1. Are the full no-wave coil datasets similar?
+2. Are the synthetic Wave k-spaces similar?
+3. Are final Wave reconstructions similar?
+4. Is the preferred regularizer unchanged?
+5. Is the preferred λ in the same range?
+6. Which no-wave completion better matches the online no-wave DICOM before Wave synthesis?
+
+- [ ] Compare no-wave images.
+- [ ] Compare synthetic Wave k-space.
+- [ ] Compare NRMSE/SSIM.
+- [ ] Compare visual ranking.
+- [ ] Record best λ from each branch.
+
+**GRAPPA best λ:** `TBD`
+
+**SENSE best λ:** `TBD`
+
+**Conclusion:** `TBD`
+
+---
+
+# 15. Suggested implementation structure
+
+Adapt to the existing repository rather than duplicating existing utilities.
+
+```text
+recon/
+├── grappa/
+│   ├── coil_compression.py
+│   ├── grappa_calibration.py
+│   ├── grappa_apply.py
+│   └── grappa_validation.py
+│
+├── synthetic_wave/
+│   ├── wave_forward.py
+│   ├── sampling_mask.py
+│   └── bart_export.py
+│
+├── experiments/
+│   ├── run_grappa_wave_synthesis.py
+│   ├── run_sense_wave_synthesis.py        # deferred
+│   ├── run_bart_regularization_sweep.py
+│   └── compare_regularization.py
+│
+└── tests/
+    ├── test_grappa_acquired_samples_unchanged.py
+    ├── test_grappa_acs_holdout.py
+    ├── test_wave_forward_no_wave_identity.py
+    ├── test_sampling_mask.py
+    └── test_bart_dimensions.py
+```
+
+---
+
+# 16. Suggested CLI for GRAPPA synthesis
+
+Example target interface:
+
+```bash
+python run_grappa_wave_synthesis.py \
+    --twix scan.dat \
+    --seq scan.seq \
+    --out synthetic_wave \
+    --ncc 12 \
+    --grappa-kernel-ro 5 \
+    --grappa-kernel-pe1 5 \
+    --grappa-lambda 0.01 \
+    --acs-ro 24 \
+    --acs-pe1 24 \
+    --acs-pe2 24
+```
+
+Useful optional flags:
+
+```text
+--reuse-coil-compression
+--save-grappa-full-kspace
+--save-grappa-coil-images
+--validate-acs
+--benchmark-grappa
+--save-bart
+```
+
+Use the existing repository's naming conventions where possible.
+
+---
+
+# 17. Required diagnostics/logging
+
+Record every run:
+
+```text
+input TWIX
+input sequence
+matrix size
+sampling pattern
+ACS size
+physical coil count
+compressed coil count
+coil-compression energy retained
+GRAPPA kernel size
+GRAPPA regularization
+GRAPPA calibration runtime
+GRAPPA application runtime
+Wave PSF source
+BART version
+ESPIRiT settings
+BART Wave settings
+output paths
+```
+
+- [ ] Save JSON/YAML run metadata.
+- [ ] Print concise human-readable summary.
+- [ ] Record random seeds where applicable.
+
+---
+
+# 18. Minimum tests before trusting the experiment
+
+## GRAPPA
+
+- [ ] Fully sampled synthetic test → remove R3 lines → GRAPPA → compare with truth.
+- [ ] Acquired lines remain unchanged.
+- [ ] ACS held-out error is acceptable.
+- [ ] No PE1/PE2 transpose.
+- [ ] Shared weights are reused across PE2.
+- [ ] 12-coil result compared against higher coil counts.
+
+## Wave synthesis
+
+- [ ] With `PSF = 1`, Wave-forward path reproduces no-wave k-space.
+- [ ] Full-sampling Wave synthesis is internally consistent.
+- [ ] R3 mask is applied only after Wave encoding.
+- [ ] BART zero mask matches intended acquired positions.
+
+## BART
+
+- [ ] Unregularized reconstruction runs.
+- [ ] Regularized reconstruction runs.
+- [ ] Output scaling is handled consistently across λ.
+- [ ] Phase output is retained if needed.
+
+---
+
+# 19. Recommended execution order
+
+## Phase A — data and mask verification
+
+- [ ] Load R3×1 no-wave TWIX.
+- [ ] Enumerate the product TWIX measurements and available `image`/`refscan` streams; do not assume the integrated Pulseq SET layout.
+- [ ] Locate the fully sampled ACS in the product TWIX and record its stream, dimensions, acquisition indices, and any relevant MDH flags.
+- [ ] Keep the product-TWIX loader minimal once the ACS location is confirmed.
+- [ ] Verify 256×256×256 matrix and 64 channels.
+- [ ] Verify 24×24×24 ACS.
+- [ ] Verify exact R3×1 PE1 mask.
+- [ ] Preserve the online DICOM reference.
+
+## Phase B — coil compression
+
+- [ ] Build 64→12 compression.
+- [ ] Apply to imaging data and ACS.
+- [ ] Validate 12 against 16/24 using held-out ACS.
+
+## Phase C — GRAPPA
+
+- [ ] Implement 2D R3 calibration.
+- [ ] Pool calibration examples across the 24 ACS PE2 partitions.
+- [ ] Train shared weights once.
+- [ ] Apply across all 256 PE2 planes.
+- [ ] Validate completed no-wave k-space.
+- [ ] Save completed multicoil k-space.
+
+## Phase D — synthetic Wave
+
+- [ ] Feed completed no-wave k-space into existing Wave forward model.
+- [ ] Generate full Wave k-space.
+- [ ] Re-apply exact R3×1 sampling mask.
+- [ ] Save BART-formatted Wave k-space and PSF.
+
+## Phase E — BART sweep
+
+- [ ] Generate/verify ESPIRiT maps.
+- [ ] Run λ=0.
+- [ ] Run coarse wavelet λ sweep.
+- [ ] Identify useful interval.
+- [ ] Run fine sweep.
+- [ ] Optional LLR comparison.
+
+## Phase F — evaluation
+
+- [ ] Align online DICOM/offline outputs.
+- [ ] Normalize intensities.
+- [ ] Compute metrics.
+- [ ] Generate side-by-side figures.
+- [ ] Select preliminary best regularization.
+
+## Phase G — SENSE comparison (deferred unless otherwise stated)
+
+- [ ] Create SENSE-derived full no-wave coil data.
+- [ ] Repeat Wave synthesis.
+- [ ] Repeat BART sweep.
+- [ ] Compare optimal parameters with GRAPPA branch.
+
+Do not begin Phase G without an explicit request.
+
+---
+
+# 20. Open decisions
+
+## GRAPPA kernel
+
+Baseline:
+
+```text
+5×5 over RO×PE1
+```
+
+Final: `TBD`
+
+## GRAPPA Tikhonov regularization
+
+Initial:
+
+```text
+0.01
+```
+
+Final: `TBD`
+
+## Coil compression
+
+Baseline:
+
+```text
+64 → 12
+```
+
+Final: `TBD`
+
+## ESPIRiT map count
+
+Baseline:
+
+```text
+1 map
+```
+
+Optional:
+
+```text
+2 maps / soft-SENSE
+```
+
+Final: `TBD`
+
+## BART regularizer
+
+Primary:
+
+```text
+wavelet
+```
+
+Secondary:
+
+```text
+LLR
+```
+
+Final: `TBD`
+
+---
+
+# 21. Results log
+
+## Dataset
+
+```text
+TWIX:
+Sequence:
+Online DICOM:
+Scan date:
+Matrix:
+Acceleration:
+ACS:
+Physical coils:
+```
+
+## Coil compression
+
+```text
+Ncc tested:
+Energy retained:
+ACS held-out NRMSE:
+Selected Ncc:
+```
+
+## GRAPPA
+
+```text
+Kernel:
+Calibration lambda:
+Calibration runtime:
+Application runtime:
+Peak memory:
+Validation NRMSE:
+```
+
+## Synthetic Wave
+
+```text
+PSF:
+Wave dimensions:
+Sampling-mask verification:
+```
+
+## BART
+
+```text
+BART version:
+ESPIRiT maps:
+Wavelet lambda sweep:
+LLR sweep:
+Best setting:
+```
+
+## Quantitative comparison
+
+```text
+NRMSE:
+SSIM:
+WM noise:
+Sharpness:
+Other:
+```
+
+## Final conclusion
+
+```text
+TBD
+```
+
+---
+
+# 22. Completion criteria
+
+The GRAPPA-based experiment is complete when:
+
+- [ ] R3×1 no-wave raw data load reproducibly.
+- [ ] Coil compression is validated.
+- [ ] Shared 2D GRAPPA weights are trained once from the 24³ ACS.
+- [ ] Full coil-wise no-wave k-space is reconstructed.
+- [ ] Acquired samples remain unchanged.
+- [ ] Synthetic Wave encoding is applied to completed coil data.
+- [ ] Exact R3×1 mask is re-applied after Wave encoding.
+- [ ] BART reconstructs the synthetic Wave data successfully.
+- [ ] A regularization sweep is completed.
+- [ ] Metrics and visual comparisons are generated.
+- [ ] A preferred regularization method/range is identified.
+- [ ] The current run records the SENSE-derived branch as deferred unless it was explicitly requested; GRAPPA-based completion does not depend on Phase G.
+
+---
+
+# 23. Immediate next action
+
+Implement and validate **only the GRAPPA preparation stage first**:
+
+```text
+R3×1 no-wave TWIX
+        ↓
+64→12 coil compression
+        ↓
+extract 24×24×24 ACS
+        ↓
+train one shared 2D R3 GRAPPA model
+        ↓
+reconstruct full 12-coil no-wave k-space
+        ↓
+verify acquired samples + ACS hold-out + RSS image
+```
+
+**Do not proceed to Wave synthesis until this stage passes the validation checks.**

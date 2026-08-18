@@ -1,1 +1,4 @@
 .DS_Store
+
+# Machine-local dataset locations and scan selections.
+/tools/synthetic_wave_for_reg_baseline/LOCAL_DATASETS.md
