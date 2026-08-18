@@ -1,4 +1,12 @@
 .DS_Store
+__pycache__/
+*.pyc
 
 # Machine-local dataset locations and scan selections.
 /tools/synthetic_wave_for_reg_baseline/LOCAL_DATASETS.md
+/tools/synthetic_wave_for_reg_baseline/phase_a_report*.json
+/tools/synthetic_wave_for_reg_baseline/phase_b_coil_compression*.json
+/tools/synthetic_wave_for_reg_baseline/phase_b_coil_compression*.npz
+/tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.json
+/tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.npz
+/tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.npy

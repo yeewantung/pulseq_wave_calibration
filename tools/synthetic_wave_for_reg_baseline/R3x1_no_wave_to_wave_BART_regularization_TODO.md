@@ -93,7 +93,7 @@ $$
 
 **Decision:**
 
-- [ ] Implement GRAPPA branch first.
+- [x] Implement GRAPPA branch first.
 - [ ] Implement SENSE/ESPIRiT branch second. (Deferred unless otherwise stated)
 - [ ] Compare the two synthetic Wave datasets and their preferred BART regularization. (Deferred unless otherwise stated)
 
@@ -127,16 +127,18 @@ W_{\Delta k_x,\Delta k_y,c',c}
 \,k(k_x+\Delta k_x,k_y+\Delta k_y,k_z,c').
 $$
 
-- [ ] Baseline uses a 5×5 RO×PE1 kernel.
-- [ ] PE2 kernel extent is 1.
-- [ ] True 3D GRAPPA is reserved for a later optional comparison only.
+- [x] Baseline uses a 5×5 RO×PE1 kernel.
+- [x] PE2 kernel extent is 1.
+- [x] True 3D GRAPPA is reserved for a later optional comparison only.
 
-## 1.4 Train one shared GRAPPA model from all ACS PE2 partitions
+## 1.4 Train one shared GRAPPA model from all available ACS PE2 partitions
 
-ACS region:
+Phase A established that the product TWIX stores its PAT calibration in the selected measurement's separate `refscan` stream. After readout oversampling removal, its support is:
 
 ```text
-24 × 24 × 24
+RO × PE1 × PE2 = 256 × 24 × 256
+PE1 indices     = 115...138
+PE2 indices     = 0...255
 ```
 
 Do not train 256 independent kernels.
@@ -144,7 +146,7 @@ Do not train 256 independent kernels.
 Instead:
 
 ```text
-24 central ACS PE2 partitions
+all 256 available refscan PE2 partitions
             │
             ├─ contribute 2D RO×PE1 training examples
             ▼
@@ -157,19 +159,20 @@ Instead:
             └─ apply to PE2 = 255
 ```
 
-- [ ] Verify ACS extraction is 24×24×24.
-- [ ] Pool training examples across all 24 ACS PE2 partitions.
-- [ ] Train GRAPPA weights once.
-- [ ] Apply the same weights to all 256 PE2 partitions.
+- [x] Verify product refscan support is 256×24×256 after readout oversampling removal.
+- [x] Pool training examples across the available 256 ACS PE2 partitions.
+- [x] Accumulate calibration normal equations in chunks so the pooled design matrix is not retained in memory.
+- [x] Train GRAPPA weights once.
+- [x] Apply the same weights to all 256 PE2 partitions.
 
 ## 1.5 Code clarity and comments
 
 Keep the implementation interpretable without burying the algorithm in commentary.
 
-- [ ] Add concise comments for non-obvious MRI conventions, GRAPPA source/target geometry, axis changes, FFT conventions, and preservation of acquired samples.
-- [ ] Add docstrings for public helpers and state their expected layouts.
-- [ ] Do not comment obvious assignments or repeat the code line-by-line.
-- [ ] Prefer named layout-conversion helpers and assertions over comments that compensate for ambiguous code.
+- [x] Add concise comments for non-obvious MRI conventions, GRAPPA source/target geometry, axis changes, FFT conventions, and preservation of acquired samples.
+- [x] Add docstrings for public helpers and state their expected layouts.
+- [x] Do not comment obvious assignments or repeat the code line-by-line.
+- [x] Prefer named layout-conversion helpers and assertions over comments that compensate for ambiguous code.
 
 ## 1.6 Implement GRAPPA locally; reuse established Wave/BART utilities
 
@@ -184,8 +187,8 @@ sources/published_code/wave-gre-flow-comp/recon
 
 The current copies share the same `utils/twix_import.py` and `bart/run_wave_recon.sh`; several other utilities are identical or closely related. For this MPRAGE dataset, start from the Wave-MPRAGE path and consult the GRE path for newer/generalized behavior where useful.
 
-- [ ] Implement explicit local R=3 GRAPPA calibration and application routines.
-- [ ] Record the relevant `pygrappa` behavior or source version used as a reference.
+- [x] Implement explicit local R=3 GRAPPA calibration and application routines.
+- [x] Record the relevant `pygrappa` behavior or source version used as a reference.
 - [ ] Reuse/adapt the existing BART CFL export, ESPIRiT calibration, Wave reconstruction wrapper, and NIfTI conversion instead of reimplementing them.
 - [ ] Infer ESPIRiT maps from the fully sampled no-wave ACS after applying the same coil-compression matrix used for the synthetic Wave data.
 - [ ] Decide before implementation whether these sibling repositories should be added as git submodules or whether the minimal stable utilities should be incorporated locally with provenance. Do not attempt a broader utility unification in this experiment.
@@ -211,10 +214,11 @@ The same `C` must be applied to:
 
 Do not calculate separate compression matrices for ACS and imaging data.
 
-- [ ] Compute compression matrix once.
-- [ ] Record compression matrix shape.
-- [ ] Apply identical matrix to ACS and imaging data.
-- [ ] Verify virtual-coil ordering is consistent everywhere.
+- [x] Compute one compression basis from the product refscan using the verified Wave-MPRAGE covariance/eigendecomposition convention.
+- [x] Record saved compression basis shape: `[64, 24]`; use leading columns for Ncc=12/16/24.
+- [x] Implement one coil-last application helper and verify the identical basis on image and refscan payload probes.
+- [x] Verify virtual-coil ordering is nested and consistent: Ncc=12/16 are the leading columns of the saved Ncc=24 basis.
+- [x] Apply the selected basis to the complete imaging/refscan data as part of the chunked Phase C pipeline; only the GRAPPA-completed selected-Ncc volume is saved.
 
 ## 2.2 Validate that 12 coils are enough for GRAPPA
 
@@ -250,15 +254,15 @@ $$
 {\|k_{\mathrm{true}}\|_2}.
 $$
 
-- [ ] Ncc=12 held-out ACS NRMSE measured.
-- [ ] Ncc=16 held-out ACS NRMSE measured.
-- [ ] Ncc=24 held-out ACS NRMSE measured.
+- [x] Ncc=12 held-out ACS NRMSE measured: `0.17240017`.
+- [x] Ncc=16 held-out ACS NRMSE measured: `0.14574042`.
+- [x] Ncc=24 held-out ACS NRMSE measured: `0.12384302`.
 - [ ] Optional Ncc=64 reference measured.
-- [ ] Final coil count selected.
+- [x] Final coil count selected.
 
-**Selected coil count:** `TBD`
+**Active coil count:** `12` (explicit user choice after per-coil image review)
 
-**Reason:** `TBD`
+**Reason:** Held-out ACS NRMSE decreased monotonically from `0.17240017` (12) to `0.14574042` (16) to `0.12384302` (24), so the original aggregate-NRMSE rule preferred 24. Per-coil image review showed conspicuous residual structure in several higher-order virtual coils (including 17, 19, and 24). The user therefore explicitly selected the leading 12 nested virtual coils as the active baseline. Preserve the 24-coil result as a comparison rather than presenting the 12-coil choice as NRMSE-optimal.
 
 ---
 
@@ -287,12 +291,12 @@ X . 2 X . 2 X . 2 X
 
 Prefer explicit weights for the two target offsets.
 
-- [ ] Inspect pygrappa's source/target geometry for R=3.
-- [ ] Implement the calibration and application math locally, with comments around the non-obvious source/target indexing.
-- [ ] Compare the local implementation with pygrappa on a small controlled case where their conventions match.
-- [ ] Separate calibration from application.
-- [ ] Represent target type 1 and target type 2 explicitly.
-- [ ] Do not recalibrate for each PE2 plane.
+- [x] Inspect pygrappa's source/target geometry for R=3.
+- [x] Implement the calibration and application math locally, with comments around the non-obvious source/target indexing.
+- [x] Compare the local implementation with pygrappa on a small controlled case where their conventions match.
+- [x] Separate calibration from application.
+- [x] Represent target type 1 and target type 2 explicitly.
+- [x] Do not recalibrate for each PE2 plane.
 
 ## 3.2 Preserve measured samples exactly
 
@@ -306,10 +310,10 @@ k_{\mathrm{GRAPPA}}(k), & k\notin\Omega.
 \end{cases}
 $$
 
-- [ ] Build/verify acquisition sampling mask.
-- [ ] Copy measured locations unchanged.
-- [ ] Fill only missing samples.
-- [ ] Unit test verifies acquired samples before/after GRAPPA are identical within tolerance.
+- [x] Build/verify acquisition sampling mask.
+- [x] Copy measured locations unchanged.
+- [x] Fill only missing samples.
+- [x] Unit test and full-volume audit verify acquired samples are bitwise identical.
 
 ## 3.3 Array conventions
 
@@ -331,8 +335,8 @@ BART convention:
 [RO, PE1, PE2, coil]
 ```
 
-- [ ] Select and document one canonical internal layout.
-- [ ] Add shape assertions before/after every major operation.
+- [x] Select and document canonical `[RO, PE1, PE2, coil]` layout (with `[RO, PE1, coil]` planes).
+- [x] Add shape assertions before/after every major operation.
 - [ ] Add explicit transpose helpers rather than ad-hoc `np.transpose` calls.
 - [ ] Verify BART layout separately.
 
@@ -365,8 +369,8 @@ Reasons:
 - generic missing-point enumeration,
 - poor scaling for 256³ data.
 
-- [ ] Baseline does not use a 5×5×5 kernel.
-- [ ] Baseline does not run full-volume generic 3D GRAPPA.
+- [x] Baseline does not use a 5×5×5 kernel.
+- [x] Baseline does not run full-volume generic 3D GRAPPA.
 
 ## 4.2 Apply shared 2D weights PE2-by-PE2 or in chunks
 
@@ -390,8 +394,8 @@ chunk size = 4–16 PE2 partitions
 - [ ] Start with one PE2 plane at a time.
 - [ ] Benchmark one plane.
 - [ ] Benchmark 8 planes.
-- [ ] Add chunked/vectorized application if useful.
-- [ ] Record total runtime and peak memory.
+- [x] Add chunked/vectorized application after verifying it against plane-wise application.
+- [x] Record total application runtime (`904.54 s`, including final shared-filesystem writeback); peak memory was not instrumented.
 
 ## 4.3 Runtime expectations
 
@@ -431,12 +435,12 @@ full no-wave k-space
 
 Validation:
 
-- [ ] No missing samples remain in the nominal Cartesian matrix.
-- [ ] Measured locations are unchanged.
+- [x] No missing samples remain in the nominal Cartesian matrix (`243,793,920/243,793,920` expected missing coil samples populated).
+- [x] Measured locations are unchanged (bitwise audit passed).
 - [ ] Filled lines have plausible magnitude/phase continuity.
-- [ ] Coil IFFTs look anatomically plausible.
-- [ ] RSS image shows no strong residual R=3 aliasing.
-- [ ] Central PE2 partitions inspected.
+- [x] Coil-combined central-partition IFFT is anatomically plausible.
+- [x] Central RSS diagnostic shows no strong residual R=3 aliasing.
+- [x] Central PE2 partition inspected.
 - [ ] Edge PE2 partitions inspected.
 - [ ] PE1/PE2 orientation verified.
 
@@ -826,10 +830,11 @@ python run_grappa_wave_synthesis.py \
     --grappa-kernel-ro 5 \
     --grappa-kernel-pe1 5 \
     --grappa-lambda 0.01 \
-    --acs-ro 24 \
     --acs-pe1 24 \
-    --acs-pe2 24
+    --acs-pe2 all
 ```
+
+The loader should infer the ACS support from TWIX counters. These flags are validation/override controls, not the authoritative source of its location.
 
 Useful optional flags:
 
@@ -881,11 +886,11 @@ output paths
 ## GRAPPA
 
 - [ ] Fully sampled synthetic test → remove R3 lines → GRAPPA → compare with truth.
-- [ ] Acquired lines remain unchanged.
-- [ ] ACS held-out error is acceptable.
-- [ ] No PE1/PE2 transpose.
-- [ ] Shared weights are reused across PE2.
-- [ ] 12-coil result compared against higher coil counts.
+- [x] Acquired lines remain unchanged.
+- [x] ACS held-out error is measured and used for the coil-count decision.
+- [x] No PE1/PE2 transpose in the audited `[256,256,256,24]` output.
+- [x] Shared weights are reused across PE2.
+- [x] 12-coil result compared against 16 and 24 coils.
 
 ## Wave synthesis
 
@@ -907,29 +912,49 @@ output paths
 
 ## Phase A — data and mask verification
 
-- [ ] Load R3×1 no-wave TWIX.
-- [ ] Enumerate the product TWIX measurements and available `image`/`refscan` streams; do not assume the integrated Pulseq SET layout.
-- [ ] Locate the fully sampled ACS in the product TWIX and record its stream, dimensions, acquisition indices, and any relevant MDH flags.
+- [x] Load/index R3×1 no-wave TWIX and probe one image/refscan payload block.
+- [x] Enumerate the product TWIX measurements and available `image`/`refscan` streams; do not assume the integrated Pulseq SET layout.
+- [x] Locate the fully sampled ACS in the product TWIX and record its stream, dimensions, acquisition indices, and relevant MDH counters.
 - [ ] Keep the product-TWIX loader minimal once the ACS location is confirmed.
-- [ ] Verify 256×256×256 matrix and 64 channels.
-- [ ] Verify 24×24×24 ACS.
-- [ ] Verify exact R3×1 PE1 mask.
-- [ ] Preserve the online DICOM reference.
+- [x] Verify 256×256×256 matrix and 64 channels.
+- [x] Verify product refscan ACS support: 256×24×256 after readout oversampling removal.
+- [x] Verify exact R3×1 PE1 mask: image lines are `1 mod 3`; merge refscan PE1 lines 115...138 across all PE2 partitions.
+- [x] Identify and preserve the 256-slice unfiltered `ND` online DICOM series as the reference.
+
+Phase A implementation and reproducible output:
+
+```text
+scripts/phase_a_inspect.py
+phase_a_report_20260817_product.json   # machine-local, ignored by git
+```
+
+The TWIX has two measurements. Measurement 1 is selected because it contains the main 256³ MPRAGE image stream. It contains 21,760 unique image PE coordinates and 6,144 unique refscan coordinates; after overlap, the merged mask contains 25,856 unique PE1/PE2 coordinates, or 101 acquired PE1 lines per PE2 partition. There are no duplicate or out-of-range coordinates.
 
 ## Phase B — coil compression
 
-- [ ] Build 64→12 compression.
-- [ ] Apply to imaging data and ACS.
-- [ ] Validate 12 against 16/24 using held-out ACS.
+- [x] Build one 64→24 maximum basis; Ncc=12 and 16 use nested leading columns.
+- [x] Validate identical application and output shapes on image and refscan payload probes.
+- [x] Measure covariance-energy retention for Ncc=12/16/24.
+- [x] Validate 12 against 16/24 using held-out ACS GRAPPA NRMSE; retain the metric-preferred Ncc=24 comparison and use the user-selected Ncc=12 active baseline.
+
+Phase B implementation and machine-local outputs:
+
+```text
+scripts/phase_b_coil_compression.py
+phase_b_coil_compression_20260817_product.json   # ignored by git
+phase_b_coil_compression_20260817_product.npz    # ignored by git
+```
+
+The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a readout stride of 4 matching the reference utility. It accumulated 393,216 nonzero sample rows without retaining the design matrix. Runtime was 37.95 seconds. The saved `[64,24]` basis has Frobenius orthogonality error `6.61e-7`.
 
 ## Phase C — GRAPPA
 
-- [ ] Implement 2D R3 calibration.
-- [ ] Pool calibration examples across the 24 ACS PE2 partitions.
-- [ ] Train shared weights once.
-- [ ] Apply across all 256 PE2 planes.
-- [ ] Validate completed no-wave k-space.
-- [ ] Save completed multicoil k-space.
+- [x] Implement local 2D R3 calibration/application using pygrappa 0.26.3 as a test oracle.
+- [x] Pool calibration examples across all 256 available refscan PE2 partitions using chunked normal-equation accumulation.
+- [x] Train shared weights once.
+- [x] Apply across all 256 PE2 planes in vectorized four-partition chunks.
+- [x] Validate held-out ACS and completed no-wave k-space.
+- [x] Save both the metric-preferred `[256,256,256,24]` comparison and user-selected active `[256,256,256,12]` complex64 k-space, each with a central RSS diagnostic.
 
 ## Phase D — synthetic Wave
 
@@ -1050,21 +1075,21 @@ Physical coils:
 ## Coil compression
 
 ```text
-Ncc tested:
-Energy retained:
-ACS held-out NRMSE:
-Selected Ncc:
+Ncc tested: 12, 16, 24
+Energy retained: 84.6410% / 90.1746% / 96.0338% for Ncc=12/16/24
+ACS held-out NRMSE: 0.17240017 / 0.14574042 / 0.12384302
+Selected Ncc: 12 active baseline by explicit user choice; 24 retained as the aggregate-NRMSE comparison
 ```
 
 ## GRAPPA
 
 ```text
-Kernel:
-Calibration lambda:
-Calibration runtime:
-Application runtime:
+Kernel: nominal 5×5×1; 10 acquired source locations per target type
+Calibration lambda: 0.01 with pygrappa Frobenius scaling
+Calibration runtime: approximately 44 s on the initial uncached pass
+Application runtime: 904.54 s including final shared-filesystem writeback
 Peak memory:
-Validation NRMSE:
+Validation NRMSE: 0.17240017 at active Ncc=12; 0.12384302 at comparison Ncc=24
 ```
 
 ## Synthetic Wave
@@ -1107,11 +1132,11 @@ TBD
 
 The GRAPPA-based experiment is complete when:
 
-- [ ] R3×1 no-wave raw data load reproducibly.
-- [ ] Coil compression is validated.
-- [ ] Shared 2D GRAPPA weights are trained once from the 24³ ACS.
-- [ ] Full coil-wise no-wave k-space is reconstructed.
-- [ ] Acquired samples remain unchanged.
+- [x] R3×1 no-wave raw data load reproducibly.
+- [x] Coil compression is validated.
+- [x] Shared 2D GRAPPA weights are trained once from the 256×24×256 product refscan support.
+- [x] Full coil-wise no-wave k-space is reconstructed.
+- [x] Acquired samples remain unchanged.
 - [ ] Synthetic Wave encoding is applied to completed coil data.
 - [ ] Exact R3×1 mask is re-applied after Wave encoding.
 - [ ] BART reconstructs the synthetic Wave data successfully.
@@ -1124,20 +1149,20 @@ The GRAPPA-based experiment is complete when:
 
 # 23. Immediate next action
 
-Implement and validate **only the GRAPPA preparation stage first**:
+Phases A–C are complete. Implement **Phase D synthetic Wave generation next**, reusing the established Wave-MPRAGE/BART utilities and the verified GRAPPA-completed active Ncc=12 k-space:
 
 ```text
-R3×1 no-wave TWIX
+GRAPPA-completed no-wave k-space [256,256,256,12]
         ↓
-64→12 coil compression
+confirm the candidate PSF belongs to this acquisition
         ↓
-extract 24×24×24 ACS
+infer ESPIRiT maps from the compressed no-wave ACS
         ↓
-train one shared 2D R3 GRAPPA model
+apply the established BART Wave forward model
         ↓
-reconstruct full 12-coil no-wave k-space
+re-apply the exact R3×1 product sampling mask
         ↓
-verify acquired samples + ACS hold-out + RSS image
+export synthetic Wave k-space, PSF, maps, and provenance
 ```
 
-**Do not proceed to Wave synthesis until this stage passes the validation checks.**
+**Phase C passed its held-out ACS, measured-sample preservation, finiteness, fill-count, and central-RSS checks.**

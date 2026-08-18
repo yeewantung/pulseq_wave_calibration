@@ -1,0 +1,6 @@
+-r phase-b.txt
+
+# Reference oracle for small tests only; production GRAPPA is implemented locally.
+pygrappa==0.26.3
+scikit-image>=0.26
+nibabel>=5.3
