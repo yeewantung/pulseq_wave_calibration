@@ -14,7 +14,7 @@ Machine-local dataset notes and generated reconstruction artifacts remain at thi
 
 ## Current baseline
 
-The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. Full theoretical Wave k-space passed visual review, and the exact TWIX image/refscan union mask has been applied to produce BART-ready Wave k-space and PSF inputs. ESPIRiT map estimation and the BART reconstruction sweep are next. The 24-coil GRAPPA reconstruction is retained locally as a comparison.
+The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. Full theoretical Wave k-space passed visual review, and the exact TWIX image/refscan union mask has been applied. Measured no-wave ACS produced one BART ESPIRiT map set, and the unregularized Wave CG reconstruction has been exported as TWIX-oriented magnitude/phase NIfTIs. The positive-λ sweep is paused for visual review. The 24-coil GRAPPA reconstruction is retained locally as a comparison.
 
 ## Setup and tests
 
@@ -22,7 +22,7 @@ From the repository root:
 
 ```bash
 git submodule update --init external/wave-mprage
-python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/phase-d.txt
+python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/phase-e.txt
 python -m unittest discover \
     -s tools/synthetic_wave_for_reg_baseline/tests \
     -p 'test_*.py'

@@ -637,14 +637,14 @@ Generate the ESPIRiT maps strictly from the measured **no-wave product refscan A
 6. Run `bart ecalib -m 1` on `kspace_calib`, following the pinned Wave-MPRAGE wrapper and consulting Wave-GRE only if it contains a needed newer behavior. Record the BART version, full command, calibration options, runtime, and output hash.
 7. Require the calibrated map output to have logical shape `[256,256,256,12,1]`, matching the active virtual-coil ordering. Save magnitude/phase quick looks and check finiteness, spatial support, and absence of coil-axis or PE-axis swaps before Wave reconstruction.
 
-- [ ] ESPIRiT maps generated in the same virtual-coil basis.
-- [ ] Reuse/adapt `recon/bart/bart_utils/bart_io.py` and `recon/bart/run_wave_recon.sh` from the existing Wave repositories.
-- [ ] Load the measured no-wave product refscan ACS and compress it with the exact active 64→12 basis.
-- [ ] Build and validate BART `kspace_calib` from the measured no-wave ACS in that same virtual-coil basis.
-- [ ] Run `bart ecalib -m 1` and record its version, command, options, runtime, and output hash.
-- [ ] Validate `[256,256,256,12,1]` ESPIRiT-map dimensions and magnitude/phase diagnostics.
-- [ ] BART dimensions verified.
-- [ ] Unregularized Wave reconstruction completed.
+- [x] ESPIRiT maps generated in the same virtual-coil basis.
+- [x] Reuse/adapt `recon/bart/bart_utils/bart_io.py` and `recon/bart/run_wave_recon.sh` from the existing Wave repositories.
+- [x] Load the measured no-wave product refscan ACS and compress it with the exact active 64→12 basis.
+- [x] Build and validate BART `kspace_calib` from the measured no-wave ACS in that same virtual-coil basis.
+- [x] Run `bart ecalib -m 1` and record its version, command, options, runtime, and output hash.
+- [x] Validate `[256,256,256,12,1]` ESPIRiT-map dimensions and magnitude/phase diagnostics.
+- [x] BART dimensions verified.
+- [x] Unregularized Wave reconstruction completed.
 - [ ] Wavelet sweep completed.
 - [ ] Optional LLR sweep completed.
 - [ ] Optional multi-map ESPIRiT comparison completed.
@@ -1048,11 +1048,11 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 
 ## Phase E — BART sweep
 
-- [ ] Export measured no-wave ACS as BART `kspace_calib` after applying the active 64→12 compression basis.
-- [ ] Verify exact ACS coordinates/payload, zero exterior, BART dimensions, and finiteness.
-- [ ] Run `bart ecalib -m 1` to generate calibrated `[256,256,256,12,1]` ESPIRiT maps.
-- [ ] Save and inspect ESPIRiT magnitude/phase diagnostics before Wave reconstruction.
-- [ ] Run λ=0.
+- [x] Export measured no-wave ACS as BART `kspace_calib` after applying the active 64→12 compression basis.
+- [x] Verify exact ACS coordinates/payload, zero exterior, BART dimensions, and finiteness.
+- [x] Run `bart ecalib -m 1` to generate calibrated `[256,256,256,12,1]` ESPIRiT maps.
+- [x] Save and inspect ESPIRiT magnitude/phase diagnostics before Wave reconstruction.
+- [x] Run λ=0 using BART's unregularized CG branch and export TWIX-oriented magnitude/phase NIfTIs.
 - [ ] Run coarse wavelet λ sweep.
 - [ ] Identify useful interval.
 - [ ] Run fine sweep.
@@ -1209,8 +1209,10 @@ Sampling-mask verification: TWIX image/refscan MDH union; 25,856 PE coordinates;
 ## BART
 
 ```text
-BART version:
-ESPIRiT maps:
+BART version: v1.0.00-dirty, fugue build
+ESPIRiT maps: measured no-wave refscan ACS, active 64→12 basis, `ecalib -m 1 -c 0.8`; [256,256,256,12,1]; 92.54 s wall time
+Lambda=0: unregularized CG, `wave -i 300 -t 0.001`; 164.32 s internal solve, 766.55 s BART total, 767.65 s external wall time
+Lambda=0 NIfTI: [256,256,256], 1 mm isotropic, TWIX-derived IAL orientation; BART output already on the deoversampled logical readout grid
 Wavelet lambda sweep:
 LLR sweep:
 Best setting:
@@ -1245,7 +1247,7 @@ The GRAPPA-based experiment is complete when:
 - [x] Acquired samples remain unchanged.
 - [x] Synthetic Wave encoding is applied to completed coil data.
 - [x] Exact R3×1 mask is re-applied after Wave encoding.
-- [ ] BART reconstructs the synthetic Wave data successfully.
+- [x] BART reconstructs the synthetic Wave data successfully.
 - [ ] A regularization sweep is completed.
 - [ ] Metrics and visual comparisons are generated.
 - [ ] A preferred regularization method/range is identified.
@@ -1255,7 +1257,7 @@ The GRAPPA-based experiment is complete when:
 
 # 23. Immediate next action
 
-Synthetic Wave generation, visual review, exact R3×1 mask application, and BART Wave/PSF export are complete. **Begin Phase E next** by estimating ESPIRiT maps from the compressed no-wave ACS, then run the unregularized reconstruction and regularization sweep:
+Measured-ACS ESPIRiT calibration and the unregularized BART Wave reconstruction are complete. **Pause for visual review of the λ=0 magnitude/phase NIfTIs.** Do not start the positive-λ sweep until that review is approved.
 
 ```text
 GRAPPA-completed no-wave k-space [256,256,256,12]
@@ -1280,7 +1282,9 @@ export BART Wave k-space, identical theoretical PSF, and provenance
         ↓
 infer ESPIRiT maps from the compressed no-wave ACS
         ↓
-run unregularized BART Wave reconstruction and regularization sweep
+run unregularized BART Wave reconstruction
+        ↓
+export TWIX-oriented magnitude/phase NIfTIs and pause for review
 ```
 
 **Phase C passed its held-out ACS, measured-sample preservation, finiteness, fill-count, and central-RSS checks.**

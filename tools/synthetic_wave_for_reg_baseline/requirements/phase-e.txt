@@ -1,0 +1,3 @@
+-r phase-d.txt
+
+# BART itself is an external compiled dependency and is supplied with --bart.
