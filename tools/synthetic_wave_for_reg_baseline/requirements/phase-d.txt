@@ -1,0 +1,4 @@
+-r phase-c.txt
+
+# Parse the matching Pulseq sequence and calculate its theoretical ADC trajectory.
+pypulseq>=1.5.0

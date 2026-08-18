@@ -5,7 +5,7 @@ This directory contains the phased no-wave-to-Wave baseline experiment described
 ## Layout
 
 ```text
-scripts/       Phase A–C command-line programs and local GRAPPA implementation
+scripts/       Data inspection, GRAPPA, and theoretical Wave synthesis programs
 requirements/  Incremental Python dependency sets for each phase
 tests/         Unit and reference-oracle tests
 ```
@@ -14,14 +14,14 @@ Machine-local dataset notes and generated reconstruction artifacts remain at thi
 
 ## Current baseline
 
-Phases A–C are complete. The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. The 24-coil reconstruction is retained locally as a comparison.
+The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. Full theoretical Wave k-space and first-coil direct-IFFT diagnostics have been generated; sampling-mask application and BART reconstruction remain gated on visual approval. The 24-coil GRAPPA reconstruction is retained locally as a comparison.
 
 ## Setup and tests
 
 From the repository root:
 
 ```bash
-python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/phase-c.txt
+python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/phase-d.txt
 python -m unittest discover \
     -s tools/synthetic_wave_for_reg_baseline/tests \
     -p 'test_*.py'

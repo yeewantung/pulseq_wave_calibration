@@ -496,11 +496,11 @@ $$
 
 The final full synthetic Wave k-space must have shape `[1024, 256, 256, 12]`. Use centered orthonormal FFTs throughout and record the convention in metadata.
 
-- [ ] Assert input layout `[RO, PE1, PE2, Ncc] = [256,256,256,12]` and identify RO as axis 0 from the loader convention.
-- [ ] Centered-IFFT the completed no-wave k-space to coil images.
-- [ ] Embed the image at readout indices `384:640` of an exact-zero `[1024,256,256,12]` array.
-- [ ] Verify center-crop recovery, zero exterior, 1 mm readout voxel size, and 1024 mm extended readout FOV.
-- [ ] Apply the forward operator as `F_RO → theoretical PSF → F_PE1,PE2` without redundant transforms.
+- [x] Assert input layout `[RO, PE1, PE2, Ncc] = [256,256,256,12]` and identify RO as axis 0 from the loader convention.
+- [x] Centered-IFFT the completed no-wave k-space to coil images.
+- [x] Embed the image at readout indices `384:640` of an exact-zero `[1024,256,256,12]` array.
+- [x] Verify center-crop recovery, zero exterior, 1 mm readout voxel size, and 1024 mm extended readout FOV.
+- [x] Apply the forward operator as `F_RO → theoretical PSF → F_PE1,PE2` without redundant transforms.
 
 ## 6.2 Generate the theoretical PSF from the matching sequence
 
@@ -527,12 +527,12 @@ Generate `delta_ky_idx` and `delta_kz_idx` from the sequence trajectory, then fo
 
 Use this same theoretical PSF—without measured calibration correction—for both synthetic Wave encoding and BART reconstruction. Export one canonical PSF and derive both consumers from it; record its sequence path/hash, dimensions, flips, trajectory excursion, dtype, and array/BART layouts. Do not use the pre-existing calibrated PSF under `mprage_bart/bart_inputs` for this experiment.
 
-- [ ] Generate trajectory offsets from the supplied sequence using the verified integrated-tail exclusion.
-- [ ] Build a unit-magnitude theoretical PSF with shape `[1024,256,256]` complex64.
-- [ ] Verify PSF phase/orientation and sagittal flip conventions.
-- [ ] Export BART PSF shape `[1024,256,256,1,1]`.
-- [ ] Prove the synthesis and BART PSF payloads are identical, for example with a SHA-256 hash.
-- [ ] Record sequence and PSF provenance in machine-readable metadata.
+- [x] Generate trajectory offsets from the supplied sequence using the verified integrated-tail exclusion.
+- [x] Build a unit-magnitude theoretical PSF with shape `[1024,256,256]` complex64.
+- [x] Verify PSF phase/orientation and sagittal flip conventions.
+- [x] Export BART PSF shape `[1024,256,256,1,1]`.
+- [x] Prove the synthesis and BART PSF payloads are identical, for example with a SHA-256 hash.
+- [x] Record sequence and PSF provenance in machine-readable metadata.
 
 ## 6.3 Pre-BART full-Wave sanity images
 
@@ -547,9 +547,9 @@ For a configurable first few active virtual coils (default: coils 1–4):
 
 Pause before BART until these diagnostics have been visually reviewed.
 
-- [ ] Save full-Wave direct-IFFT magnitude/phase NIfTIs for the first few channels.
-- [ ] Save montage/RSS quick-look diagnostics.
-- [ ] Verify all diagnostic arrays are finite and have the expected extended-FOV geometry.
+- [x] Save full-Wave direct-IFFT magnitude/phase NIfTIs for the first few channels.
+- [x] Save montage/RSS quick-look diagnostics.
+- [x] Verify all diagnostic arrays are finite and have the expected extended-FOV geometry.
 - [ ] Obtain visual approval before starting BART reconstruction.
 
 ## 6.4 Apply Wave encoding, then the acquisition mask
@@ -562,11 +562,11 @@ d_{\mathrm{Wave,R3},c}
 M_{R3\times1}k_{\mathrm{Wave,full},c}.
 $$
 
-- [ ] Verify PSF orientation/axis convention.
-- [ ] Reuse existing Wave synthesis code where possible.
-- [ ] Assert PSF dimensions.
-- [ ] Document FFT normalization convention.
-- [ ] Generate full synthetic Wave k-space.
+- [x] Verify PSF orientation/axis convention.
+- [x] Reuse existing Wave synthesis code where possible.
+- [x] Assert PSF dimensions.
+- [x] Document FFT normalization convention.
+- [x] Generate full synthetic Wave k-space.
 - [ ] Apply R3×1 mask only after Wave encoding.
 - [ ] Set unacquired BART samples to exact complex zero.
 
@@ -1043,11 +1043,11 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 
 ## Phase D — synthetic Wave
 
-- [ ] Center-embed the Ncc=12 coil images from 256 to 1024 readout voxels.
-- [ ] Generate the theoretical PSF from the supplied matching sequence.
-- [ ] Feed the extended no-wave coil images through `F_RO → PSF → F_PE1,PE2`.
-- [ ] Generate full `[1024,256,256,12]` Wave k-space.
-- [ ] Export direct-IFFT magnitude/phase diagnostics for the first few coils and pause for review.
+- [x] Center-embed the Ncc=12 coil images from 256 to 1024 readout voxels.
+- [x] Generate the theoretical PSF from the supplied matching sequence.
+- [x] Feed the extended no-wave coil images through `F_RO → PSF → F_PE1,PE2`.
+- [x] Generate full `[1024,256,256,12]` Wave k-space.
+- [x] Export direct-IFFT magnitude/phase diagnostics for the first few coils and pause for review.
 - [ ] Re-apply exact R3×1 sampling mask.
 - [ ] Save BART-formatted Wave k-space and the identical theoretical PSF.
 
@@ -1225,7 +1225,7 @@ The GRAPPA-based experiment is complete when:
 - [x] Shared 2D GRAPPA weights are trained once from the 256×24×256 product refscan support.
 - [x] Full coil-wise no-wave k-space is reconstructed.
 - [x] Acquired samples remain unchanged.
-- [ ] Synthetic Wave encoding is applied to completed coil data.
+- [x] Synthetic Wave encoding is applied to completed coil data.
 - [ ] Exact R3×1 mask is re-applied after Wave encoding.
 - [ ] BART reconstructs the synthetic Wave data successfully.
 - [ ] A regularization sweep is completed.
@@ -1237,7 +1237,7 @@ The GRAPPA-based experiment is complete when:
 
 # 23. Immediate next action
 
-Phases A–C are complete. Implement **Phase D synthetic Wave generation next**, reusing the established Wave-MPRAGE/BART utilities and the verified GRAPPA-completed active Ncc=12 k-space:
+Full synthetic Wave generation and the pre-BART diagnostic export are complete. **Review the direct-IFFT magnitude/phase diagnostics next.** After visual approval, re-apply the exact product mask and prepare the remaining BART inputs:
 
 ```text
 GRAPPA-completed no-wave k-space [256,256,256,12]
@@ -1253,6 +1253,8 @@ apply F_RO → theoretical PSF → F_PE1,PE2
 full Wave k-space [1024,256,256,12]
         ↓
 direct-IFFT first few coils to magnitude/phase NIfTIs and pause for review
+        ↓
+visual approval
         ↓
 infer ESPIRiT maps from the compressed no-wave ACS
         ↓
