@@ -14,7 +14,7 @@ Machine-local dataset notes and generated reconstruction artifacts remain at thi
 
 ## Current baseline
 
-The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. Full theoretical Wave k-space and first-coil direct-IFFT diagnostics have been generated; sampling-mask application and BART reconstruction remain gated on visual approval. The 24-coil GRAPPA reconstruction is retained locally as a comparison.
+The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. Full theoretical Wave k-space passed visual review, and the exact TWIX image/refscan union mask has been applied to produce BART-ready Wave k-space and PSF inputs. ESPIRiT map estimation and the BART reconstruction sweep are next. The 24-coil GRAPPA reconstruction is retained locally as a comparison.
 
 ## Setup and tests
 

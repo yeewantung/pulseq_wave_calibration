@@ -550,7 +550,7 @@ Pause before BART until these diagnostics have been visually reviewed.
 - [x] Save full-Wave direct-IFFT magnitude/phase NIfTIs for the first few channels.
 - [x] Save montage/RSS quick-look diagnostics.
 - [x] Verify all diagnostic arrays are finite and have the expected extended-FOV geometry.
-- [ ] Obtain visual approval before starting BART reconstruction.
+- [x] Obtain visual approval before starting BART reconstruction.
 
 ## 6.4 Apply Wave encoding, then the acquisition mask
 
@@ -567,8 +567,8 @@ $$
 - [x] Assert PSF dimensions.
 - [x] Document FFT normalization convention.
 - [x] Generate full synthetic Wave k-space.
-- [ ] Apply R3×1 mask only after Wave encoding.
-- [ ] Set unacquired BART samples to exact complex zero.
+- [x] Apply R3×1 mask only after Wave encoding.
+- [x] Set unacquired BART samples to exact complex zero.
 
 ---
 
@@ -589,32 +589,12 @@ Preserve:
 - exact acquired line set,
 - any sequence-specific edge behavior.
 
-- [ ] Extract/reconstruct the actual PE1 sampling mask.
-- [ ] Derive the mask from TWIX acquisition indices/metadata rather than treating nonzero sample magnitude as the authoritative acquisition indicator.
-- [ ] Verify ACS fully sampled region.
-- [ ] Verify R=3 offset.
-- [ ] Verify number of acquired lines matches the source scan.
-- [ ] Verify synthetic Wave unacquired positions are exact zero.
-
-## 7.1 Deferred synthetic acceleration extensions
-
-The current experiment remains R3×1. Keep full Wave synthesis independent of the retrospective sampling mask so the same validated `[1024,256,256,12]` full Wave k-space can support future acceleration studies without repeating GRAPPA completion or Wave encoding.
-
-Candidate later masks include:
-
-```text
-R3×2: PE1 acceleration 3, PE2 acceleration 2
-R3×3: PE1 acceleration 3, PE2 acceleration 3
-```
-
-For each future mask, explicitly define and record both PE1 and PE2 residues/offsets, treatment of the fully sampled ACS region, acquired coordinate count, effective acceleration, and a unique output tag. Generate masks from a dedicated configurable mask builder and validate coordinates directly; do not generalize R3×1 with an unchecked `mask[::R1, ::R2]` expression.
-
-Theoretical PSF generation and full Wave k-space must remain identical across acceleration comparisons. Only the final retrospective mask and downstream BART reconstruction settings should change. Store each acceleration result separately so R3×1, R3×2, and R3×3 cannot overwrite or be confused with one another.
-
-- [ ] Optional later: implement and validate an R3×2 synthetic sampling mask.
-- [ ] Optional later: implement and validate an R3×3 synthetic sampling mask.
-- [ ] Compare reconstruction stability and preferred regularization across acceleration factors.
-- [ ] Do not implement these extensions during the current R3×1 baseline unless explicitly requested.
+- [x] Extract/reconstruct the actual PE1 sampling mask.
+- [x] Derive the mask from TWIX acquisition indices/metadata rather than treating nonzero sample magnitude as the authoritative acquisition indicator.
+- [x] Verify ACS fully sampled region.
+- [x] Verify R=3 offset.
+- [x] Verify number of acquired lines matches the source scan.
+- [x] Verify synthetic Wave unacquired positions are exact zero.
 
 ---
 
@@ -1048,8 +1028,8 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 - [x] Feed the extended no-wave coil images through `F_RO → PSF → F_PE1,PE2`.
 - [x] Generate full `[1024,256,256,12]` Wave k-space.
 - [x] Export direct-IFFT magnitude/phase diagnostics for the first few coils and pause for review.
-- [ ] Re-apply exact R3×1 sampling mask.
-- [ ] Save BART-formatted Wave k-space and the identical theoretical PSF.
+- [x] Re-apply exact R3×1 sampling mask.
+- [x] Save BART-formatted Wave k-space and the identical theoretical PSF.
 
 ## Phase E — BART sweep
 
@@ -1076,6 +1056,26 @@ The covariance pass used all 256 refscan PE2 partitions, PE2 chunks of 8, and a 
 - [ ] Compare optimal parameters with GRAPPA branch.
 
 Do not begin Phase G without an explicit request.
+
+## Phase H — future R3×2 and R3×3 synthetic masks (deferred)
+
+The current experiment remains R3×1. Keep full Wave synthesis independent of the retrospective sampling mask so the validated `[1024,256,256,12]` full Wave k-space can support later acceleration studies without repeating GRAPPA completion or Wave encoding.
+
+Candidate masks are:
+
+```text
+R3×2: PE1 acceleration 3, PE2 acceleration 2
+R3×3: PE1 acceleration 3, PE2 acceleration 3
+```
+
+For each future mask, explicitly define and record both PE1 and PE2 residues/offsets, treatment of the fully sampled ACS region, acquired coordinate count, effective acceleration, and a unique output tag. Generate masks from a dedicated configurable mask builder and validate coordinates directly; do not generalize R3×1 with an unchecked `mask[::R1, ::R2]` expression.
+
+The theoretical PSF and full Wave k-space must remain identical across acceleration comparisons. Only the retrospective mask and downstream BART reconstruction settings should change. Store each acceleration result separately so R3×1, R3×2, and R3×3 cannot overwrite or be confused with one another.
+
+- [ ] Implement and validate an R3×2 synthetic sampling mask.
+- [ ] Implement and validate an R3×3 synthetic sampling mask.
+- [ ] Compare reconstruction stability and preferred regularization across acceleration factors.
+- [ ] Do not begin Phase H unless explicitly requested.
 
 ---
 
@@ -1183,9 +1183,9 @@ Validation NRMSE: 0.17240017 at active Ncc=12; 0.12384302 at comparison Ncc=24
 ## Synthetic Wave
 
 ```text
-PSF:
-Wave dimensions:
-Sampling-mask verification:
+PSF: theoretical sequence-derived PSF; synthesis/BART logical SHA-256 e888fee32e89edf1d23c08ec0dd36c9f4777b56e2cde8bc1507a4288f58f10d4
+Wave dimensions: full [1024,256,256,12]; BART [1024,256,256,12,1], complex64
+Sampling-mask verification: TWIX image/refscan MDH union; 25,856 PE coordinates; 101 PE1 lines per partition; zero acquired mismatches; zero nonzero unacquired samples
 ```
 
 ## BART
@@ -1226,7 +1226,7 @@ The GRAPPA-based experiment is complete when:
 - [x] Full coil-wise no-wave k-space is reconstructed.
 - [x] Acquired samples remain unchanged.
 - [x] Synthetic Wave encoding is applied to completed coil data.
-- [ ] Exact R3×1 mask is re-applied after Wave encoding.
+- [x] Exact R3×1 mask is re-applied after Wave encoding.
 - [ ] BART reconstructs the synthetic Wave data successfully.
 - [ ] A regularization sweep is completed.
 - [ ] Metrics and visual comparisons are generated.
@@ -1237,7 +1237,7 @@ The GRAPPA-based experiment is complete when:
 
 # 23. Immediate next action
 
-Full synthetic Wave generation and the pre-BART diagnostic export are complete. **Review the direct-IFFT magnitude/phase diagnostics next.** After visual approval, re-apply the exact product mask and prepare the remaining BART inputs:
+Synthetic Wave generation, visual review, exact R3×1 mask application, and BART Wave/PSF export are complete. **Begin Phase E next** by estimating ESPIRiT maps from the compressed no-wave ACS, then run the unregularized reconstruction and regularization sweep:
 
 ```text
 GRAPPA-completed no-wave k-space [256,256,256,12]
@@ -1256,11 +1256,13 @@ direct-IFFT first few coils to magnitude/phase NIfTIs and pause for review
         ↓
 visual approval
         ↓
-infer ESPIRiT maps from the compressed no-wave ACS
-        ↓
 re-apply exact R3×1 product sampling mask
         ↓
-export BART Wave k-space, identical theoretical PSF, maps, and provenance
+export BART Wave k-space, identical theoretical PSF, and provenance
+        ↓
+infer ESPIRiT maps from the compressed no-wave ACS
+        ↓
+run unregularized BART Wave reconstruction and regularization sweep
 ```
 
 **Phase C passed its held-out ACS, measured-sample preservation, finiteness, fill-count, and central-RSS checks.**
