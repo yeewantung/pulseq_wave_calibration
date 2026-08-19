@@ -69,6 +69,30 @@ def _run_logged(command: list[str], log_path: Path) -> dict[str, Any]:
     return {"command": command, "wall_seconds": wall_seconds, "log": str(log_path)}
 
 
+def build_ecalib_command(
+    bart: Path,
+    calibration_base: Path,
+    maps_base: Path,
+    eigenvalues_base: Path,
+    *,
+    crop: float,
+) -> list[str]:
+    """Build hard-crop one-map ESPIRiT calibration with eigenvalue output."""
+    if not 0.0 <= crop <= 1.0:
+        raise ValueError("ESPIRiT crop must be between 0 and 1.")
+    return [
+        str(bart),
+        "ecalib",
+        "-m",
+        "1",
+        "-c",
+        str(crop),
+        str(calibration_base),
+        str(maps_base),
+        str(eigenvalues_base),
+    ]
+
+
 def _save_map_montages(maps_base: Path, output_dir: Path) -> list[str]:
     """Save central-slice magnitude and phase montages for all active maps/coils."""
     import matplotlib.pyplot as plt
@@ -257,21 +281,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     bart_version_output = (version.stdout + version.stderr).strip()
     maps_base = output_dir / "coil_sens_bart"
+    eigenvalues_base = output_dir / "eigenvalue_maps_bart"
     ecalib = _run_logged(
-        [
-            str(bart),
-            "ecalib",
-            "-m",
-            "1",
-            "-c",
-            str(args.ecalib_crop),
-            str(bart_input / "kspace_calib"),
-            str(maps_base),
-        ],
+        build_ecalib_command(
+            bart,
+            bart_input / "kspace_calib",
+            maps_base,
+            eigenvalues_base,
+            crop=args.ecalib_crop,
+        ),
         output_dir / "ecalib.log",
     )
     ecalib["output"] = validate_finite_bart(maps_base, (256, 256, 256, 12, 1))
     ecalib["output_cfl_sha256"] = sha256_file(maps_base.with_suffix(".cfl"))
+    ecalib["eigenvalue_output"] = validate_finite_bart(
+        eigenvalues_base, (256, 256, 256, 1, 1)
+    )
+    ecalib["eigenvalue_cfl_sha256"] = sha256_file(
+        eigenvalues_base.with_suffix(".cfl")
+    )
     ecalib["diagnostic_montages"] = _save_map_montages(maps_base, output_dir)
 
     image_base = output_dir / "image_wave"

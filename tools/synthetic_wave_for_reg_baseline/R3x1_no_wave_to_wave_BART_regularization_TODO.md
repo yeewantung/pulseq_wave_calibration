@@ -692,6 +692,12 @@ took 767.65 s wall time (164.32 s internal reconstruction), followed by
 117.98 s for NIfTI export. The first regularized run must be timed before
 updating the remaining runtime estimate.
 
+The accepted-5×5×5 rerun used hard `ecalib -m 1 -c 0.5` and saved both maps
+and eigenvalues. It took 98.36 s. Its λ=0 Wave command took 747.71 s wall time
+(161.74 s internal reconstruction; 747.09 s reported BART total), followed by
+69.17 s for NIfTI export. The resulting λ=0 NIfTI is awaiting the required
+visual anatomy-support confirmation before either positive-λ smoke test.
+
 ## 9.2 Publishable sweep driver
 
 Run the sweep through a small, sensibly named driver rather than invoking every
@@ -733,7 +739,7 @@ bart wave \
     recon
 ```
 
-- [ ] λ = 0 rerun with the accepted 5×5×5 source and accepted CSM
+- [x] λ = 0 rerun with the accepted 5×5×5 source and crop-0.5 CSM candidate
 - [ ] λ = 1e-4
 - [ ] λ = 1e-3
 - [ ] λ = 1e-2
@@ -1239,8 +1245,9 @@ consistent Wave forward/reconstruction path.
 - [x] Trace the λ=0 R3 ghost to the GRAPPA-completed no-wave input.
 - [x] Keep positive-λ runs paused until a visually acceptable no-wave completion is selected.
 - [x] Select joint-coil 5×5×5 GRAPPA as the visually acceptable multi-coil no-wave completion.
-- [ ] Regenerate synthetic Wave and BART inputs in a new output tree using the accepted 5×5×5 source.
-- [ ] Generate hard `ecalib -m 1 -c 0.5` maps once, save eigenvalues/hash, and visually gate λ=0.
+- [x] Regenerate synthetic Wave and BART inputs in a new output tree using the accepted 5×5×5 source.
+- [x] Generate hard `ecalib -m 1 -c 0.5` maps once and save eigenvalues/hash.
+- [ ] Visually gate the crop-0.5 λ=0 result before positive regularization.
 - [ ] Reuse the accepted maps and `-e 6.70e7` for every coarse run without rerunning `ecalib`.
 - [ ] Run only wavelet `1e-3` and LLR block-8 `2e-3` first; validate outputs
   and stop for explicit user visual confirmation.
