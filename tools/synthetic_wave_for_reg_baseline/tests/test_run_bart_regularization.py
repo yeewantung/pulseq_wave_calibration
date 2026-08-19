@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from run_bart_regularization import (  # noqa: E402
     canonical_lambda,
     completed_manifest_reusable,
     failed_run_recoverable,
+    run,
     run_name,
 )
 
@@ -145,6 +147,63 @@ class ResumeTests(unittest.TestCase):
                 return_value={"norm": 1.0},
             ):
                 self.assertTrue(failed_run_recoverable(path, config, maps_hash))
+
+    def test_clean_first_pass_success_finalizes_manifest(self) -> None:
+        """A fresh successful wrapper run must not enter recovery-only state."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            wrapper = root / "run_wave_recon.sh"
+            bart = root / "bart"
+            python = root / "python"
+            twix = root / "meas.dat"
+            sequence = root / "sequence.seq"
+            bart_input = root / "inputs"
+            output_root = root / "output"
+            maps = root / "maps"
+            lambda_zero = root / "lambda_zero"
+            bart_input.mkdir()
+            for path in (wrapper, bart, python, twix, sequence, bart_input / "manifest.json"):
+                path.write_text("test", encoding="utf-8")
+            for base in (maps, lambda_zero, bart_input / "psf", bart_input / "wave_kspace"):
+                base.with_suffix(".hdr").write_text("test", encoding="utf-8")
+                base.with_suffix(".cfl").write_bytes(b"test")
+            args = argparse.Namespace(
+                wrapper=wrapper,
+                bart=bart,
+                python=python,
+                bart_input_dir=bart_input,
+                maps=maps,
+                expected_maps_sha256="a" * 64,
+                lambda_zero_base=lambda_zero,
+                output_root=output_root,
+                twix=twix,
+                sequence=sequence,
+                regularizer="llr",
+                lambda_value=2e-3,
+                block_size=8,
+                iterations=100,
+                tolerance=1e-6,
+                max_eigenvalue=6.70e7,
+                backend="cpu",
+                subject="test",
+                resume=True,
+            )
+            version = mock.Mock(stdout="v1.0\n", stderr="")
+            with (
+                mock.patch("run_bart_regularization.sha256_file", return_value="a" * 64),
+                mock.patch("run_bart_regularization._run_streamed", return_value=1.0),
+                mock.patch(
+                    "run_bart_regularization.validate_finite_bart",
+                    return_value={"norm": 1.0, "all_samples_finite": True},
+                ),
+                mock.patch("run_bart_regularization._relative_bart_difference", return_value=0.1),
+                mock.patch("run_bart_regularization._validate_niftis", return_value=[]),
+                mock.patch("run_bart_regularization._parse_bart_log", return_value={}),
+                mock.patch("run_bart_regularization.subprocess.run", return_value=version),
+            ):
+                manifest = run(args)
+            self.assertEqual(manifest["status"], "complete")
+            self.assertNotIn("recovered_failure", manifest)
 
 
 if __name__ == "__main__":

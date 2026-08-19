@@ -765,7 +765,7 @@ bart wave \
 ```
 
 - [ ] LLR block 8, λ = 2e-4
-- [ ] LLR block 8, λ = 2e-3
+- [x] LLR block 8, λ = 2e-3
 - [ ] LLR block 8, λ = 2e-2
 
 ## 9.5 Regularization smoke-test gate
@@ -800,8 +800,8 @@ has the expected orientation. Apply any required orientation correction
 consistently to λ=0 and all regularized cases before beginning evaluation.
 
 - [x] Wavelet λ=1e-3 smoke test exported and technically validated.
-- [ ] LLR block-8 λ=2e-3 smoke test exported and technically validated.
-- [ ] Explicit user visual approval received before remaining coarse jobs.
+- [x] LLR block-8 λ=2e-3 smoke test exported and technically validated.
+- [x] Explicit user visual approval received before remaining coarse jobs.
 - [ ] All regularized cases exported and paused for user orientation review.
 - [ ] Explicit orientation approval received before metrics or DICOM comparison.
 
@@ -818,10 +818,29 @@ minimal testing environment lacks the upstream all-in-one module's `torch`
 import. Conversion was resumed without rerunning BART using the verified
 `cuda122py312` runtime and completed in 19.64 s. The exported magnitude/phase
 NIfTIs are both `[256,256,256]`, orientation code `IAL`, and await user visual
-review together with the still-pending LLR smoke result.
+review together with the LLR smoke result.
+
+The LLR block-8, λ=`2e-3` CPU FISTA smoke reconstruction completed on
+`macha` in 1333.73 s internal / 1396.16 s BART total (about 23.3 minutes).
+Its BART output is finite, nonzero, has CFL SHA-256
+`f8329ee78abe8dd54ceabcd6618f14d583e882c8bafb748e525dbf61c114fd8c`,
+and differs from λ=0 by relative L2 `0.00448864`. Both magnitude and phase
+NIfTIs are `[256,256,256]`, 1 mm isotropic, finite, and orientation code `IAL`.
+The run used host-selected BART
+`v1.0.00-1-g731bfd3-dirty` and Python from `cuda133py312-macha`.
+The matched center-slice magnitude quicklook is saved under
+`regularization_smoke_tests/visual_review/center_smoke_wavelet-1e-3_vs_llr-block8-2e-3.png`.
+The user visually reviewed the matched quicklook and confirmed that both
+wavelet and LLR are working, approving the four endpoint reconstructions.
+
+The first-pass solve and conversion completed, but manifest finalization found
+an uninitialized recovery-only local variable in the driver. The driver was
+fixed with a clean-success regression test (53 tests passing), and `--resume`
+re-ran conversion only in 11.72 s without rerunning BART. The complete manifest
+retains this event under `recovered_failure`.
 
 - [x] Scripted sweep driver implemented.
-- [ ] Per-run commands, status, runtime, CSM hash, and output paths recorded in machine-readable metadata.
+- [x] Smoke-case commands, status, runtime, CSM hash, and output paths recorded in machine-readable metadata.
 - [ ] Coarse wavelet and LLR results compared visually and quantitatively.
 - [ ] Fine λ refinement deferred; do not add intermediate λ values in this stage.
 - [ ] LLR block-size refinement deferred; do not sweep block size in this stage.
@@ -1266,8 +1285,8 @@ consistent Wave forward/reconstruction path.
 - [x] Regenerate synthetic Wave and BART inputs in a new output tree using the accepted 5×5×5 source.
 - [x] Generate hard `ecalib -m 1 -c 0.5` maps once and save eigenvalues/hash.
 - [x] Visually gate the crop-0.5 λ=0 result before positive regularization.
-- [ ] Reuse the accepted maps and `-e 6.70e7` for every coarse run without rerunning `ecalib`.
-- [ ] Run only wavelet `1e-3` and LLR block-8 `2e-3` first; validate outputs
+- [x] Reuse the accepted maps and `-e 6.70e7` for both smoke runs without rerunning `ecalib`.
+- [x] Run only wavelet `1e-3` and LLR block-8 `2e-3` first; validate outputs
   and stop for explicit user visual confirmation.
 - [ ] After approval, run wavelet endpoints `1e-4` and `1e-2`.
 - [ ] After approval, run LLR block-8 endpoints `2e-4` and `2e-2`.

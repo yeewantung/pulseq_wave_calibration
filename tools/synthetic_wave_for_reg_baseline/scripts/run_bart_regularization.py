@@ -455,9 +455,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ]
     started_at = datetime.now(timezone.utc).isoformat()
     manifest: dict[str, Any]
+    recovered_failure: dict[str, Any] | None = None
     if recover_conversion:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        recovered_failure = None
         if "error" in manifest:
             recovered_failure = {
                 "error": manifest.pop("error"),
