@@ -14,7 +14,13 @@ Machine-local dataset notes and generated reconstruction artifacts remain at thi
 
 ## Current baseline
 
-The active result uses the leading 12 columns of the shared 64→24 nested coil-compression basis and joint multicoil R=3 GRAPPA. Full theoretical Wave k-space passed visual review, and the exact TWIX image/refscan union mask has been applied. Measured no-wave ACS produced one BART ESPIRiT map set, and the unregularized Wave CG reconstruction has been exported as TWIX-oriented magnitude/phase NIfTIs. The positive-λ sweep is paused for visual review. The 24-coil GRAPPA reconstruction is retained locally as a comparison.
+The selected no-wave baseline is joint-coil 5×5×5 GRAPPA at Ncc=12. It removes
+the aliasing retained by shallower kernels, preserves the full visual anatomy,
+and directly supplies completed multi-coil k-space for Wave synthesis. Tested
+SENSE/ESPIRiT variants either crop the nose or admit a detached weak-support
+noise shell and require an additional `F(Sx)` back-projection. SENSE remains a
+deferred secondary comparison; its apparently worse effective g-factor is a
+qualitative visual observation, not yet a formal measurement.
 
 ## Setup and tests
 
@@ -26,6 +32,12 @@ python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/phas
 python -m unittest discover \
     -s tools/synthetic_wave_for_reg_baseline/tests \
     -p 'test_*.py'
+```
+
+Emergency Phase G additionally uses:
+
+```bash
+python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/sense.txt
 ```
 
 Wave-MPRAGE is pinned as a submodule because the current scripts import its

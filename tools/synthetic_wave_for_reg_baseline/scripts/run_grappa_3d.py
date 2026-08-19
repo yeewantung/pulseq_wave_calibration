@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run resumable local 5×5×3 R=3 GRAPPA on product MPRAGE data."""
+"""Run resumable local 5×5×Kz R=3 GRAPPA on product MPRAGE data."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from grappa_3d_r3 import (
     NormalEquations3D,
     accumulate_normal_equations_3d,
     apply_grappa_3d_block,
+    pe2_offsets,
     solve_weights_3d,
 )
 from phase_b_coil_compression import (
@@ -33,6 +34,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-prefix", type=Path, required=True)
     parser.add_argument("--ncc", type=int, default=12)
     parser.add_argument("--regularization", type=float, default=0.01)
+    parser.add_argument(
+        "--pe2-kernel-size",
+        type=int,
+        default=3,
+        help="Positive odd PE2 kernel extent; use 5 for a 5x5x5 kernel.",
+    )
     parser.add_argument("--acs-chunk", type=int, default=8)
     parser.add_argument("--calibration-chunk", type=int, default=4)
     parser.add_argument("--reconstruction-chunk", type=int, default=2)
@@ -129,7 +136,10 @@ def _save_equations(
     path: Path, equations: NormalEquations3D, next_partition: int
 ) -> None:
     """Atomically save pooled equations and their next calibration partition."""
-    payload: dict[str, np.ndarray] = {"next_partition": np.asarray(next_partition)}
+    payload: dict[str, np.ndarray] = {
+        "next_partition": np.asarray(next_partition),
+        "pe2_kernel_size": np.asarray(equations.pe2_kernel_size),
+    }
     for offset in (1, 2):
         payload[f"shs_offset{offset}"] = equations.shs[offset]
         payload[f"sht_offset{offset}"] = equations.sht[offset]
@@ -140,10 +150,17 @@ def _save_equations(
     temporary.replace(path)
 
 
-def _load_equations(path: Path, ncoil: int) -> tuple[NormalEquations3D, int]:
+def _load_equations(
+    path: Path, ncoil: int, pe2_kernel_size: int
+) -> tuple[NormalEquations3D, int]:
     """Restore a compatible 3D normal-equation calibration checkpoint."""
-    equations = NormalEquations3D.zeros(ncoil)
     with np.load(path) as archive:
+        saved_kernel = int(archive["pe2_kernel_size"]) if "pe2_kernel_size" in archive else 3
+        if saved_kernel != pe2_kernel_size:
+            raise ValueError(
+                f"Equation checkpoint PE2 kernel {saved_kernel} does not match {pe2_kernel_size}."
+            )
+        equations = NormalEquations3D.zeros(ncoil, pe2_kernel_size)
         for offset in (1, 2):
             equations.shs[offset] = np.asarray(archive[f"shs_offset{offset}"])
             equations.sht[offset] = np.asarray(archive[f"sht_offset{offset}"])
@@ -159,34 +176,43 @@ def calibrate_weights(
     *,
     chunk_size: int,
     regularization: float,
+    pe2_kernel_size: int,
     resume: bool,
 ) -> dict[int, np.ndarray]:
-    """Accumulate halo-aware 5×5×3 equations and checkpoint every PE2 chunk."""
+    """Accumulate halo-aware 5×5×Kz equations and checkpoint every PE2 chunk."""
+    halo = pe2_kernel_size // 2
     if resume and weights_path.is_file():
         with np.load(weights_path) as archive:
             saved_regularization = float(archive["regularization"])
+            saved_kernel = int(archive["pe2_kernel_size"]) if "pe2_kernel_size" in archive else 3
             weights = {
                 offset: np.asarray(archive[f"offset{offset}"]) for offset in (1, 2)
             }
-        expected_shape = (30 * acs.shape[-1], acs.shape[-1])
-        if saved_regularization != regularization or any(
+        expected_shape = (10 * pe2_kernel_size * acs.shape[-1], acs.shape[-1])
+        if saved_regularization != regularization or saved_kernel != pe2_kernel_size or any(
             weight.shape != expected_shape for weight in weights.values()
         ):
-            raise ValueError("Saved 3D weights do not match Ncc or regularization.")
+            raise ValueError("Saved 3D weights do not match kernel, Ncc, or regularization.")
         return weights
     if resume and equations_path.is_file():
-        equations, start_partition = _load_equations(equations_path, acs.shape[-1])
+        equations, start_partition = _load_equations(
+            equations_path, acs.shape[-1], pe2_kernel_size
+        )
     else:
-        equations = NormalEquations3D.zeros(acs.shape[-1])
+        equations = NormalEquations3D.zeros(acs.shape[-1], pe2_kernel_size)
         start_partition = 0
 
     for start in range(start_partition, acs.shape[2], chunk_size):
         stop = min(start + chunk_size, acs.shape[2])
-        halo_start = max(0, start - 1)
-        halo_stop = min(acs.shape[2], stop + 1)
+        halo_start = max(0, start - halo)
+        halo_stop = min(acs.shape[2], stop + halo)
         block = np.asarray(acs[:, :, halo_start:halo_stop, :])
         core = np.arange(start - halo_start, stop - halo_start)
-        equations.add(accumulate_normal_equations_3d(block, core))
+        equations.add(
+            accumulate_normal_equations_3d(
+                block, core, pe2_kernel_size=pe2_kernel_size
+            )
+        )
         _save_equations(equations_path, equations, stop)
         print(f"Equation checkpoint: PE2 {stop}/{acs.shape[2]}", flush=True)
 
@@ -196,6 +222,7 @@ def calibrate_weights(
         offset1=weights[1],
         offset2=weights[2],
         regularization=np.asarray(regularization),
+        pe2_kernel_size=np.asarray(pe2_kernel_size),
         rows_offset1=np.asarray(equations.rows[1]),
         rows_offset2=np.asarray(equations.rows[2]),
     )
@@ -211,6 +238,7 @@ def reconstruct(
     progress_path: Path,
     *,
     chunk_size: int,
+    pe2_kernel_size: int,
     resume: bool,
 ) -> dict[str, Any]:
     """Reconstruct haloed PE2 chunks and resume only after flushed boundaries."""
@@ -229,11 +257,12 @@ def reconstruct(
     ref_count = int(refscan.sqzSize[2])
     image_count = int(image.sqzSize[2])
     started = time.perf_counter()
+    halo = pe2_kernel_size // 2
 
     for start in range(start_partition, 256, chunk_size):
         stop = min(start + chunk_size, 256)
-        halo_start = max(0, start - 1)
-        halo_stop = min(256, stop + 1)
+        halo_start = max(0, start - halo)
+        halo_stop = min(256, stop + halo)
         image_raw = np.asarray(image[:, :, :, halo_start:halo_stop], np.complex64)
         ref_raw = np.asarray(refscan[:, :, :, halo_start:halo_stop], np.complex64)
         block = np.zeros((256, 256, halo_stop - halo_start, basis.shape[1]), np.complex64)
@@ -248,7 +277,12 @@ def reconstruct(
             )
         core = np.arange(start - halo_start, stop - halo_start)
         reconstructed = apply_grappa_3d_block(
-            block, core, acquired, weights, acquired_residue=1
+            block,
+            core,
+            acquired,
+            weights,
+            acquired_residue=1,
+            pe2_kernel_size=pe2_kernel_size,
         )
         output[:, :, start:stop, :] = reconstructed
         output.flush()
@@ -278,6 +312,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     prefix = args.output_prefix.expanduser().resolve()
     prefix.parent.mkdir(parents=True, exist_ok=True)
     basis = _load_basis(basis_path, args.ncc)
+    pe2_offsets(args.pe2_kernel_size)
     root = mapvbvd.mapVBVD(str(twix_path), quiet=True)
     measurement_index, measurement = select_product_measurement(root)
     image = configure_stream(measurement["image"])
@@ -306,6 +341,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         weights_path,
         chunk_size=args.calibration_chunk,
         regularization=args.regularization,
+        pe2_kernel_size=args.pe2_kernel_size,
         resume=args.resume,
     )
     reconstruction = reconstruct(
@@ -316,11 +352,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         output_path,
         recon_progress,
         chunk_size=args.reconstruction_chunk,
+        pe2_kernel_size=args.pe2_kernel_size,
         resume=args.resume,
     )
     report = {
         "format_version": 1,
-        "kernel_ro_pe1_pe2": [5, 5, 3],
+        "kernel_ro_pe1_pe2": [5, 5, args.pe2_kernel_size],
         "ncc": args.ncc,
         "regularization": args.regularization,
         "twix": str(twix_path),

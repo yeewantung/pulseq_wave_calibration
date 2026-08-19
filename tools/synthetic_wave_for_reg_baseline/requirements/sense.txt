@@ -1,0 +1,5 @@
+-r phase-e.txt
+
+# Pinned to the locally verified cuda122py312 reference environment. The
+# Emergency Phase G host may run SigPy on CPU when no CUDA device is visible.
+sigpy==0.1.27

@@ -3,9 +3,9 @@
 
 **Purpose:** Build a reproducible offline experiment for tuning BART Wave reconstruction regularization using an acquired **R3×1 no-wave** dataset and its **online scanner DICOM** as the practical reference.
 
-**Primary strategy:** Reconstruct the missing no-wave k-space with **2D GRAPPA**, preserving coil-wise k-space, then apply the existing Wave forward model and retrospectively re-apply the same R3×1 sampling mask.
+**Original strategy:** Reconstruct the missing no-wave k-space with **2D GRAPPA**, preserving coil-wise k-space, then apply the existing Wave forward model and retrospectively re-apply the same R3×1 sampling mask.
 
-**Deferred secondary strategy:** Repeat the experiment with **SENSE/ESPIRiT** to measure how much the synthetic Wave result depends on the no-wave completion method. Do not implement or run this branch unless explicitly requested.
+**Selected baseline:** Use **joint-coil 5×5×5 GRAPPA at Ncc=12** for downstream synthetic-Wave generation. The user visually confirmed that it removes the aliasing retained by 5×5×1 and 5×5×3, preserves the full nose/mouth anatomy, and appears to have less parallel-imaging noise amplification than the tested SENSE variants. It also directly provides completed multi-coil k-space; SENSE would require the additional model-dependent back-projection `F(Sx)`. Treat the g-factor assessment as qualitative until it is measured explicitly.
 
 ---
 
@@ -69,7 +69,7 @@ then multiplying `P * h_alias` is not equivalent to the desired Wave encoding.
 - [ ] Document this ordering in the implementation comments.
 - [ ] Ensure no code path multiplies the Wave PSF into already PE-aliased hybrid-space data.
 
-## 1.2 GRAPPA first; SENSE second
+## 1.2 GRAPPA first; SENSE emergency continuation
 
 GRAPPA directly estimates missing k-space while preserving coil channels:
 
@@ -94,10 +94,10 @@ $$
 **Decision:**
 
 - [x] Implement GRAPPA branch first.
-- [ ] Implement SENSE/ESPIRiT branch second. (Deferred unless otherwise stated)
+- [ ] Implement the explicitly authorized SENSE/ESPIRiT emergency continuation.
 - [ ] Compare the two synthetic Wave datasets and their preferred BART regularization. (Deferred unless otherwise stated)
 
-## 1.3 Use 2D GRAPPA on the 3D acquisition
+## 1.3 GRAPPA kernel progression and accepted 5×5×5 result
 
 Acquisition dimensions:
 
@@ -108,14 +108,15 @@ PE2 = kz   ← fully sampled, R = 1
 coil
 ```
 
-Baseline GRAPPA kernel:
+Original baseline GRAPPA kernel:
 
 ```text
 5 × 5 × 1
 RO × PE1 × PE2
 ```
 
-Use no PE2 neighbor samples in the baseline.
+The original baseline used no PE2 neighbors. Subsequent 5×5×3 GRAPPA retained
+the visual alias, while the final 5×5×5 reconstruction removed it.
 
 Conceptually:
 
@@ -129,7 +130,9 @@ $$
 
 - [x] Baseline uses a 5×5 RO×PE1 kernel.
 - [x] PE2 kernel extent is 1.
-- [x] True 3D GRAPPA is reserved for a later optional comparison only.
+- [x] Generalize true 3D GRAPPA to a configurable positive odd PE2 extent.
+- [x] Run and visually approve the joint-coil 5×5×5, Ncc=12 reconstruction.
+- [x] Select joint-coil 5×5×5 GRAPPA as the final no-wave completion baseline.
 
 ## 1.4 Train one shared GRAPPA model from all available ACS PE2 partitions
 
@@ -356,7 +359,7 @@ virtual coils  = selected Ncc
 
 # 4. GRAPPA compute strategy
 
-## 4.1 Do not use generic whole-volume 3D mdgrappa as the baseline
+## 4.1 Do not use generic whole-volume 3D mdgrappa
 
 Avoid starting with:
 
@@ -371,7 +374,8 @@ Reasons:
 - generic missing-point enumeration,
 - poor scaling for 256³ data.
 
-- [x] Baseline does not use a 5×5×5 kernel.
+- [x] The original 2D baseline did not use PE2 neighbors; the accepted final
+  method uses the custom resumable joint-coil 5×5×5 implementation.
 - [x] Baseline does not run full-volume generic 3D GRAPPA.
 
 ## 4.2 Apply shared 2D weights PE2-by-PE2 or in chunks
@@ -629,6 +633,11 @@ Optional later:
 
 Generate the ESPIRiT maps strictly from the measured **no-wave product refscan ACS**, not from the GRAPPA-completed volume and not from the synthetic Wave k-space:
 
+The GRAPPA selection governs the completed multi-coil source used for Wave
+synthesis. It does not eliminate BART Wave reconstruction's separate need for
+coil maps. Validate that reconstruction-map support does not mask anatomy,
+without reopening SENSE as the no-wave completion method.
+
 1. Load the `refscan` stream from the same selected product TWIX measurement, with readout oversampling removed using the established loader convention.
 2. Apply the exact leading 12 columns of the saved 64→24 compression basis used for GRAPPA and Wave synthesis. Do not estimate a new compression basis for map calibration.
 3. Preserve the measured ACS support: 256 readout samples, raw PE1 lines `115:139` (24 lines), and all 256 PE2 partitions.
@@ -643,6 +652,9 @@ Generate the ESPIRiT maps strictly from the measured **no-wave product refscan A
 - [x] Build and validate BART `kspace_calib` from the measured no-wave ACS in that same virtual-coil basis.
 - [x] Run `bart ecalib -m 1` and record its version, command, options, runtime, and output hash.
 - [x] Validate `[256,256,256,12,1]` ESPIRiT-map dimensions and magnitude/phase diagnostics.
+- [ ] Before the final BART Wave sweep, verify that the chosen reconstruction
+  maps preserve full anatomy; treat this separately from the selected 5×5×5
+  GRAPPA multi-coil source.
 - [x] BART dimensions verified.
 - [x] Unregularized Wave reconstruction completed.
 - [ ] Wavelet sweep completed.
@@ -785,20 +797,23 @@ Create side-by-side and difference images for the λ sweep.
 
 ---
 
-# 13. SENSE/ESPIRiT comparison branch (deferred unless otherwise stated)
+# 13. Emergency Phase G — SENSE/ESPIRiT recovery branch (concluded)
 
-This entire section is out of the current implementation scope. Do not implement or run it unless explicitly requested after the GRAPPA-derived experiment is complete.
-
-After GRAPPA is validated:
+The user explicitly activated this branch after the GRAPPA artifact persisted.
+It established that SENSE removes the alias but none of the tested single-map
+ESPIRiT support choices passed the full-anatomy/background visual gate. Stop
+the threshold search and retain these outputs as a secondary diagnostic only.
 
 ```text
 R3×1 no-wave raw
         ↓
 same coil compression
         ↓
-ESPIRiT maps
+measured imaging and ACS in the identical 64→12 virtual-coil basis
         ↓
-SENSE / PICS / CG reconstruction
+BART `ecalib -m 1` maps from compressed measured ACS only
+        ↓
+SigPy unregularized Cartesian SENSE with the exact acquisition mask
         ↓
 complex common image x
         ↓
@@ -825,18 +840,28 @@ $$
 
 rather than forcing a single-map model.
 
-- [ ] SENSE reconstruction implemented.
-- [ ] SENSE preprocessing kept minimally regularized to avoid pre-smoothing synthetic truth.
-- [ ] Coil-wise data regenerated.
+- [x] Reuse the saved leading 12 columns of the validated nested coil basis.
+- [x] Export measured image/refscan-union k-space with exact-zero missing samples and no GRAPPA values.
+- [x] Verify imaging and ACS provenance use the identical basis file/hash and columns `[0,12)`.
+- [x] Run BART `ecalib -m 1 -c 0.8` on the compressed measured no-wave ACS.
+- [x] Run λ=0 SigPy SENSE with an explicit image/refscan union mask.
+- [x] Record CG iterations, residual, wall time, and acquired-sample model residual.
+- [x] Export magnitude/phase NIfTIs in corrected canonical RAS orientation.
+- [ ] Inspect both axial index 75 and reverse-count index 180 before acceptance.
+- [x] SENSE preprocessing kept unregularized to avoid pre-smoothing synthetic truth.
+- [x] Coil-wise data regenerated as model-consistent `F(Sx)` k-space; do not feed it to Wave synthesis before visual approval.
 - [ ] Synthetic Wave data generated.
 - [ ] Same BART λ sweep repeated.
 - [ ] Preferred λ compared against GRAPPA branch.
 
 ---
 
-# 14. GRAPPA vs SENSE comparison (deferred unless otherwise stated)
+# 14. GRAPPA vs SENSE comparison (deferred secondary analysis)
 
-This comparison is also out of the current scope because it depends on the deferred SENSE-derived branch.
+Do not mistake a clean SENSE result for proof that GRAPPA cannot work. The two
+methods have different calibration models and conditioning. A clean SENSE
+result localizes the current failure to the GRAPPA branch; retain an independent
+GRAPPA-reference audit for later.
 
 Compare:
 
@@ -1073,16 +1098,15 @@ consistent Wave forward/reconstruction path.
   resumable command-line job. `scripts/run_grappa_3d.py` checkpoints the
   compressed ACS, pooled normal equations, and flushed reconstruction
   partitions; all 12 source coils jointly predict all 12 target coils.
-- [ ] Run the final 5×5×3 job in `tmux`, export its RSS NIfTI, and inspect the
-  reported axial location before deciding whether GRAPPA is acceptable.
-- [ ] If interrupted, rerun the identical command with `--resume`; do not
+- [x] Run the 5×5×3 job, export its RSS NIfTI, and confirm that visual aliasing persists.
+- [x] Generalize the resumable implementation to 5×5×Kz with kernel-aware checkpoints.
+- [x] Run joint-coil 5×5×5 at Ncc=12 and λ=0.01. The user visually confirmed
+  that its reconstructed image no longer has the aliasing seen in shallower kernels.
+- [ ] If a future run is interrupted, rerun the identical command with `--resume`; do not
   delete or mix individual checkpoint files before resuming.
-- [ ] Do not use the current GRAPPA-derived volume for the positive-λ BART
-  comparison unless its residual aliasing is explicitly accepted.
-- [ ] Recommended next step: after explicit approval, replace no-wave GRAPPA
-  completion with the previously clean no-wave CG-SENSE approach, then repeat
-  Wave synthesis and the bounded BART pilot. Keep the GRAPPA results as a
-  documented method-dependence comparison rather than the primary baseline.
+- [x] Accept the 5×5×5 GRAPPA volume as an alias-free candidate for downstream Wave synthesis.
+- [x] Retain SENSE as the second recommended approach, conditional on fixing
+  the current ESPIRiT-support cutoff at the nose/mouth.
 
 ## Phase D — synthetic Wave
 
@@ -1102,7 +1126,8 @@ consistent Wave forward/reconstruction path.
 - [x] Save and inspect ESPIRiT magnitude/phase diagnostics before Wave reconstruction.
 - [x] Run λ=0 using BART's unregularized CG branch and export TWIX-oriented magnitude/phase NIfTIs.
 - [x] Trace the λ=0 R3 ghost to the GRAPPA-completed no-wave input.
-- [ ] Keep positive-λ runs paused until a visually acceptable no-wave completion is selected.
+- [x] Keep positive-λ runs paused until a visually acceptable no-wave completion is selected.
+- [x] Select joint-coil 5×5×5 GRAPPA as the visually acceptable multi-coil no-wave completion.
 - [ ] Run a bounded pilot of three to five representative wavelet λ values; do not launch a dense sweep by default.
 - [ ] Reuse the saved ESPIRiT maps and saved maximum eigenvalue, and record wall/BART reconstruction time for every run.
 - [ ] If needed, refine with only one or two additional λ values around the most useful pilot result.
@@ -1116,18 +1141,65 @@ consistent Wave forward/reconstruction path.
 - [ ] Generate side-by-side figures.
 - [ ] Select preliminary best regularization.
 
-## Phase G — SENSE comparison (deferred unless otherwise stated)
+## Emergency Phase G — SENSE recovery (concluded; GRAPPA selected)
 
-- [ ] Create SENSE-derived full no-wave coil data.
-- [ ] Repeat Wave synthesis.
-- [ ] Repeat BART sweep.
-- [ ] Compare optimal parameters with GRAPPA branch.
+- [x] Compress measured image/refscan data to the same 12 virtual coils.
+- [x] Calibrate one-map BART ESPIRiT maps from compressed measured ACS only.
+- [x] Run the no-wave λ=0 SigPy SENSE reconstruction and export diagnostics.
+- [x] Obtain user visual approval that SENSE removes the GRAPPA aliasing.
+- [x] Create SENSE-derived full no-wave coil data, but keep downstream Wave synthesis gated on visual approval.
+- [x] Investigate the truncated nose/mouth. Strongly suppressed anatomy is
+  colocated with the hard `ecalib -c 0.8` support boundary: 96.2% of those
+  voxels have ESPIRiT map norm `<0.1`, whereas covered anatomy has map support.
+- [ ] Recalibrate a map-support diagnostic while saving BART eigenvalue maps;
+  test smooth maps (`ecalib -S`) and one or two less strict crop thresholds
+  such as 0.5/0.7. Do not silently use `-c 0`, which may admit unstable maps.
+- [x] Generate the first gated candidate with `ecalib -S -c 0.7` and save its
+  eigenvalue map. Map-norm support above 0.1 increases from 41.0% to 62.3% of
+  the volume and recovers 36.1% of the previous hard-crop background/support.
+- [x] Obtain explicit user visual review of the 0.7 candidate. It restores the
+  nose/lips but is rejected because it creates a detached bright background shell.
+- [x] Diagnose the shell as weak-support amplification, not anatomy or an
+  orientation/export error. In BART v1.0, Soft-SENSE at crop `c` remains
+  nonzero down to eigenvalue `(2c-1)^2`; `-S -c 0.7` therefore admits values
+  down to 0.16. The rejected shell has median eigenvalue 0.269, median map norm
+  0.057, and 92.7% of its voxels have map norm `<0.25`. Unregularized SENSE
+  amplifies noise/model mismatch in this ill-conditioned secondary support.
+- [x] Run the user-selected isolation test with hard `ecalib -c 0.7` and no
+  `-S`. Map support above 0.1 is 45.29%; 50 CG iterations converge to a
+  final/initial residual ratio of `3.36e-9`. The acquired-data relative
+  residual is 0.09907 and the detached Soft-SENSE shell is absent in the
+  pipeline quicklook.
+- [x] Obtain explicit user visual review of hard crop 0.7. The detached shell
+  is removed and the lips are retained, but the nose remains cut off; reject
+  this candidate as incomplete full-anatomy support.
+- [x] Run the user-approved next candidate with hard `ecalib -c 0.6`, no `-S`.
+  Map support above 0.1 is 49.19%; 50 CG iterations converge to a
+  final/initial residual ratio of `1.13e-8`, with acquired-data relative
+  residual 0.09840. The detached Soft-SENSE shell is absent in the quicklook.
+- [x] Obtain explicit user visual review of hard crop 0.6. It removes the
+  detached shell and retains more face than 0.7, but the nose remains partially
+  cut off; reject it as the final full-anatomy baseline.
+- [x] Stop the ESPIRiT threshold search and select joint-coil 5×5×5 GRAPPA for
+  downstream synthetic-Wave generation.
+- [x] Record the selection rationale: GRAPPA directly supplies completed
+  multi-coil k-space, avoids the extra SENSE `F(Sx)` back-projection, preserves
+  the full visual anatomy, and appears to have a better effective g-factor.
+  The g-factor statement is qualitative pending an explicit measurement.
+- [ ] Hold: compare accepted 5×5×5 GRAPPA and corrected-support SENSE image
+  quality only after geometry and intensity normalization are finalized.
+  Visual assessment remains primary. Report SSIM plus scale-matched NRMSE/PSNR
+  against unfiltered DICOM, and separately report anatomy coverage, background
+  noise, homogeneous-WM coefficient of variation, CNR, and edge sharpness.
+  PSNR alone is insufficient because it is scale-sensitive and conflates
+  scanner-processing differences with reconstruction quality.
+- [ ] Repeat SENSE-derived Wave synthesis only as a future secondary analysis.
+- [ ] Repeat the SENSE-derived BART sweep only if that branch is reactivated.
+- [ ] Compare optimal parameters with SENSE only as a future method-dependence study.
 
-Do not begin Phase G without an explicit request.
-
-GRAPPA troubleshooting now makes SENSE the recommended primary continuation,
-not merely an optional scientific comparison. This recommendation does not by
-itself authorize the large SENSE/Wave rerun; begin it after explicit approval.
+This branch was explicitly authorized on 2026-08-19. Pause after the no-wave
+NIfTIs and diagnostics for visual approval; authorization does not bypass that
+acceptance gate or automatically launch the later positive-λ sweep.
 
 ## Phase H — future R3×2 and R3×3 synthetic masks (deferred)
 
@@ -1182,13 +1254,15 @@ still changing.
 
 ## GRAPPA kernel
 
-Baseline:
+Original baseline:
 
 ```text
-5×5 over RO×PE1
+5×5×1 over RO×PE1×PE2
 ```
 
-Final: `TBD`
+Final selection: `5×5×5`, visually alias-free with full-anatomy support at
+Ncc=12. Use its completed multi-coil k-space for the main synthetic-Wave path.
+SENSE is retained only as a deferred secondary comparison.
 
 ## GRAPPA Tikhonov regularization
 
@@ -1277,6 +1351,11 @@ Calibration runtime: approximately 44 s on the initial uncached pass
 Application runtime: 904.54 s including final shared-filesystem writeback
 Peak memory:
 Validation NRMSE: 0.17240017 at active Ncc=12; 0.12384302 at comparison Ncc=24
+Final diagnostic: joint-coil 5×5×5, 50 spatial source locations / 600 joint-coil features per target type
+5×5×5 total wall time: 866.35 s; reconstruction portion: 794.45 s
+5×5×5 output: [256,256,256,12] complex64, finite
+Visual result: user-approved; aliasing seen with 5×5×1 and 5×5×3 is absent
+Recommendation: use GRAPPA kernel 5×5×5 or SENSE with verified full-anatomy ESPIRiT support
 ```
 
 ## Synthetic Wave
@@ -1299,14 +1378,35 @@ LLR sweep:
 Best setting:
 ```
 
-## Quantitative comparison
+## Emergency Phase G no-wave SENSE
 
 ```text
-NRMSE:
-SSIM:
-WM noise:
-Sharpness:
-Other:
+Measured input: [256,256,256,12], image/refscan PE1 union (101 lines), exact-zero missing samples
+Coil basis: saved leading columns [0,12); identical basis SHA-256 for imaging and ACS
+Acquired input verification: bitwise equal to the preserved acquired samples in the GRAPPA branch
+ESPIRiT: BART `ecalib -m 1 -c 0.8`, [256,256,256,12,1], 88.32 s
+SENSE: SigPy 0.1.27 CPU, lambda=0, explicit union mask, 50 CG iterations
+CG time: 1227.55 s; final/initial normal-equation residual ratio 8.69e-10
+Acquired model residual: ||MFSx-y||/||y|| = 0.100176
+Model coil k-space: [256,256,256,12] complex64, retained for later Wave synthesis
+NIfTI: canonical RAS, [256,256,256], 1 mm isotropic
+DICOM orientation audit: whole-volume NCC 0.8985; axial 75/180 NCC 0.9150/0.8975
+Remaining geometry difference: approximately -0.5 mm in A and S; resolve during comparison without silent resampling
+Total reconstruction/export wall time: 1456.53 s
+Map-support finding: `ecalib -c 0.8` produces near-binary map norm; 96.2% of
+strongly SENSE-suppressed GRAPPA anatomy has map norm <0.1. The cutoff is
+concentrated at the anterior nose/mouth boundary and is not a CG convergence issue.
+```
+
+## Quantitative comparison (planned; explicitly held)
+
+```text
+Reference: unfiltered product DICOM after resolving the remaining half-voxel geometry convention
+Primary structural metric: SSIM within a documented anatomy mask
+Scale-dependent metrics: robustly intensity-matched NRMSE and PSNR
+Noise metrics: background noise and homogeneous-WM coefficient of variation
+Other: CNR, edge sharpness, and full-anatomy coverage/missed-anatomy fraction
+Status: do not calculate yet; first fix SENSE map support and freeze registration/normalization
 ```
 
 ## Final conclusion
@@ -1332,16 +1432,28 @@ The GRAPPA-based experiment is complete when:
 - [ ] A regularization sweep is completed.
 - [ ] Metrics and visual comparisons are generated.
 - [ ] A preferred regularization method/range is identified.
-- [ ] The current run records the SENSE-derived branch as deferred unless it was explicitly requested; GRAPPA-based completion does not depend on Phase G.
+- [x] The SENSE-derived branch is explicitly activated as Emergency Phase G.
 
 ---
 
 # 23. Immediate next action
 
-Measured-ACS ESPIRiT calibration and the unregularized BART Wave reconstruction are complete. **Pause for visual review of the λ=0 magnitude/phase NIfTIs.** Do not start the positive-λ sweep until that review is approved.
+The 5×5×5 GRAPPA image is visually approved and alias-free. SENSE also removes
+the alias, but hard ESPIRiT crops 0.8, 0.7, and 0.6 progressively truncate
+facial anatomy, while Soft-SENSE 0.7 restores the face at the cost of a detached
+weak-support noise shell. **Stop the SENSE threshold search.** Continue the
+main synthetic-Wave experiment from the accepted joint-coil 5×5×5 GRAPPA
+multi-coil k-space. Keep GRAPPA-versus-SENSE metrics as a deferred secondary
+analysis rather than a prerequisite for the regularization sweep.
 
 ```text
-GRAPPA-completed no-wave k-space [256,256,256,12]
+measured R3×1 no-wave k-space + measured ACS refscan
+        ↓
+same saved 64→12 coil compression for both streams
+        ↓
+joint-coil 5×5×5 GRAPPA trained from the compressed ACS
+        ↓
+accepted completed no-wave coil k-space [256,256,256,12]
         ↓
 centered 3D IFFT to coil images
         ↓

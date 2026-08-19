@@ -16,6 +16,7 @@ from phase_c_export_coil_nifti import (
     DEFAULT_AXIS_ROLES,
     centered_ifft3,
 )
+from run_no_wave_sense import AFFINE_AXIS_FLIPS, canonicalize_to_ras
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -25,6 +26,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--twix", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--measurement-index", type=int, default=1)
+    parser.add_argument(
+        "--canonical-ras",
+        action="store_true",
+        help="Apply the product-DICOM-validated affine correction and store RAS data.",
+    )
     parser.add_argument(
         "--reference-recon",
         type=Path,
@@ -64,17 +70,21 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     rss = np.sqrt(rss_squared, out=rss_squared)
     (rss,) = apply_array_axis_flips((rss,), DEFAULT_AXIS_FLIPS)
 
+    affine_flips = AFFINE_AXIS_FLIPS if args.canonical_ras else (False, False, False)
     affine, voxel_size_mm, twix_info = make_nifti_affine_from_twix(
         twix_file=twix_path,
         scan_index=args.measurement_index,
         npy_shape=spatial_shape,
         twix_array_axis_roles=DEFAULT_AXIS_ROLES,
-        twix_array_axis_flips=(False, False, False),
+        twix_array_axis_flips=affine_flips,
         twix_coord_system="LPS",
         twix_inplane_rot_sign=-1.0,
         twix_use_fov_for_voxel_size=False,
         voxel_size_mm=(1.0, 1.0, 1.0),
     )
+    orientation_transform = None
+    if args.canonical_ras:
+        rss, affine, orientation_transform = canonicalize_to_ras(rss, affine)
     sidecar_path = output_path.with_suffix("").with_suffix(".json")
     metadata: dict[str, object] = {
         "SourceKSpace": str(kspace_path),
@@ -84,6 +94,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         "InputArrayLayout": ["readout", "LIN", "PAR", "virtual_coil"],
         "NIfTITwixArrayAxisRoles": list(DEFAULT_AXIS_ROLES),
         "NIfTIPhysicalArrayFlipsApplied": list(DEFAULT_AXIS_FLIPS),
+        "NIfTIAffineAxisFlips": list(affine_flips),
+        "NIfTICanonicalRAS": bool(args.canonical_ras),
+        "NIfTIOrientationTransform": orientation_transform,
         "NIfTIVoxelSizeMm": list(voxel_size_mm),
         "TwixOrientation": twix_info,
         "RuntimeSeconds": time.perf_counter() - started,
