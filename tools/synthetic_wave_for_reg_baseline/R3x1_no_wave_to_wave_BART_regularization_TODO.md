@@ -695,8 +695,8 @@ updating the remaining runtime estimate.
 The accepted-5×5×5 rerun used hard `ecalib -m 1 -c 0.5` and saved both maps
 and eigenvalues. It took 98.36 s. Its λ=0 Wave command took 747.71 s wall time
 (161.74 s internal reconstruction; 747.09 s reported BART total), followed by
-69.17 s for NIfTI export. The resulting λ=0 NIfTI is awaiting the required
-visual anatomy-support confirmation before either positive-λ smoke test.
+69.17 s for NIfTI export. The user visually accepted its facial anatomy and
+background support, so this exact map CFL pair/hash is frozen for the sweep.
 
 ## 9.2 Publishable sweep driver
 
@@ -741,7 +741,7 @@ bart wave \
 
 - [x] λ = 0 rerun with the accepted 5×5×5 source and crop-0.5 CSM candidate
 - [ ] λ = 1e-4
-- [ ] λ = 1e-3
+- [x] λ = 1e-3
 - [ ] λ = 1e-2
 
 ## 9.4 Coarse LLR pilot
@@ -793,16 +793,34 @@ wavelet: λ = 1e-4, 1e-2
 LLR:     block 8, λ = 2e-4, 2e-2
 ```
 
-- [ ] Wavelet λ=1e-3 smoke test exported and technically validated.
+After all six positive-λ cases have been reconstructed and exported, stop
+again before registration, quantitative metrics, residual images, or DICOM
+comparison. The user must first visually verify that every regularized NIfTI
+has the expected orientation. Apply any required orientation correction
+consistently to λ=0 and all regularized cases before beginning evaluation.
+
+- [x] Wavelet λ=1e-3 smoke test exported and technically validated.
 - [ ] LLR block-8 λ=2e-3 smoke test exported and technically validated.
 - [ ] Explicit user visual approval received before remaining coarse jobs.
+- [ ] All regularized cases exported and paused for user orientation review.
+- [ ] Explicit orientation approval received before metrics or DICOM comparison.
 
 This gives seven images in the initial comparison: λ=0, three wavelet results,
 and three LLR results. At the previously observed end-to-end rate, budget
 roughly 1.5–2.5 hours sequentially, but replace this estimate after the first
 timed FISTA run.
 
-- [ ] Scripted sweep driver implemented.
+The wavelet λ=`1e-3` CPU FISTA smoke reconstruction completed in 1954.08 s
+internal / 1959.62 s BART total (about 32.7 minutes). Its regularized BART
+output is finite, nonzero, and differs from λ=0 by relative L2 `0.00472783`.
+The upstream wrapper's first NIfTI conversion attempt failed only because the
+minimal testing environment lacks the upstream all-in-one module's `torch`
+import. Conversion was resumed without rerunning BART using the verified
+`cuda122py312` runtime and completed in 19.64 s. The exported magnitude/phase
+NIfTIs are both `[256,256,256]`, orientation code `IAL`, and await user visual
+review together with the still-pending LLR smoke result.
+
+- [x] Scripted sweep driver implemented.
 - [ ] Per-run commands, status, runtime, CSM hash, and output paths recorded in machine-readable metadata.
 - [ ] Coarse wavelet and LLR results compared visually and quantitatively.
 - [ ] Fine λ refinement deferred; do not add intermediate λ values in this stage.
@@ -1247,17 +1265,21 @@ consistent Wave forward/reconstruction path.
 - [x] Select joint-coil 5×5×5 GRAPPA as the visually acceptable multi-coil no-wave completion.
 - [x] Regenerate synthetic Wave and BART inputs in a new output tree using the accepted 5×5×5 source.
 - [x] Generate hard `ecalib -m 1 -c 0.5` maps once and save eigenvalues/hash.
-- [ ] Visually gate the crop-0.5 λ=0 result before positive regularization.
+- [x] Visually gate the crop-0.5 λ=0 result before positive regularization.
 - [ ] Reuse the accepted maps and `-e 6.70e7` for every coarse run without rerunning `ecalib`.
 - [ ] Run only wavelet `1e-3` and LLR block-8 `2e-3` first; validate outputs
   and stop for explicit user visual confirmation.
 - [ ] After approval, run wavelet endpoints `1e-4` and `1e-2`.
 - [ ] After approval, run LLR block-8 endpoints `2e-4` and `2e-2`.
 - [ ] Record per-run commands, backend, iteration settings, runtimes, hashes, and NIfTI outputs.
+- [ ] After all regularized cases are reconstructed, stop for explicit user
+  orientation review before any metrics, residuals, or DICOM comparison.
 - [ ] Defer fine λ and LLR block-size sweeps.
 
 ## Phase F — evaluation
 
+- [ ] Do not begin evaluation until the user approves the orientation of λ=0
+  and every regularized reconstruction.
 - [ ] Select and convert the 256 unfiltered product DICOM images only.
 - [ ] Resolve orientation, flips, half-voxel convention, and one shared registration.
 - [ ] Apply one documented robust intensity-matching procedure to every output.

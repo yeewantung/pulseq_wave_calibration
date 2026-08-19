@@ -32,6 +32,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/export_grappa_rss.py` | Diagnostic/export | Produces compact RSS NIfTIs for visual kernel acceptance. |
 | `scripts/prepare_no_wave_sense.py` | Retained diagnostic | Builds a measured-only alternative input for future GRAPPA/SENSE investigation. |
 | `scripts/run_no_wave_sense.py` | Retained diagnostic | Reproduces the SENSE/ESPIRiT anatomy-support comparison. |
+| `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
 
 ## Tests
 

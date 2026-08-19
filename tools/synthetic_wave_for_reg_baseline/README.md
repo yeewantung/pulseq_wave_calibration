@@ -49,6 +49,8 @@ The current production path is:
 6. `export_bart_calibration_acs.py` exports measured no-wave ACS for one
    reusable BART ESPIRiT calibration.
 7. `run_bart_wave_lambda0.py` runs the unregularized acceptance reconstruction.
+8. `run_bart_regularization.py` calls the pinned upstream wrapper for one
+   hashed, resumable wavelet or LLR case.
 
 `reconstruct_no_wave_grappa_2d.py`, `prepare_no_wave_sense.py`, and
 `run_no_wave_sense.py` are retained diagnostic alternatives, not the selected
@@ -88,7 +90,8 @@ importing the upstream all-in-one reconstruction program and its unrelated
 GPU/SENSE dependencies. Regularized production runs should call the pinned
 `external/wave-mprage/recon/bart/run_wave_recon.sh` wrapper directly; the local
 lambda-zero runner is retained for its timing, map montage, and acceptance
-manifest checks.
+manifest checks. `run_bart_regularization.py` provides the publishable CLI,
+provenance, validation, and safe completed-run reuse around that direct call.
 
 Run a script with `--help` for its dataset-independent CLI, for example:
 

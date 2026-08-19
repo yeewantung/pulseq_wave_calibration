@@ -1,0 +1,151 @@
+"""Tests for the publishable BART Wave regularization driver."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from bart_cfl import sha256_file  # noqa: E402
+from run_bart_regularization import (  # noqa: E402
+    build_conversion_command,
+    build_wave_options,
+    build_wrapper_command,
+    canonical_lambda,
+    completed_manifest_reusable,
+    failed_run_recoverable,
+    run_name,
+)
+
+
+class NamingAndCommandTests(unittest.TestCase):
+    """Verify stable naming and exact wrapper/BART option forwarding."""
+
+    def test_names_requested_smoke_cases(self) -> None:
+        self.assertEqual(canonical_lambda(1e-3), "1e-3")
+        self.assertEqual(run_name("wavelet", 1e-3), "wavelet_lambda-1e-3")
+        self.assertEqual(run_name("llr", 2e-3, 8), "llr_block-8_lambda-2e-3")
+
+    def test_wavelet_options_freeze_fista_settings(self) -> None:
+        self.assertEqual(
+            build_wave_options(
+                "wavelet",
+                1e-3,
+                block_size=8,
+                iterations=100,
+                tolerance=1e-6,
+                max_eigenvalue=6.70e7,
+                backend="cpu",
+            ),
+            ["-w", "-f", "-i", "100", "-t", "1e-06", "-e", "67000000", "-r", "0.001"],
+        )
+
+    def test_llr_wrapper_uses_existing_maps_and_direct_option_section(self) -> None:
+        options = build_wave_options(
+            "llr",
+            2e-3,
+            block_size=8,
+            iterations=100,
+            tolerance=1e-6,
+            max_eigenvalue=6.70e7,
+            backend="cpu",
+        )
+        command = build_wrapper_command(
+            Path("wrapper.sh"),
+            bart_input_dir=Path("inputs"),
+            bart_output_dir=Path("output"),
+            maps=Path("maps"),
+            twix=Path("meas.dat"),
+            sequence=Path("sequence.seq"),
+            nifti_output_dir=Path("nifti"),
+            nifti_subject="subject-llr",
+            nifti_suffix="BARTWaveRegularized",
+            wave_options=options,
+        )
+        self.assertEqual(command[:2], ["bash", "wrapper.sh"])
+        self.assertEqual(command[command.index("--maps-source") + 1], "existing")
+        start = command.index("--wave-options") + 1
+        stop = command.index("--end-wave-options")
+        self.assertEqual(command[start:stop], options)
+
+    def test_conversion_recovery_calls_upstream_converter(self) -> None:
+        command = build_conversion_command(
+            Path("recon/bart/run_wave_recon.sh"),
+            python=Path("env/bin/python"),
+            bart_input_dir=Path("inputs"),
+            bart_output_dir=Path("output"),
+            twix=Path("meas.dat"),
+            sequence=Path("sequence.seq"),
+            nifti_output_dir=Path("nifti"),
+            nifti_subject="subject-wavelet",
+            nifti_suffix="BARTWaveRegularized",
+        )
+        self.assertEqual(command[:2], ["env/bin/python", "recon/bart/wave_to_nifti.py"])
+        self.assertIn("--save-phase", command)
+
+    def test_rejects_nonpositive_lambda(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive and finite"):
+            canonical_lambda(0.0)
+
+
+class ResumeTests(unittest.TestCase):
+    """Require matching configuration and intact hashes before skipping work."""
+
+    def test_reuses_only_intact_completed_manifest(self) -> None:
+        config = {"regularizer": "wavelet", "lambda": 0.001}
+        maps_hash = "a" * 64
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bart_output = root / "image_wave.cfl"
+            nifti = root / "image.nii.gz"
+            bart_output.write_bytes(b"bart")
+            nifti.write_bytes(b"nifti")
+            manifest = {
+                "status": "complete",
+                "config": config,
+                "maps": {"cfl_sha256": maps_hash},
+                "bart_output": {
+                    "path": str(bart_output),
+                    "sha256": sha256_file(bart_output),
+                },
+                "nifti_outputs": [
+                    {"nifti": str(nifti), "nifti_sha256": sha256_file(nifti)}
+                ],
+            }
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertTrue(completed_manifest_reusable(path, config, maps_hash))
+            nifti.write_bytes(b"changed")
+            self.assertFalse(completed_manifest_reusable(path, config, maps_hash))
+
+    def test_recovers_finished_bart_solve_after_conversion_failure(self) -> None:
+        config = {"regularizer": "wavelet", "lambda": 0.001}
+        maps_hash = "b" * 64
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "wrapper.log").write_text(
+                "Reconstruction... Done.\nTotal time: 12.5 seconds.\n", encoding="utf-8"
+            )
+            manifest = {
+                "status": "failed",
+                "config": config,
+                "maps": {"cfl_sha256": maps_hash},
+            }
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with mock.patch(
+                "run_bart_regularization.validate_finite_bart",
+                return_value={"norm": 1.0},
+            ):
+                self.assertTrue(failed_run_recoverable(path, config, maps_hash))
+
+
+if __name__ == "__main__":
+    unittest.main()
