@@ -22,6 +22,18 @@ noise shell and require an additional `F(Sx)` back-projection. SENSE remains a
 deferred secondary comparison; its apparently worse effective g-factor is a
 qualitative visual observation, not yet a formal measurement.
 
+The next run will regenerate synthetic Wave inputs from the accepted 5×5×5
+k-space in a new output tree, visually gate one reusable hard-crop 0.5 ESPIRiT
+map set with λ=0, then run coarse wavelet (`1e-4`, `1e-3`, `1e-2`) and LLR
+(block 8; `2e-4`, `2e-3`, `2e-2`) pilots. Fine sweeps are deferred. Final
+ranking will combine visual review with consistently registered and normalized
+DICOM-referenced SSIM, PSNR, NRMSE, noise/CNR, sharpness, aliasing, and anatomy
+coverage metrics.
+
+The positive-λ pilot has its own troubleshooting gate: run wavelet `1e-3` and
+LLR block-8 `2e-3` first, export both, and wait for explicit visual approval
+before running the four remaining coarse endpoints.
+
 ## Setup and tests
 
 From the repository root:

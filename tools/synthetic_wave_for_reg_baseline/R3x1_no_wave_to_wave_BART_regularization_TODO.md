@@ -658,23 +658,74 @@ without reopening SENSE as the no-wave completion method.
 - [x] BART dimensions verified.
 - [x] Unregularized Wave reconstruction completed.
 - [ ] Wavelet sweep completed.
-- [ ] Optional LLR sweep completed.
+- [ ] Coarse LLR pilot completed.
 - [ ] Optional multi-map ESPIRiT comparison completed.
 
 ---
 
 # 9. Initial BART regularization sweep
 
-Run the sweep through a small driver script rather than invoking every reconstruction manually. The driver should accept a configurable list of regularizers/weights, create deterministic output names, record the exact BART command and runtime, stop clearly on failures, and support resuming without overwriting completed outputs unless requested.
+## 9.1 Prerequisites and one-time CSM gate
 
-Wavelet baseline:
+The existing synthetic-Wave manifest points to the older GRAPPA completion.
+Before any sweep:
+
+1. Start a new output tree; do not overwrite the historical synthetic-Wave run.
+2. Regenerate the full and R3×1-masked synthetic Wave k-space from the accepted
+   joint-coil 5×5×5, Ncc=12 no-wave k-space.
+3. Reuse the identical saved 64→12 coil basis, theoretical PSF, sequence file,
+   readout extension/crop convention, and measured sampling mask.
+4. Verify source/output hashes, shapes, finiteness, acquired-mask counts, and
+   direct-IFFT coil diagnostics before reconstruction.
+5. Run one hard `bart ecalib -m 1 -c 0.5` candidate from the measured compressed
+   no-wave ACS, saving the eigenvalue map, command, BART version, runtime, and
+   map hash. Do not use `-S`.
+6. Run λ=0 BART Wave once with the new 5×5×5-derived inputs and crop-0.5 maps,
+   export the NIfTI, and stop for visual confirmation of full facial anatomy
+   and absence of a detached background shell.
+7. If that CSM gate fails, stop before the regularized sweep and resolve map
+   support. If it passes, reuse the exact saved CSM CFL pair and hash for every
+   wavelet and LLR run; do not rerun `ecalib` inside the sweep.
+
+The recorded one-time `ecalib` cost is 92.54 s. The recorded λ=0 Wave command
+took 767.65 s wall time (164.32 s internal reconstruction), followed by
+117.98 s for NIfTI export. The first regularized run must be timed before
+updating the remaining runtime estimate.
+
+## 9.2 Publishable sweep driver
+
+Run the sweep through a small, sensibly named driver rather than invoking every
+reconstruction manually. The driver must:
+
+- accept all paths, regularizer settings, and backend choices through its CLI;
+- contain no dataset-specific absolute paths;
+- call the pinned upstream Wave-MPRAGE BART wrapper directly where its behavior
+  is used instead of copying that wrapper's implementation;
+- accept an existing CSM basename and verify its recorded hash;
+- use deterministic output names and never overwrite completed results by default;
+- resume safely by validating each completed run's manifest and output;
+- record the exact BART command, version, backend, λ, block size, iteration
+  settings, maximum eigenvalue, internal runtime, wall time, and output hash;
+- export magnitude/phase NIfTIs consistently for every result;
+- have focused tests for command construction, parameter validation, naming,
+  resume/skip behavior, and manifest generation;
+- include concise function docstrings and comments where intent is not obvious.
+
+Freeze the backend and optimizer settings after one smoke test; do not switch
+CPU/GPU or stopping rules between parameter choices. Reuse the saved maximum
+normal-operator eigenvalue (`-e 6.70e7`) so each run does not estimate it again.
+
+## 9.3 Coarse wavelet pilot
+
+Use FISTA and the requested three log-spaced weights:
 
 ```bash
 bart wave \
-    -g \
     -w \
     -f \
-    -i 50 \
+    -i 100 \
+    -t 1e-6 \
+    -e 6.70e7 \
     -r <lambda> \
     coil_sens \
     wave_psf \
@@ -682,33 +733,76 @@ bart wave \
     recon
 ```
 
-Because the measured λ=0 run took about 12.8 minutes on CPU, do not run a
-dense sweep by default. Start with a bounded pilot of three to five typical,
-log-spaced positive weights, reuse the saved ESPIRiT maps, and pass the saved
-maximum eigenvalue (`-e 6.70e7`) to avoid repeating BART's expensive eigenvalue
-estimation. Record both wall time and BART-reported reconstruction time. Add at
-most one or two weights around the most useful pilot result only when visual or
-quantitative comparison cannot distinguish a preferred setting.
-
-Representative pilot (subject to adjustment after the first timed run):
-
-```text
-0
-1e-4
-1e-3
-1e-2
-```
-
-- [x] λ = 0
+- [ ] λ = 0 rerun with the accepted 5×5×5 source and accepted CSM
 - [ ] λ = 1e-4
 - [ ] λ = 1e-3
 - [ ] λ = 1e-2
-- [ ] Scripted sweep driver implemented.
-- [ ] Per-run commands, status, runtime, and output paths recorded in machine-readable metadata.
-- [ ] Representative pilot values compared.
-- [ ] Optional one- or two-point refinement completed only if the pilot is inconclusive.
 
-**Current best λ:** `TBD`
+## 9.4 Coarse LLR pilot
+
+The pinned Wave-MPRAGE wrapper demonstrates LLR with block size 8 and λ=0.002.
+Keep block size fixed at 8 and bracket that reference value by a factor of ten:
+
+```bash
+bart wave \
+    -l \
+    -b 8 \
+    -f \
+    -i 100 \
+    -t 1e-6 \
+    -e 6.70e7 \
+    -r <lambda> \
+    coil_sens \
+    wave_psf \
+    wave_kspace \
+    recon
+```
+
+- [ ] LLR block 8, λ = 2e-4
+- [ ] LLR block 8, λ = 2e-3
+- [ ] LLR block 8, λ = 2e-2
+
+## 9.5 Regularization smoke-test gate
+
+Do not launch all six positive-λ jobs immediately after the λ=0/CSM gate.
+First run only these representative center values:
+
+```text
+wavelet: λ = 1e-3
+LLR:     block 8, λ = 2e-3
+```
+
+For each smoke test, verify that BART actually selected the requested
+regularizer/FISTA path, the output is finite and nonzero, the result differs
+from λ=0, the command and convergence/runtime log are complete, and the NIfTI
+geometry is unchanged. Export matched quicklooks and pause for explicit user
+visual confirmation. This gate is intended to catch command, scaling,
+convergence, excessive smoothing, and ineffective-regularization problems
+before spending time on the rest of the coarse pilot.
+
+Only after visual approval run the four remaining endpoints:
+
+```text
+wavelet: λ = 1e-4, 1e-2
+LLR:     block 8, λ = 2e-4, 2e-2
+```
+
+- [ ] Wavelet λ=1e-3 smoke test exported and technically validated.
+- [ ] LLR block-8 λ=2e-3 smoke test exported and technically validated.
+- [ ] Explicit user visual approval received before remaining coarse jobs.
+
+This gives seven images in the initial comparison: λ=0, three wavelet results,
+and three LLR results. At the previously observed end-to-end rate, budget
+roughly 1.5–2.5 hours sequentially, but replace this estimate after the first
+timed FISTA run.
+
+- [ ] Scripted sweep driver implemented.
+- [ ] Per-run commands, status, runtime, CSM hash, and output paths recorded in machine-readable metadata.
+- [ ] Coarse wavelet and LLR results compared visually and quantitatively.
+- [ ] Fine λ refinement deferred; do not add intermediate λ values in this stage.
+- [ ] LLR block-size refinement deferred; do not sweep block size in this stage.
+
+**Current best method/λ:** `TBD`
 
 ---
 
@@ -724,7 +818,7 @@ Also retain:
 
 ```text
 offline GRAPPA-completed no-wave reconstruction
-offline SENSE-completed no-wave reconstruction (later)
+offline SENSE-completed no-wave reconstruction (deferred secondary diagnostic)
 ```
 
 Important limitation:
@@ -742,7 +836,7 @@ The no-wave completion method is part of the synthetic-data model.
 Interpret this primarily as a **controlled regularization-selection experiment**, not a perfect physical simulation of an acquired Wave scan.
 
 - [ ] State this limitation in analysis notes.
-- [ ] Compare GRAPPA- and SENSE-derived results to estimate method dependence.
+- [ ] Compare GRAPPA- and SENSE-derived results only in a future method-dependence study.
 
 ---
 
@@ -750,11 +844,20 @@ Interpret this primarily as a **controlled regularization-selection experiment**
 
 Before comparing online DICOM and offline reconstructions:
 
-- [ ] Match orientation.
-- [ ] Match voxel size/matrix/cropping.
-- [ ] Register if needed.
-- [ ] Select robust intensity normalization.
-- [ ] Apply the same normalization strategy to every λ.
+- [ ] Select only the 256 unfiltered product images from the 512-file DICOM
+  folder; exclude the duplicated filtered distortion-correction series.
+- [ ] Convert the unfiltered DICOM reference to floating point while recording
+  its original unsigned-12-bit normalization.
+- [ ] Correct the known rotation/flips and resolve the approximately half-voxel
+  geometry convention before calculating residual metrics.
+- [ ] Match voxel size, matrix, FOV, and cropping.
+- [ ] Estimate one documented rigid/affine registration convention and apply
+  it identically to λ=0, every wavelet result, and every LLR result. Do not
+  independently optimize geometry for each reconstruction.
+- [ ] Build and save one anatomy mask plus fixed background, homogeneous-WM,
+  gray-matter/WM, aliasing, and edge ROIs in the common reference space.
+- [ ] Select one robust intensity-matching rule and apply the same procedure to
+  every reconstruction. Do not compare raw DICOM and BART voxel scales.
 
 Possible normalization choices:
 
@@ -772,12 +875,17 @@ Do not optimize λ using naïve SNR alone: stronger regularization can decrease 
 
 ## Quantitative
 
-- [ ] NRMSE against aligned reference.
-- [ ] SSIM.
-- [ ] Mean/SD in homogeneous WM ROI.
-- [ ] Edge sharpness.
-- [ ] Residual aliasing/error ROI metric.
-- [ ] Optional detail/gradient metric.
+- [ ] SSIM within the fixed anatomy mask as the primary structural metric.
+- [ ] PSNR after documented robust intensity matching and fixed registration.
+- [ ] NRMSE and MAE within the same anatomy mask.
+- [ ] Mean, SD, and coefficient of variation in homogeneous WM.
+- [ ] Gray/white-matter CNR.
+- [ ] Background noise level and spatial noise nonuniformity.
+- [ ] Edge sharpness plus a gradient/detail-preservation metric.
+- [ ] Residual R=3 aliasing/error ROI metric.
+- [ ] Full-anatomy coverage and missed-anatomy fraction, including nose/lips.
+- [ ] Record metrics per parameter in machine-readable CSV/JSON with the exact
+  reference, mask, registration, and normalization provenance.
 
 ## Qualitative
 
@@ -794,6 +902,11 @@ Inspect:
 - [ ] jaw/neck/FOV-wrap regions if relevant.
 
 Create side-by-side and difference images for the λ sweep.
+
+Rank the coarse candidates using visual assessment together with SSIM, PSNR,
+NRMSE, noise/CNR, sharpness, aliasing, and anatomy coverage. Do not select a
+winner from PSNR or SSIM alone because the product DICOM includes scanner-side
+processing and is a practical reference rather than exact synthetic truth.
 
 ---
 
@@ -1122,24 +1235,31 @@ consistent Wave forward/reconstruction path.
 
 - [x] Export measured no-wave ACS as BART `kspace_calib` after applying the active 64→12 compression basis.
 - [x] Verify exact ACS coordinates/payload, zero exterior, BART dimensions, and finiteness.
-- [x] Run `bart ecalib -m 1` to generate calibrated `[256,256,256,12,1]` ESPIRiT maps.
-- [x] Save and inspect ESPIRiT magnitude/phase diagnostics before Wave reconstruction.
-- [x] Run λ=0 using BART's unregularized CG branch and export TWIX-oriented magnitude/phase NIfTIs.
+- [x] Run the historical `bart ecalib -m 1 -c 0.8` and λ=0 reconstruction used for initial troubleshooting.
 - [x] Trace the λ=0 R3 ghost to the GRAPPA-completed no-wave input.
 - [x] Keep positive-λ runs paused until a visually acceptable no-wave completion is selected.
 - [x] Select joint-coil 5×5×5 GRAPPA as the visually acceptable multi-coil no-wave completion.
-- [ ] Run a bounded pilot of three to five representative wavelet λ values; do not launch a dense sweep by default.
-- [ ] Reuse the saved ESPIRiT maps and saved maximum eigenvalue, and record wall/BART reconstruction time for every run.
-- [ ] If needed, refine with only one or two additional λ values around the most useful pilot result.
-- [ ] Optional LLR comparison.
+- [ ] Regenerate synthetic Wave and BART inputs in a new output tree using the accepted 5×5×5 source.
+- [ ] Generate hard `ecalib -m 1 -c 0.5` maps once, save eigenvalues/hash, and visually gate λ=0.
+- [ ] Reuse the accepted maps and `-e 6.70e7` for every coarse run without rerunning `ecalib`.
+- [ ] Run only wavelet `1e-3` and LLR block-8 `2e-3` first; validate outputs
+  and stop for explicit user visual confirmation.
+- [ ] After approval, run wavelet endpoints `1e-4` and `1e-2`.
+- [ ] After approval, run LLR block-8 endpoints `2e-4` and `2e-2`.
+- [ ] Record per-run commands, backend, iteration settings, runtimes, hashes, and NIfTI outputs.
+- [ ] Defer fine λ and LLR block-size sweeps.
 
 ## Phase F — evaluation
 
-- [ ] Align online DICOM/offline outputs.
-- [ ] Normalize intensities.
-- [ ] Compute metrics.
-- [ ] Generate side-by-side figures.
-- [ ] Select preliminary best regularization.
+- [ ] Select and convert the 256 unfiltered product DICOM images only.
+- [ ] Resolve orientation, flips, half-voxel convention, and one shared registration.
+- [ ] Apply one documented robust intensity-matching procedure to every output.
+- [ ] Compute SSIM, PSNR, NRMSE, MAE, WM variation, CNR, background noise,
+  sharpness/detail, aliasing, and anatomy-coverage metrics in fixed masks/ROIs.
+- [ ] Save metric tables and provenance in CSV/JSON.
+- [ ] Generate side-by-side and difference figures for λ=0, wavelet, LLR, and DICOM.
+- [ ] Select the coarse best method/λ using metrics plus visual assessment.
+- [ ] Keep fine sweep deferred.
 
 ## Emergency Phase G — SENSE recovery (concluded; GRAPPA selected)
 
@@ -1286,35 +1406,32 @@ Final: `TBD`
 
 ## ESPIRiT map count
 
-Baseline:
+Next acceptance candidate:
 
 ```text
-1 map
+1 map, hard crop 0.5, measured compressed no-wave ACS
 ```
 
-Optional:
+Deferred alternative:
 
 ```text
 2 maps / soft-SENSE
 ```
 
-Final: `TBD`
+Final: `TBD after λ=0 Wave visual support gate`
 
 ## BART regularizer
 
-Primary:
+Coarse methods:
 
 ```text
 wavelet
-```
-
-Secondary:
-
-```text
 LLR
 ```
 
-Final: `TBD`
+Fine λ/block refinement: `deferred`
+
+Final: `TBD after DICOM-referenced metrics and visual comparison`
 
 ---
 
@@ -1446,6 +1563,13 @@ main synthetic-Wave experiment from the accepted joint-coil 5×5×5 GRAPPA
 multi-coil k-space. Keep GRAPPA-versus-SENSE metrics as a deferred secondary
 analysis rather than a prerequisite for the regularization sweep.
 
+Prerequisites now take priority: regenerate the synthetic Wave inputs from the
+accepted 5×5×5 output in a new directory, calibrate one hard crop-0.5 CSM set,
+and visually approve its λ=0 Wave reconstruction. Reuse that exact map set for
+the requested coarse wavelet and LLR pilots. Afterward, perform the fixed-
+geometry, fixed-normalization comparison against the unfiltered DICOM and defer
+all fine parameter refinement.
+
 ```text
 measured R3×1 no-wave k-space + measured ACS refscan
         ↓
@@ -1475,9 +1599,23 @@ export BART Wave k-space, identical theoretical PSF, and provenance
         ↓
 infer ESPIRiT maps from the compressed no-wave ACS
         ↓
-run unregularized BART Wave reconstruction
+hard `ecalib -m 1 -c 0.5`; save eigenvalues and CSM hash once
         ↓
-export TWIX-oriented magnitude/phase NIfTIs and pause for review
+run λ=0 BART Wave; export NIfTI and pause for CSM/full-anatomy review
+        ↓
+run wavelet 1e-3 and LLR block-8 2e-3 only
+        ↓
+export matched NIfTIs/quicklooks and pause for visual troubleshooting gate
+        ↓
+after approval, run wavelet {1e-4,1e-2} and LLR block-8 {2e-4,2e-2}
+        ↓
+align all outputs once to the unfiltered product DICOM reference
+        ↓
+apply one intensity-matching rule and fixed masks/ROIs
+        ↓
+report SSIM, PSNR, NRMSE, noise/CNR, sharpness, aliasing, and anatomy coverage
+        ↓
+select the coarse best method/λ; fine sweep remains deferred
 ```
 
 **Phase C passed its held-out ACS, measured-sample preservation, finiteness, fill-count, and central-RSS checks.**
