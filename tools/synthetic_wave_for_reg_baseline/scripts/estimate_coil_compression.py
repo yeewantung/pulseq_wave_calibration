@@ -27,6 +27,7 @@ REFERENCE_UTILITY = (
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the dataset-independent coil-compression command interface."""
     parser = argparse.ArgumentParser(
         description="Estimate and validate coil compression from product TWIX refscan data."
     )
@@ -193,6 +194,7 @@ def _read_probe(stream: Any, raw_line: int, raw_partition: int) -> np.ndarray:
 
 
 def _probe_validation(data: np.ndarray, basis: np.ndarray, ncc_values: Sequence[int]) -> dict[str, Any]:
+    """Measure shape, finiteness, and retained energy on a small stream probe."""
     input_energy = float(np.vdot(data, data).real)
     results: dict[str, Any] = {
         "input_shape": list(data.shape),
@@ -210,7 +212,7 @@ def _probe_validation(data: np.ndarray, basis: np.ndarray, ncc_values: Sequence[
     return results
 
 
-def run_phase_b(
+def estimate_compression(
     twix_path: Path,
     *,
     ncc_values: Sequence[int],
@@ -221,7 +223,7 @@ def run_phase_b(
     try:
         import mapvbvd
     except ImportError as exc:
-        raise RuntimeError("Phase B requires pymapvbvd>=0.6.1.") from exc
+        raise RuntimeError("Coil compression requires pymapvbvd>=0.6.1.") from exc
 
     ncc_values = sorted(set(int(value) for value in ncc_values))
     if not ncc_values or ncc_values[0] < 1:
@@ -259,7 +261,7 @@ def run_phase_b(
     )
     report = {
         "format_version": 1,
-        "phase": "B - coil compression",
+        "pipeline_step": "coil compression",
         "twix": str(twix_path.resolve()),
         "measurement_index": measurement_index,
         "measurement_selection_rule": "largest image-stream acquisition count",
@@ -282,7 +284,7 @@ def run_phase_b(
         "image_probe": _probe_validation(image_probe, basis, ncc_values),
         "refscan_probe": _probe_validation(refscan_probe, basis, ncc_values),
         "runtime_seconds": time.perf_counter() - started,
-        "heldout_acs_grappa_nrmse": "deferred to Phase C because it requires GRAPPA",
+        "heldout_acs_grappa_nrmse": "deferred to GRAPPA reconstruction",
     }
     arrays = {
         "basis": basis,
@@ -294,13 +296,14 @@ def run_phase_b(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Validate arguments, estimate the basis, and persist arrays plus metadata."""
     args = _build_parser().parse_args(argv)
     twix_path = args.twix.expanduser().resolve()
     output_prefix = args.output_prefix.expanduser().resolve()
     if not twix_path.is_file():
         raise FileNotFoundError(f"TWIX file not found: {twix_path}")
 
-    report, arrays = run_phase_b(
+    report, arrays = estimate_compression(
         twix_path,
         ncc_values=args.ncc,
         pe2_chunk=args.pe2_chunk,

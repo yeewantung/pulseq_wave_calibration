@@ -66,8 +66,9 @@ INTEGER_DICOM_FIELDS = {
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the metadata-inspection command interface."""
     parser = argparse.ArgumentParser(
-        description="Create a metadata-only Phase A report for TWIX and DICOM inputs."
+        description="Create a metadata-only report for TWIX and DICOM inputs."
     )
     parser.add_argument("--twix", required=True, type=Path, help="Siemens TWIX .dat file.")
     parser.add_argument(
@@ -96,6 +97,7 @@ def _integer_array(values: Any, name: str) -> list[int]:
 
 
 def _unique_summary(values: Sequence[int], include_values: bool = True) -> dict[str, Any]:
+    """Summarize the count and support of an integer counter sequence."""
     unique = sorted(set(values))
     result: dict[str, Any] = {
         "count": len(values),
@@ -132,6 +134,7 @@ def _compress_partition_patterns(
 
 
 def _infer_regular_stride(lines: Sequence[int]) -> int | None:
+    """Infer the regular PE1 stride from unique acquired line differences."""
     unique = sorted(set(lines))
     differences = [right - left for left, right in zip(unique, unique[1:]) if right > left]
     if not differences:
@@ -201,6 +204,7 @@ def summarize_sampling(
 
 
 def _header_get(mapping: Any, key: tuple[str, ...], default: Any = None) -> Any:
+    """Read a mapVBVD header key while tolerating its mapping variants."""
     try:
         value = mapping.get(key, default)
     except Exception:
@@ -217,6 +221,7 @@ def _header_string(value: Any) -> str:
 
 
 def _header_summary(scan: Any) -> dict[str, Any]:
+    """Extract the compact protocol and matrix fields used by this workflow."""
     hdr = scan["hdr"] if isinstance(scan, Mapping) else scan.hdr
     yaps = hdr["MeasYaps"]
     fields = {
@@ -246,6 +251,7 @@ def _header_summary(scan: Any) -> dict[str, Any]:
 
 
 def _stream_summary(stream: Any) -> dict[str, Any]:
+    """Summarize mapVBVD stream dimensions and MDH counters without payload I/O."""
     stream.flagRemoveOS = True
     counters = {
         name: _unique_summary(_integer_array(getattr(stream, name, None), name))
@@ -306,7 +312,7 @@ def inspect_twix(path: Path, *, probe_samples: bool = False) -> dict[str, Any]:
         import mapvbvd
     except ImportError as exc:
         raise RuntimeError(
-            "Phase A TWIX inspection requires pymapvbvd>=0.6.1. Install the "
+            "TWIX inspection requires pymapvbvd>=0.6.1. Install the "
             "tool's requirements into a Python 3.11+ environment."
         ) from exc
 
@@ -411,6 +417,7 @@ def parse_dcmdump_records(text: str) -> list[dict[str, Any]]:
 
 
 def _constant_or_values(records: Sequence[Mapping[str, Any]], field: str) -> Any:
+    """Return one shared DICOM value or the sorted set of differing values."""
     values = sorted({str(record.get(field, "")) for record in records})
     if len(values) == 1:
         value: Any = records[0].get(field, "")
@@ -419,6 +426,7 @@ def _constant_or_values(records: Sequence[Mapping[str, Any]], field: str) -> Any
 
 
 def inspect_dicom_directory(path: Path) -> dict[str, Any]:
+    """Group DICOM metadata by series and identify the unfiltered ND baseline."""
     executable = shutil.which("dcmdump")
     if not executable:
         raise RuntimeError("DICOM inspection requires the DCMTK 'dcmdump' executable.")
@@ -491,6 +499,7 @@ def inspect_dicom_directory(path: Path) -> dict[str, Any]:
 
 
 def _print_summary(report: Mapping[str, Any]) -> None:
+    """Print the key inspection findings and report location."""
     twix = report["twix"]
     selected = twix["measurements"][twix["selected_measurement_index"]]
     sampling = twix["selected_measurement_sampling"]
@@ -516,6 +525,7 @@ def _print_summary(report: Mapping[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Inspect the requested inputs and write the reproducible JSON report."""
     args = _build_parser().parse_args(argv)
     twix_path = args.twix.expanduser().resolve()
     dicom_path = args.dicom_dir.expanduser().resolve()
@@ -527,7 +537,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     report = {
         "format_version": 1,
-        "phase": "A - data and mask verification",
+        "pipeline_step": "data and mask verification",
         "twix": inspect_twix(twix_path, probe_samples=args.probe_samples),
         "dicom": inspect_dicom_directory(dicom_path),
         "report_path": str(output_path),

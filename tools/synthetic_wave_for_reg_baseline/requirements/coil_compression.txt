@@ -1,0 +1,2 @@
+-r inspection.txt
+scipy>=1.13

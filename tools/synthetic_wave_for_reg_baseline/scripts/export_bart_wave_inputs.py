@@ -16,6 +16,7 @@ from wave_synthesis import logical_array_sha256, logical_bart_cfl_sha256, sha256
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the BART Wave input finalization command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--synthesis-dir", required=True, type=Path)
     parser.add_argument("--sampling-report", required=True, type=Path)
@@ -37,6 +38,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Apply the verified product mask and finalize BART input provenance."""
     if not args.visual_review_approved:
         raise ValueError("Refusing to apply the product mask before visual-review approval.")
     synthesis_dir = args.synthesis_dir.expanduser().resolve()
@@ -46,8 +48,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    mask, mask_info, phase_a_report = load_product_mask(sampling_report)
-    report_twix = Path(phase_a_report["twix"]["path"]).resolve()
+    mask, mask_info, inspection_report = load_product_mask(sampling_report)
+    report_twix = Path(inspection_report["twix"]["path"]).resolve()
     synthesis_twix = Path(manifest["source_twix"]).resolve()
     if report_twix != synthesis_twix:
         raise ValueError(
@@ -87,7 +89,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "logical_sha256": mask_hash,
         "sampling_report": str(sampling_report),
         "sampling_report_sha256": sha256_file(sampling_report),
-        "selected_measurement_index": int(phase_a_report["twix"]["selected_measurement_index"]),
+        "selected_measurement_index": int(
+            inspection_report["twix"]["selected_measurement_index"]
+        ),
     }
     bart_manifest = {
         "format_version": 1,
@@ -137,6 +141,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run BART input finalization from command-line arguments."""
     run(_build_parser().parse_args(argv))
     return 0
 

@@ -23,7 +23,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from phase_e_utils import bart_base, open_bart_memmap, sha256_file, validate_finite_bart
+from bart_cfl import bart_base, open_bart_memmap, sha256_file, validate_finite_bart
 
 
 GRID_SHAPE = (256, 256, 256)
@@ -389,7 +389,7 @@ def export_niftis(
     nifti_dir = output_dir / "nifti"
     outputs = []
     common = {
-        "Description": "Emergency Phase G unregularized no-wave SENSE reconstruction",
+        "Description": "Diagnostic unregularized no-wave SENSE reconstruction",
         "SourceTwix": str(twix),
         "CoilCount": NCC,
         "SensitivityCalibration": "BART ecalib from measured compressed no-wave ACS",
@@ -543,7 +543,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     manifest = {
         "format_version": 1,
         "status": "no_wave_sense_lambda0_complete_awaiting_visual_review",
-        "pipeline_label": "Emergency Phase G",
+        "pipeline_label": "No-wave SENSE diagnostic",
         "prepared_input_manifest": str(prepare_manifest_path),
         "calibration_input_manifest": str(calib_manifest_path),
         "coil_compression": {

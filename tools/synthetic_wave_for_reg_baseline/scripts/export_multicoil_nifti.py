@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export Phase C multicoil k-space as per-coil magnitude/phase NIfTI files."""
+"""Export multicoil k-space as per-coil magnitude/phase NIfTI files."""
 
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ def output_basename(subject: str, echo: int, coil: int, part: str) -> str:
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse multicoil export paths and orientation inputs."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kspace", type=Path, required=True)
     parser.add_argument("--twix", type=Path, required=True)
@@ -62,6 +63,7 @@ def _validate_existing(nii_path: Path, json_path: Path, expected_shape: tuple[in
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Transform each coil volume and export magnitude/phase NIfTIs."""
     kspace_path = args.kspace.expanduser().resolve()
     twix_path = args.twix.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
@@ -179,6 +181,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the multicoil NIfTI exporter from command-line arguments."""
     run(_parse_args(argv))
     return 0
 

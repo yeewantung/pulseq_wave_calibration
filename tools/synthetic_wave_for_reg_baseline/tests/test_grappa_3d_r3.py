@@ -21,7 +21,7 @@ from grappa_3d_r3 import (  # noqa: E402
     solve_weights_3d,
     source_matrix_for_targets_3d,
 )
-from run_grappa_3d import _validate_resume_pair  # noqa: E402
+from reconstruct_no_wave_grappa_3d import _validate_resume_pair  # noqa: E402
 
 
 class GeometryTests(unittest.TestCase):

@@ -71,7 +71,7 @@ def product_mask_from_report(report: Mapping[str, Any]) -> tuple[np.ndarray, dic
 
 
 def load_product_mask(report_path: str | Path) -> tuple[np.ndarray, dict[str, Any], dict[str, Any]]:
-    """Load a Phase A JSON report and return its exact product mask."""
+    """Load a dataset-inspection JSON report and return its exact product mask."""
     path = Path(report_path).expanduser().resolve()
     report = json.loads(path.read_text(encoding="utf-8"))
     mask, metadata = product_mask_from_report(report)

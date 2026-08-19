@@ -30,6 +30,7 @@ AXIS_FLIPS = (True, False, False)
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the theoretical Wave synthesis command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kspace", type=Path, required=True)
     parser.add_argument("--sequence", type=Path, required=True)
@@ -130,6 +131,7 @@ def _save_montage(diagnostic_dir: Path, coils: Sequence[int], part: str) -> Path
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Apply the sequence-derived Wave forward model coil by coil."""
     kspace_path = args.kspace.expanduser().resolve()
     sequence_path = args.sequence.expanduser().resolve()
     twix_path = args.twix.expanduser().resolve()
@@ -321,6 +323,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run synthetic Wave generation from command-line arguments."""
     run(_build_parser().parse_args(argv))
     return 0
 

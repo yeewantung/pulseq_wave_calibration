@@ -11,7 +11,7 @@ from typing import Sequence
 
 import numpy as np
 
-from phase_c_export_coil_nifti import (
+from export_multicoil_nifti import (
     DEFAULT_AXIS_FLIPS,
     DEFAULT_AXIS_ROLES,
     centered_ifft3,

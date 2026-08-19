@@ -22,7 +22,7 @@ from grappa_r3 import (  # noqa: E402
     solve_weights,
     source_matrix_for_targets,
 )
-from phase_c_export_coil_nifti import centered_ifft3, output_basename  # noqa: E402
+from export_multicoil_nifti import centered_ifft3, output_basename  # noqa: E402
 
 
 class GeometryTests(unittest.TestCase):

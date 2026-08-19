@@ -19,7 +19,7 @@ from grappa_3d_r3 import (
     pe2_offsets,
     solve_weights_3d,
 )
-from phase_b_coil_compression import (
+from estimate_coil_compression import (
     apply_coil_compression_coillast,
     configure_stream,
     select_product_measurement,

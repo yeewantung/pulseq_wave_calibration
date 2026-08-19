@@ -13,8 +13,8 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from phase_e_prepare_bart_acs import validate_refscan_rectangle  # noqa: E402
-from phase_e_utils import open_bart_memmap, read_bart_shape, write_bart_header  # noqa: E402
+from export_bart_calibration_acs import validate_refscan_rectangle  # noqa: E402
+from bart_cfl import open_bart_memmap, read_bart_shape, write_bart_header  # noqa: E402
 
 
 class RefscanGeometryTests(unittest.TestCase):

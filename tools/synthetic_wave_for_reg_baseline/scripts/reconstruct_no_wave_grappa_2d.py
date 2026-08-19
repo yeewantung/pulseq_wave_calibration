@@ -25,7 +25,7 @@ from grappa_r3 import (
     nrmse,
     solve_weights,
 )
-from phase_b_coil_compression import (
+from estimate_coil_compression import (
     apply_coil_compression_coillast,
     configure_stream,
     iter_refscan_coillast_chunks,
@@ -42,7 +42,9 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run held-out ACS validation and full R=3 GRAPPA."
     )
     parser.add_argument("--twix", required=True, type=Path)
-    parser.add_argument("--coil-basis", required=True, type=Path, help="Phase B .npz file.")
+    parser.add_argument(
+        "--coil-basis", required=True, type=Path, help="Coil-compression .npz file."
+    )
     parser.add_argument("--output-prefix", required=True, type=Path)
     parser.add_argument("--ncc", nargs="+", type=int, default=[12, 16, 24])
     parser.add_argument("--regularization", type=float, default=0.01)
@@ -73,6 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _load_basis(path: Path) -> np.ndarray:
+    """Load and validate the physical-to-virtual coil basis archive."""
     with np.load(path) as archive:
         if "basis" not in archive:
             raise ValueError(f"Coil basis archive lacks 'basis': {path}")
@@ -86,6 +89,7 @@ def _equations_to_arrays(
     all_equations: NormalEquations,
     holdout_equations: NormalEquations,
 ) -> dict[str, np.ndarray]:
+    """Flatten pooled and held-out normal equations into NPZ fields."""
     arrays: dict[str, np.ndarray] = {}
     for label, equations in (("all", all_equations), ("holdout", holdout_equations)):
         for offset in (1, 2):
@@ -118,6 +122,7 @@ def _weights_to_arrays(
     validation_weights: dict[int, dict[int, np.ndarray]],
     final_weights: dict[int, dict[int, np.ndarray]],
 ) -> dict[str, np.ndarray]:
+    """Flatten validation and final GRAPPA weights into NPZ fields."""
     arrays: dict[str, np.ndarray] = {}
     for ncc, weights in validation_weights.items():
         for offset in (1, 2):
@@ -129,6 +134,7 @@ def _weights_to_arrays(
 
 
 def _reference_source_hash() -> str:
+    """Hash the installed pygrappa oracle source for provenance."""
     try:
         grappa_module = importlib.import_module("pygrappa.grappa")
     except ImportError:
@@ -255,6 +261,7 @@ def validate_weights(
 
 
 def _read_imaging_chunk(stream: Any, start: int, stop: int) -> np.ndarray:
+    """Read one mapVBVD PE2 chunk and enforce its compact array layout."""
     raw = np.asarray(stream[:, :, :, start:stop], dtype=np.complex64)
     expected = (
         int(stream.sqzSize[0]),
@@ -404,10 +411,11 @@ def reconstruct_full_volume(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Calibrate, validate, and optionally run the retained 2D GRAPPA path."""
     try:
         import mapvbvd
     except ImportError as exc:
-        raise RuntimeError("Phase C requires pymapvbvd>=0.6.1.") from exc
+        raise RuntimeError("GRAPPA reconstruction requires pymapvbvd>=0.6.1.") from exc
 
     twix_path = args.twix.expanduser().resolve()
     basis_path = args.coil_basis.expanduser().resolve()
@@ -420,7 +428,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     basis_max = _load_basis(basis_path)
     ncc_values = sorted(set(int(value) for value in args.ncc))
     if not ncc_values or ncc_values[-1] > basis_max.shape[1]:
-        raise ValueError("Requested Ncc exceeds the saved Phase B basis.")
+        raise ValueError("Requested Ncc exceeds the saved coil-compression basis.")
 
     twix_root = mapvbvd.mapVBVD(str(twix_path), quiet=True)
     measurement_index, measurement = select_product_measurement(twix_root)
@@ -491,7 +499,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     report: dict[str, Any] = {
         "format_version": 1,
-        "phase": f"C - {args.weight_mode} 2D R=3 GRAPPA",
+        "pipeline_step": f"{args.weight_mode} 2D R=3 GRAPPA",
         "twix": str(twix_path),
         "measurement_index": measurement_index,
         "coil_basis": str(basis_path),
@@ -541,6 +549,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the 2D GRAPPA diagnostic and print its validation summary."""
     args = _build_parser().parse_args(argv)
     report = run(args)
     for ncc in report["tested_ncc"]:

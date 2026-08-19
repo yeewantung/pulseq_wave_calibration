@@ -36,6 +36,7 @@ class NormalEquations:
 
     @classmethod
     def zeros(cls, ncoil: int) -> "NormalEquations":
+        """Allocate zeroed normal equations for both missing R=3 offsets."""
         nfeatures = len(READOUT_OFFSETS) * 2 * ncoil
         return cls(
             shs={
@@ -50,12 +51,14 @@ class NormalEquations:
         )
 
     def add(self, other: "NormalEquations") -> None:
+        """Accumulate another partition/chunk into these equations in place."""
         for offset in SOURCE_PE1_OFFSETS:
             self.shs[offset] += other.shs[offset]
             self.sht[offset] += other.sht[offset]
             self.rows[offset] += other.rows[offset]
 
     def subtract(self, other: "NormalEquations") -> "NormalEquations":
+        """Return equations with a held-out subset removed."""
         result = NormalEquations.zeros(self.sht[1].shape[1])
         for offset in SOURCE_PE1_OFFSETS:
             result.shs[offset] = self.shs[offset] - other.shs[offset]

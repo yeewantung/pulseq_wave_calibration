@@ -1,4 +1,4 @@
-"""Focused tests for Emergency Phase G mask, provenance, and orientation."""
+"""Focused tests for no-wave SENSE mask, provenance, and orientation."""
 
 from __future__ import annotations
 

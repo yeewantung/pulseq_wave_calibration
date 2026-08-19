@@ -21,13 +21,13 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from phase_b_coil_compression import (
+from estimate_coil_compression import (
     apply_coil_compression_coillast,
     configure_stream,
     select_product_measurement,
 )
-from phase_e_prepare_bart_acs import validate_refscan_rectangle
-from phase_e_utils import bart_base, open_bart_memmap, sha256_file, write_bart_header
+from export_bart_calibration_acs import validate_refscan_rectangle
+from bart_cfl import bart_base, open_bart_memmap, sha256_file, write_bart_header
 
 
 GRID_SHAPE = (256, 256, 256)
@@ -151,7 +151,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not path.is_file():
             raise FileNotFoundError(path)
     if args.ncc != 12:
-        raise ValueError("Emergency Phase G currently requires exactly 12 virtual coils.")
+        raise ValueError("The no-wave SENSE diagnostic requires exactly 12 virtual coils.")
     if args.pe2_chunk < 1:
         raise ValueError("--pe2-chunk must be positive.")
 

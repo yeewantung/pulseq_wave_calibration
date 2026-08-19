@@ -16,7 +16,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from phase_e_utils import (
+from bart_cfl import (
     bart_base,
     open_bart_memmap,
     sha256_file,
@@ -29,6 +29,7 @@ AXIS_FLIPS = (True, False, False)
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the unregularized BART acceptance-run command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bart", required=True, type=Path)
     parser.add_argument("--bart-input-dir", required=True, type=Path)
@@ -223,6 +224,7 @@ def _convert_nifti(
 
 
 def _extract_bart_times(log_path: Path) -> dict[str, float]:
+    """Extract BART's internal timing fields from a reconstruction log."""
     text = log_path.read_text(encoding="utf-8")
     result = {}
     for key, pattern in (
@@ -237,6 +239,7 @@ def _extract_bart_times(log_path: Path) -> dict[str, float]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Calibrate ESPIRiT maps, run lambda-zero Wave CG, and export review files."""
     bart = args.bart.expanduser().resolve()
     bart_input = args.bart_input_dir.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
@@ -323,6 +326,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the lambda-zero acceptance reconstruction from CLI arguments."""
     run(_build_parser().parse_args(argv))
     return 0
 

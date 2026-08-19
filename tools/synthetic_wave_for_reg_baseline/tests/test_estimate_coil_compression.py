@@ -1,4 +1,4 @@
-"""Unit tests for Phase B coil-compression math and chunk conventions."""
+"""Unit tests for coil-compression math and chunk conventions."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from phase_b_coil_compression import (  # noqa: E402
+from estimate_coil_compression import (  # noqa: E402
     accumulate_coil_covariance,
     apply_coil_compression_coillast,
     coil_basis_from_covariance,

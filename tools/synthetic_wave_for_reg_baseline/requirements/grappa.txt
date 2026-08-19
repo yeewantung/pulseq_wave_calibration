@@ -1,4 +1,4 @@
--r phase-b.txt
+-r coil_compression.txt
 
 # Reference oracle for small tests only; production GRAPPA is implemented locally.
 pygrappa==0.26.3

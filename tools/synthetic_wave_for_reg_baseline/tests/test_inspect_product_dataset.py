@@ -1,4 +1,4 @@
-"""Unit tests for metadata-only Phase A inspection helpers."""
+"""Unit tests for metadata-only dataset inspection helpers."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from phase_a_inspect import (  # noqa: E402
+from inspect_product_dataset import (  # noqa: E402
     _stream_summary,
     parse_dcmdump_records,
     summarize_sampling,

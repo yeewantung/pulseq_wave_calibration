@@ -1,0 +1,5 @@
+-r bart_reconstruction.txt
+
+# Pinned to the locally verified cuda122py312 reference environment. The
+# diagnostic host may run SigPy on CPU when no CUDA device is visible.
+sigpy==0.1.27

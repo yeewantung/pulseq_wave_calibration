@@ -1146,7 +1146,7 @@ output paths
 Phase A implementation and reproducible output:
 
 ```text
-scripts/phase_a_inspect.py
+scripts/inspect_product_dataset.py
 phase_a_report_20260817_product.json   # machine-local, ignored by git
 ```
 
@@ -1162,7 +1162,7 @@ The TWIX has two measurements. Measurement 1 is selected because it contains the
 Phase B implementation and machine-local outputs:
 
 ```text
-scripts/phase_b_coil_compression.py
+scripts/estimate_coil_compression.py
 phase_b_coil_compression_20260817_product.json   # ignored by git
 phase_b_coil_compression_20260817_product.npz    # ignored by git
 ```
@@ -1208,7 +1208,7 @@ consistent Wave forward/reconstruction path.
   and 34% centrally, but is substantially slower and remains unproven as a
   visual fix. A full 3D GRAPPA branch is not the default next step.
 - [x] After explicit discussion, implement one final local 5×5×3 attempt as a
-  resumable command-line job. `scripts/run_grappa_3d.py` checkpoints the
+  resumable command-line job. `scripts/reconstruct_no_wave_grappa_3d.py` checkpoints the
   compressed ACS, pooled normal equations, and flushed reconstruction
   partitions; all 12 source coils jointly predict all 12 target coils.
 - [x] Run the 5×5×3 job, export its RSS NIfTI, and confirm that visual aliasing persists.
@@ -1347,32 +1347,39 @@ Perform this only after the requested reconstruction and evaluation work is
 complete, so cleanup does not disrupt reproducibility while the experiment is
 still changing.
 
-- [ ] Before moving or removing code, classify every script as canonical,
+Repository organization was advanced early at the user's request on
+2026-08-19. This pass retained every useful workflow, created the durable
+filename map, renamed stage-labeled source files, audited function comments and
+external-code boundaries, and validated all commands/tests. Dataset-output
+inventory and deletion remain deferred until reconstruction and evaluation are
+complete; no ignored historical artifact was removed in this pass.
+
+- [x] Before moving or removing code, classify every script as canonical,
   reusable support, diagnostic/comparison, historical-but-useful, or truly
   obsolete. Retain scripts that may be useful for future datasets,
   troubleshooting, validation, alternative reconstruction methods, or
   reproducibility even when they are not used by the selected pipeline.
   Inactivity alone is not a reason to delete a script.
-- [ ] Create a checked-in script-name migration dictionary before renaming.
+- [x] Create a checked-in script-name migration dictionary before renaming.
   Use a simple table such as `docs/script_name_map.md` with old path, new path,
   classification, current role, and rename/retention rationale. Keep it after
   cleanup as the durable lookup index for developers and update it whenever a
   mapped file moves again.
-- [ ] Inventory tracked files whose names contain pipeline stage labels such as
+- [x] Inventory tracked files whose names contain pipeline stage labels such as
   `phase_a` or `phase_e`, rename them to descriptive task-based names, and
   update imports, tests, documentation, and command examples. Preserve names
   where “phase” is scientifically meaningful, such as magnitude/phase image
   components. Use `git mv` so individual-file history remains traceable in
   addition to the explicit migration dictionary.
-- [ ] Do not delete a script unless its behavior is fully redundant or invalid,
+- [x] Do not delete a script unless its behavior is fully redundant or invalid,
   it has no credible future diagnostic/reproducibility value, and its removal
   rationale is recorded in the cleanup inventory. Prefer moving inactive but
   useful workflows into a clearly labeled diagnostic or legacy-support area.
-- [ ] Add a concise leading docstring or maintenance comment to every function
+- [x] Add a concise leading docstring or maintenance comment to every function
   in experiment scripts and utilities. Explain purpose and non-obvious MRI,
   array-layout, or external-interface conventions without narrating obvious
   statements.
-- [ ] Audit code derived from the pinned external repositories. When an
+- [x] Audit code derived from the pinned external repositories. When an
   external repository already exposes the function needed, import and call it
   directly instead of maintaining a regenerated local copy; retain a local
   adapter only when layout, streaming, or interface conversion requires one,
@@ -1381,7 +1388,7 @@ still changing.
   required for provenance or downstream reconstruction, then remove unneeded
   files from the dataset output directory without deleting source data or the
   final calibrated/reconstructed results.
-- [ ] Run the complete test suite, verify documented commands and output paths,
+- [x] Run the complete test suite, verify documented commands and output paths,
   and finish with a clean Git worktree.
 
 ---

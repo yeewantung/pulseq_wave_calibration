@@ -14,16 +14,17 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from phase_b_coil_compression import (
+from estimate_coil_compression import (
     apply_coil_compression_coillast,
     configure_stream,
     iter_refscan_coillast_chunks,
     select_product_measurement,
 )
-from phase_e_utils import bart_base, open_bart_memmap, sha256_file, write_bart_header
+from bart_cfl import bart_base, open_bart_memmap, sha256_file, write_bart_header
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the measured-ACS export command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--twix", required=True, type=Path)
     parser.add_argument("--coil-basis", required=True, type=Path)
@@ -36,6 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _integer_values(values: Any, name: str) -> list[int]:
+    """Convert integral-valued MDH coordinates to Python integers."""
     result = [int(value) for value in values]
     if any(float(raw) != value for raw, value in zip(values, result)):
         raise ValueError(f"{name} contains non-integral coordinates.")
@@ -63,6 +65,7 @@ def validate_refscan_rectangle(
 
 
 def _update_bart_manifest(path: Path, calibration: dict[str, Any]) -> None:
+    """Atomically attach calibration provenance to the BART input manifest."""
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest["status"] = "calibration_kspace_ready_for_ecalib"
     manifest["kspace_calib"] = calibration
@@ -72,6 +75,7 @@ def _update_bart_manifest(path: Path, calibration: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Compress measured refscan ACS and write it on the full BART grid."""
     import mapvbvd
 
     started = time.perf_counter()
@@ -195,6 +199,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the ACS exporter from command-line arguments."""
     run(_build_parser().parse_args(argv))
     return 0
 
