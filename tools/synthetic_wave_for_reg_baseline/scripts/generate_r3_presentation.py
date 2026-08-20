@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the compact Phase-A R3 presentation package with fixed display settings."""
+"""Generate the compact R3 presentation package with fixed display settings."""
 
 from __future__ import annotations
 
@@ -135,7 +135,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     center = np.rint(np.argwhere(masks["brain"]).mean(axis=0)).astype(int).tolist()
     display_vmax = float(np.percentile(reference[masks["brain"]], 99.5))
-    comparison_path = output_dir / "phase_a_method_comparison.png"
+    comparison_path = output_dir / "r3_method_comparison.png"
     figure, axes = plt.subplots(2, len(volumes), figsize=(3 * len(volumes), 6.5), constrained_layout=True)
     for row, plane in enumerate(("coronal", "axial")):
         for column, (_, title, volume) in enumerate(volumes):
@@ -150,13 +150,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             axes[row, column].set_axis_off()
             _directions(axes[row, column], plane)
     figure.suptitle(
-        "Phase A R3 comparison — identical DICOM-derived intensity window",
+        "R3 presentation comparison — identical DICOM-derived intensity window",
         fontsize=14,
     )
     figure.savefig(comparison_path, dpi=180)
     plt.close(figure)
 
-    difference_path = output_dir / "phase_a_selected_difference_maps.png"
+    difference_path = output_dir / "r3_selected_difference_maps.png"
     difference_volumes = [entry for entry in volumes if entry[0] != "dicom"]
     figure, axes = plt.subplots(2, len(difference_volumes), figsize=(3 * len(difference_volumes), 6.5), constrained_layout=True)
     for row, plane in enumerate(("coronal", "axial")):
@@ -173,7 +173,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             axes[row, column].set_axis_off()
             _directions(axes[row, column], plane)
     figure.colorbar(image, ax=axes, shrink=0.65, label="Normalized absolute difference")
-    figure.suptitle("Selected Phase A difference maps — fixed 0–0.30 scale", fontsize=14)
+    figure.suptitle("Selected R3 difference maps — fixed 0–0.30 scale", fontsize=14)
     figure.savefig(difference_path, dpi=180)
     plt.close(figure)
 
@@ -186,7 +186,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "format_version": 1,
         "status": "complete",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
-        "scientific_label": "provisional R3-dataset-specific Phase A optimization",
+        "scientific_label": "provisional R3-dataset-specific presentation optimization",
         "metrics_provenance": {"path": str(provenance_path), "sha256": sha256_file(provenance_path)},
         "selected_cases": {kind: record["case"] for kind, record in selected.items()},
         "external_methods": {
@@ -207,7 +207,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     manifest_path = output_dir / "presentation_manifest.json"
     _write_json(manifest_path, manifest)
-    print(f"Phase A presentation manifest: {manifest_path}")
+    print(f"R3 presentation manifest: {manifest_path}")
     return manifest
 
 

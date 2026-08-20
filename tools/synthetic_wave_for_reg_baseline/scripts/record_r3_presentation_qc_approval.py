@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record explicit visual approval of the Phase-A BET mask and L/R orientation."""
+"""Record explicit visual approval of the R3 BET mask and L/R orientation."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Confirm that the BET boundary and labeled L/R figures were visually reviewed.",
     )
-    parser.add_argument("--notes", default="Explicit approval recorded by the Phase A runner.")
+    parser.add_argument("--notes", default="Explicit approval recorded by the R3 presentation runner.")
     return parser.parse_args(argv)
 
 
@@ -51,7 +51,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "notes": args.notes,
     }
     _write_json(mask_manifest_path, mask_manifest)
-    print(f"Recorded Phase A visual QC approval: {mask_manifest_path}")
+    print(f"Recorded R3 presentation visual QC approval: {mask_manifest_path}")
     return mask_manifest
 
 

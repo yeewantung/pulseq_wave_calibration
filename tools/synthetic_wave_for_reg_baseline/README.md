@@ -62,7 +62,7 @@ The current production path is:
     estimates one proper rigid transform from lambda zero, applies it unchanged
     to every magnitude volume, and writes whole-volume metrics and plots.
 
-For the current R3 Phase-A continuation, `run_phase_a_remaining.sh` provides a
+For the current R3 presentation optimization, `run_r3_presentation_optimization.sh` provides a
 resumable tmux-friendly orchestration entry point. Its default
 `all-before-review` stage runs the focused GPU reconstructions and prepares the
 normalized-DICOM, BET-mask, and orientation QC package. It stops before the

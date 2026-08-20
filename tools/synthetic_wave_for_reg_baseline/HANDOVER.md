@@ -7,10 +7,10 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Resume the new isolated Phase-A run in tmux with:
+Resume the new isolated R3 presentation-optimization run in tmux with:
 
 ```bash
-bash tools/synthetic_wave_for_reg_baseline/scripts/run_phase_a_remaining.sh \
+bash tools/synthetic_wave_for_reg_baseline/scripts/run_r3_presentation_optimization.sh \
   --stage all-before-review
 ```
 
@@ -44,13 +44,13 @@ export FSLDIR=/path/to/software/packages/fsl/6.0.6
 Always use GPU (`-g`) for every BART reconstruction. Do not silently fall back
 to CPU; stop and document any command-specific incompatibility.
 
-## Phase-A continuation state
+## R3 presentation-optimization continuation state
 
 The isolated output tree is:
 
 ```text
 /path/to/data/20260817_product/
-  synthetic_wave_grappa_5x5x5_ncc12_r3x2_phase_a
+  synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization
 ```
 
 It references the accepted R3x2 BART inputs and lambda-zero reconstruction by
@@ -63,10 +63,10 @@ BART's complex-decomposition forward operator. BART commit `60dceb33` replaces
 that loop with device-aware multidimensional primitives. The production
 lambda-zero FISTA equivalence gate then passed: recombined split-complex versus
 native-complex relative L2 was `1.36985e-6`, below the frozen `1e-5` limit.
-The failed pre-fix CG attempt is retained under the Phase-A `diagnostics/`
+The failed pre-fix CG attempt is retained under the presentation tree's `diagnostics/`
 directory.
 
-`run_phase_a_remaining.sh` is resumable and always passes `-g`. It runs three
+`run_r3_presentation_optimization.sh` is resumable and always passes `-g`. It runs three
 Wavelet values (`1e-6`, `1e-5`, `1e-4`) and the focused corrected block-8 LLR
 range (`2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`). The accepted pilot is reused.
 The QC and evaluation stages require explicit mask and L/R approval; there is

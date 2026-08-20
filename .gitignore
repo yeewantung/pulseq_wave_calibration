@@ -5,11 +5,11 @@ __pycache__/
 # Machine-local dataset locations and scan selections.
 /tools/synthetic_wave_for_reg_baseline/LOCAL_DATASETS.md
 /tools/synthetic_wave_for_reg_baseline/REGULARIZATION_HANDOVER.md
-/tools/synthetic_wave_for_reg_baseline/phase_a_report*.json
-/tools/synthetic_wave_for_reg_baseline/phase_b_coil_compression*.json
-/tools/synthetic_wave_for_reg_baseline/phase_b_coil_compression*.npz
-/tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.json
-/tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.npz
-/tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.npy
+/tools/synthetic_wave_for_reg_baseline/product_dataset_inspection_*.json
+/tools/synthetic_wave_for_reg_baseline/coil_compression_*.json
+/tools/synthetic_wave_for_reg_baseline/coil_compression_*.npz
+/tools/synthetic_wave_for_reg_baseline/grappa_*.json
+/tools/synthetic_wave_for_reg_baseline/grappa_*.npz
+/tools/synthetic_wave_for_reg_baseline/grappa_*.npy
 
 AGENTS.md

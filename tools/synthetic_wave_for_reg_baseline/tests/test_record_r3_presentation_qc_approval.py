@@ -1,4 +1,4 @@
-"""Tests for the explicit Phase A visual-QC approval gate."""
+"""Tests for the explicit R3 presentation visual-QC approval gate."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from record_phase_a_qc_approval import run  # noqa: E402
+from record_r3_presentation_qc_approval import run  # noqa: E402
 
 
 class ApprovalTests(unittest.TestCase):

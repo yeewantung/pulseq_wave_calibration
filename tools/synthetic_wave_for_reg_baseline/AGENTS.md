@@ -7,6 +7,10 @@ These rules apply to work under `tools/synthetic_wave_for_reg_baseline/`.
 - Always use BART's GPU option (`-g`) for every reconstruction. Do not silently
   fall back to CPU. If a required BART command does not support `-g`, stop and
   document that command-specific exception before proceeding.
+- Never put workflow phase or step numbers in code filenames, test filenames,
+  generated-result filenames, or output-directory names. Name artifacts for
+  their stable scientific purpose or operation instead; phase numbering changes
+  over time and makes code, links, manifests, and result trees hard to maintain.
 - Before adding code or generated outputs, choose a clear location within the
   existing structure. Keep reusable implementation in `scripts/`, focused tests
   in `tests/`, documentation in `docs/`, and task-specific requirements in

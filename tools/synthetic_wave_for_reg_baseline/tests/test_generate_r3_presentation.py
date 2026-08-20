@@ -1,4 +1,4 @@
-"""Tests for deterministic Phase A presentation-case selection."""
+"""Tests for deterministic R3 presentation-case selection."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from generate_phase_a_presentation import select_representatives  # noqa: E402
+from generate_r3_presentation import select_representatives  # noqa: E402
 
 
 class SelectionTests(unittest.TestCase):

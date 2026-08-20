@@ -60,7 +60,7 @@ Unchanged files were also reviewed rather than silently retained:
 
 ## Historical generated artifacts
 
-Existing ignored machine-local reports such as `phase_a_report_*.json` and
-`phase_b_coil_compression_*.npz` are not renamed or deleted. They preserve the
-provenance of completed runs. New commands should use descriptive output names
-or explicit user-supplied paths.
+Ignored machine-local reports use purpose-based names such as
+`product_dataset_inspection_*.json` and `coil_compression_*.npz`. Their internal
+provenance remains intact after the one-time rename. New commands should also
+use descriptive output names or explicit user-supplied paths.

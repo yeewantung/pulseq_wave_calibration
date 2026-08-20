@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Resumable Phase-A runner for the 2026-08-17 R3 product experiment.
+# Resumable R3 presentation runner for the 2026-08-17 R3 product experiment.
 
 set -euo pipefail
 
@@ -9,11 +9,11 @@ REPO_ROOT="$(cd -- "$TOOL_DIR/../.." && pwd)"
 
 STAGE="all-before-review"
 CONFIRM_VISUAL_QC=0
-PHASE_A_ROOT="/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2_phase_a"
+PRESENTATION_ROOT="/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization"
 
 usage() {
     cat <<'EOF'
-Usage: run_phase_a_remaining.sh [options]
+Usage: run_r3_presentation_optimization.sh [options]
 
 Stages:
   reconstruct       Run/resume the focused GPU Wavelet and corrected-LLR cases.
@@ -25,7 +25,7 @@ Stages:
 
 Options:
   --stage NAME
-  --phase-a-root PATH
+  --presentation-root PATH
   --confirm-reviewed-mask-and-lr
   -h, --help
 
@@ -40,8 +40,8 @@ while (($#)); do
             STAGE="$2"
             shift 2
             ;;
-        --phase-a-root)
-            PHASE_A_ROOT="$(realpath -m "$2")"
+        --presentation-root)
+            PRESENTATION_ROOT="$(realpath -m "$2")"
             shift 2
             ;;
         --confirm-reviewed-mask-and-lr)
@@ -71,7 +71,7 @@ esac
 source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
 conda activate cuda133py312-macha
 source /path/to/user_workspace/bart/bart_startup.sh
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/user-mpl-phase-a}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/user-mpl-r3-presentation}"
 export FSLDIR=/path/to/software/packages/fsl/6.0.6
 . "${FSLDIR}/etc/fslconf/fsl.sh"
 
@@ -89,17 +89,17 @@ DICOM_DIR="$DATASET_ROOT/mprage_product_unfiltered_normalize"
 DICOM_UID="1.3.12.2.1107.5.2.0.99923.3.2026082020033466358602277.0.0.0"
 WRAPPER="$REPO_ROOT/external/wave-mprage/recon/bart/run_wave_recon.sh"
 
-mkdir -p "$PHASE_A_ROOT/regularization" "$PHASE_A_ROOT/evaluation" "$PHASE_A_ROOT/logs"
-if [[ ! -e "$PHASE_A_ROOT/bart_inputs" ]]; then
-    ln -s "$SOURCE_ROOT/bart_inputs" "$PHASE_A_ROOT/bart_inputs"
+mkdir -p "$PRESENTATION_ROOT/regularization" "$PRESENTATION_ROOT/evaluation" "$PRESENTATION_ROOT/logs"
+if [[ ! -e "$PRESENTATION_ROOT/bart_inputs" ]]; then
+    ln -s "$SOURCE_ROOT/bart_inputs" "$PRESENTATION_ROOT/bart_inputs"
 fi
-if [[ ! -e "$PHASE_A_ROOT/bart_lambda0_existing_csm_c050" ]]; then
-    ln -s "$SOURCE_ROOT/bart_lambda0_existing_csm_c050" "$PHASE_A_ROOT/bart_lambda0_existing_csm_c050"
+if [[ ! -e "$PRESENTATION_ROOT/bart_lambda0_existing_csm_c050" ]]; then
+    ln -s "$SOURCE_ROOT/bart_lambda0_existing_csm_c050" "$PRESENTATION_ROOT/bart_lambda0_existing_csm_c050"
 fi
 
-LOG_PATH="$PHASE_A_ROOT/logs/${STAGE}_$(date -u +%Y%m%dT%H%M%SZ).log"
+LOG_PATH="$PRESENTATION_ROOT/logs/${STAGE}_$(date -u +%Y%m%dT%H%M%SZ).log"
 exec > >(tee -a "$LOG_PATH") 2>&1
-echo "Phase A stage: $STAGE"
+echo "R3 presentation stage: $STAGE"
 echo "Python: $PYTHON_EXECUTABLE"
 echo "BART: $BART_EXECUTABLE"
 echo "Log: $LOG_PATH"
@@ -109,7 +109,7 @@ json_field() {
 }
 
 require_gpu_split_validation() {
-    local manifest="$PHASE_A_ROOT/split_complex_lambda0_validation/manifest.json"
+    local manifest="$PRESENTATION_ROOT/split_complex_lambda0_validation/manifest.json"
     [[ -f "$manifest" ]] || {
         echo "Missing split-complex validation manifest: $manifest" >&2
         exit 2
@@ -131,7 +131,7 @@ run_case() {
         --maps "$MAPS" \
         --expected-maps-sha256 "$MAPS_SHA256" \
         --lambda-zero-base "$LAMBDA_ZERO" \
-        --output-root "$PHASE_A_ROOT/regularization" \
+        --output-root "$PRESENTATION_ROOT/regularization" \
         --twix "$TWIX" \
         --sequence "$SEQUENCE" \
         --regularizer "$regularizer" \
@@ -141,7 +141,7 @@ run_case() {
         --tolerance 1e-6 \
         --max-eigenvalue 6.70e7 \
         --backend gpu \
-        --subject 20260817product-r3x2-phaseA \
+        --subject 20260817product-r3x2-presentation \
         --resume
 }
 
@@ -158,10 +158,10 @@ run_reconstructions() {
 }
 
 prepare_qc() {
-    local evaluation_manifest="$PHASE_A_ROOT/evaluation/evaluation_inputs_manifest.json"
+    local evaluation_manifest="$PRESENTATION_ROOT/evaluation/evaluation_inputs_manifest.json"
     if [[ ! -f "$evaluation_manifest" ]]; then
         "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/prepare_regularization_evaluation.py" \
-            --recon-root "$PHASE_A_ROOT" \
+            --recon-root "$PRESENTATION_ROOT" \
             --dicom-dir "$DICOM_DIR" \
             --dicom-series-uid "$DICOM_UID" \
             --dicom-series-description t1_mprage_sag_p2_ND \
@@ -173,7 +173,7 @@ prepare_qc() {
 
     local reference
     reference="$($PYTHON_EXECUTABLE -c 'import json,sys; print(json.load(open(sys.argv[1]))["dicom_reference_nifti"]["path"])' "$evaluation_manifest")"
-    local mask_dir="$PHASE_A_ROOT/evaluation/brain_mask"
+    local mask_dir="$PRESENTATION_ROOT/evaluation/brain_mask"
     if [[ ! -f "$mask_dir/brain_mask_manifest.json" ]]; then
         "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/prepare_reference_brain_mask.py" \
             --reference "$reference" \
@@ -184,7 +184,7 @@ prepare_qc() {
         echo "Reusing BET mask manifest: $mask_dir/brain_mask_manifest.json"
     fi
 
-    local orientation_dir="$PHASE_A_ROOT/evaluation/orientation_qc"
+    local orientation_dir="$PRESENTATION_ROOT/evaluation/orientation_qc"
     if [[ ! -f "$orientation_dir/orientation_report.json" ]]; then
         "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/review_regularization_orientation.py" \
             --dicom-nifti "$reference" \
@@ -199,7 +199,7 @@ prepare_qc() {
     echo "BET boundary: $mask_dir/reference_brain_mask_qc.png"
     echo "L/R mapping:  $orientation_dir/orientation_signed_axis_choice.png"
     echo "After reviewing both, run:"
-    echo "  bash $SCRIPT_DIR/run_phase_a_remaining.sh --stage all-after-review --confirm-reviewed-mask-and-lr"
+    echo "  bash $SCRIPT_DIR/run_r3_presentation_optimization.sh --stage all-after-review --confirm-reviewed-mask-and-lr"
 }
 
 approve_qc() {
@@ -207,24 +207,24 @@ approve_qc() {
         echo "approve-qc requires --confirm-reviewed-mask-and-lr after actual visual review." >&2
         exit 2
     fi
-    local evaluation_manifest="$PHASE_A_ROOT/evaluation/evaluation_inputs_manifest.json"
+    local evaluation_manifest="$PRESENTATION_ROOT/evaluation/evaluation_inputs_manifest.json"
     local reference
     reference="$($PYTHON_EXECUTABLE -c 'import json,sys; print(json.load(open(sys.argv[1]))["dicom_reference_nifti"]["path"])' "$evaluation_manifest")"
-    local orientation_dir="$PHASE_A_ROOT/evaluation/orientation_qc"
+    local orientation_dir="$PRESENTATION_ROOT/evaluation/orientation_qc"
     "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/review_regularization_orientation.py" \
         --dicom-nifti "$reference" \
         --lambda0-nifti "$SOURCE_ROOT/bart_lambda0_existing_csm_c050/nifti/sub-20260817product-r3x2-lambda0/sub-20260817product-r3x2-lambda0_part-mag_BARTWaveLambda0.nii.gz" \
         --output-dir "$orientation_dir" \
         --accept-best-signed-axis
-    "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/record_phase_a_qc_approval.py" \
-        --brain-mask-manifest "$PHASE_A_ROOT/evaluation/brain_mask/brain_mask_manifest.json" \
+    "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/record_r3_presentation_qc_approval.py" \
+        --brain-mask-manifest "$PRESENTATION_ROOT/evaluation/brain_mask/brain_mask_manifest.json" \
         --orientation-report "$orientation_dir/orientation_report.json" \
         --confirm-reviewed-mask-and-lr
 }
 
 evaluate_and_present() {
-    local mask_manifest="$PHASE_A_ROOT/evaluation/brain_mask/brain_mask_manifest.json"
-    local orientation_report="$PHASE_A_ROOT/evaluation/orientation_qc/orientation_report.json"
+    local mask_manifest="$PRESENTATION_ROOT/evaluation/brain_mask/brain_mask_manifest.json"
+    local orientation_report="$PRESENTATION_ROOT/evaluation/orientation_qc/orientation_report.json"
     [[ "$(json_field "$mask_manifest" status)" == "approved" ]] || {
         echo "BET mask has not been explicitly approved: $mask_manifest" >&2
         exit 2
@@ -233,20 +233,20 @@ evaluate_and_present() {
         echo "Orientation has not been explicitly approved: $orientation_report" >&2
         exit 2
     }
-    local metrics_dir="$PHASE_A_ROOT/evaluation/volume_metrics"
+    local metrics_dir="$PRESENTATION_ROOT/evaluation/volume_metrics"
     if [[ ! -f "$metrics_dir/metrics_provenance.json" ]]; then
         "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/evaluate_regularization_volume.py" \
-            --input-manifest "$PHASE_A_ROOT/evaluation/evaluation_inputs_manifest.json" \
+            --input-manifest "$PRESENTATION_ROOT/evaluation/evaluation_inputs_manifest.json" \
             --orientation-report "$orientation_report" \
-            --brain-mask "$PHASE_A_ROOT/evaluation/brain_mask/reference_brain_mask.nii.gz" \
+            --brain-mask "$PRESENTATION_ROOT/evaluation/brain_mask/reference_brain_mask.nii.gz" \
             --output-dir "$metrics_dir"
     else
         echo "Reusing metrics provenance: $metrics_dir/metrics_provenance.json"
     fi
 
-    local presentation_dir="$PHASE_A_ROOT/presentation"
+    local presentation_dir="$PRESENTATION_ROOT/presentation"
     if [[ ! -f "$presentation_dir/presentation_manifest.json" ]]; then
-        "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/generate_phase_a_presentation.py" \
+        "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/generate_r3_presentation.py" \
             --metrics-provenance "$metrics_dir/metrics_provenance.json" \
             --grappa-nifti "$DATASET_ROOT/grappa_5x5x5_ncc12/grappa_5x5x5_ncc12_rss_ras.nii.gz" \
             --sense-nifti "$DATASET_ROOT/sense_no_wave_ncc12/recon_lambda0/nifti/sub-20260817product_part-mag_NoWaveSENSELambda0.nii.gz" \
@@ -254,7 +254,7 @@ evaluate_and_present() {
     else
         echo "Reusing presentation manifest: $presentation_dir/presentation_manifest.json"
     fi
-    echo "Phase A presentation: $presentation_dir/phase_a_method_comparison.png"
+    echo "R3 presentation: $presentation_dir/r3_method_comparison.png"
 }
 
 case "$STAGE" in
