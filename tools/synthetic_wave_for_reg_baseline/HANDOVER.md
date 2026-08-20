@@ -7,18 +7,24 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Resume the new isolated R3 presentation-optimization run in tmux with:
+Review the refined BET boundary at:
+
+```text
+/path/to/data/20260817_product/
+  synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization/
+  evaluation/brain_mask/reference_brain_mask_qc.png
+```
+
+The user approved the last column of the signed-axis figure, corresponding to
+permutation `[0,1,2]` and RAS-grid flips `[true,false,true]`; that decision is
+recorded in `evaluation/orientation_qc/orientation_report.json`. Mask approval
+is still pending. After the refined boundary is approved, continue with:
 
 ```bash
 bash tools/synthetic_wave_for_reg_baseline/scripts/run_r3_presentation_optimization.sh \
-  --stage all-before-review
+  --stage all-after-review \
+  --confirm-reviewed-mask-and-lr
 ```
-
-This completes the focused GPU reconstructions, converts the normalized
-unfiltered DICOM, and prepares the fixed BET-mask and L/R review figures. It
-then stops for visual review. Only after inspecting both printed figure paths,
-run the explicitly confirmed `all-after-review` command printed by the script.
-All new results remain separate from the accepted historical sweep.
 
 After the presentation stage, use the 2021-05-10 R1 data as the best available
 baseline. Validate and freeze one partial-Fourier readout-completion method,
@@ -43,6 +49,10 @@ export FSLDIR=/path/to/software/packages/fsl/6.0.6
 
 Always use GPU (`-g`) for every BART reconstruction. Do not silently fall back
 to CPU; stop and document any command-specific incompatibility.
+
+The fixed reference mask uses FSL BET's robust center estimation with a
+fractional threshold of `0.55`. The earlier non-robust `0.25` mask included face
+and neck and is retained only under `diagnostics/rejected_bet_loose_mask_f025`.
 
 ## R3 presentation-optimization continuation state
 

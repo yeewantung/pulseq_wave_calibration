@@ -35,20 +35,24 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def build_bet_command(
-    bet: Path, reference: Path, output_base: Path, fractional_threshold: float
+    bet: Path,
+    reference: Path,
+    output_base: Path,
+    fractional_threshold: float,
+    robust_center: bool = False,
 ) -> list[str]:
     if not 0.0 < fractional_threshold < 1.0:
         raise ValueError("BET fractional threshold must lie strictly between zero and one")
-    return [
+    command = [
         str(bet),
         str(reference),
         str(output_base),
-        "-m",
-        "-f",
-        f"{fractional_threshold:.6g}",
-        "-g",
-        "0",
     ]
+    if robust_center:
+        # Full-head references with substantial neck benefit from BET's repeated
+        # center-of-gravity estimation before the final surface extraction.
+        command.append("-R")
+    return command + ["-m", "-f", f"{fractional_threshold:.6g}", "-g", "0"]
 
 
 def _plane(data: np.ndarray, plane: str, index: int) -> np.ndarray:
@@ -118,6 +122,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--bet", type=Path, default=Path("/path/to/software/packages/fsl/6.0.6/share/fsl/bin/bet"))
     parser.add_argument("--fractional-threshold", type=float, default=0.25)
+    parser.add_argument(
+        "--robust-center",
+        action="store_true",
+        help="Use BET's repeated center-of-gravity estimation for full-head inputs.",
+    )
     return parser.parse_args(argv)
 
 
@@ -139,7 +148,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     output_base = output_dir / "reference_brain"
     command = build_bet_command(
-        bet, reference_path, output_base, args.fractional_threshold
+        bet,
+        reference_path,
+        output_base,
+        args.fractional_threshold,
+        args.robust_center,
     )
     environment = {**os.environ, "FSLOUTPUTTYPE": "NIFTI_GZ"}
     process = subprocess.run(
@@ -187,6 +200,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "executable": str(bet),
             "command": command,
             "fractional_threshold": args.fractional_threshold,
+            "robust_center": args.robust_center,
             "vertical_gradient": 0.0,
             "fsl_version": (
                 fsl_version_path.read_text(encoding="utf-8").strip()

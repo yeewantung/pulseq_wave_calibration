@@ -72,6 +72,10 @@ decision, evaluates the fixed-mask sweep, and creates the compact comparison
 package. `validate_bart_split_complex.py` records the required lambda-zero
 equivalence of native and recombined `wave -l -v` representations.
 
+For the full-head normalized DICOM reference, the runner invokes
+`prepare_reference_brain_mask.py` with BET robust center estimation and a fixed
+fractional threshold of `0.55`. The manifest records both settings.
+
 For acceleration comparisons,
 `export_bart_wave_inputs_retrospective.py` reuses the validated full synthetic
 Wave volume and theoretical PSF, builds an explicit Cartesian PE1×PE2 lattice

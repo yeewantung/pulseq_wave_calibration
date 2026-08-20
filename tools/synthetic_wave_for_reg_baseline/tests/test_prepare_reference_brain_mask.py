@@ -24,6 +24,14 @@ class BetCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "strictly between"):
             build_bet_command(Path("bet"), Path("reference.nii.gz"), Path("brain"), 1.0)
 
+    def test_robust_center_is_explicit(self) -> None:
+        self.assertEqual(
+            build_bet_command(
+                Path("bet"), Path("reference.nii.gz"), Path("brain"), 0.55, True
+            ),
+            ["bet", "reference.nii.gz", "brain", "-R", "-m", "-f", "0.55", "-g", "0"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

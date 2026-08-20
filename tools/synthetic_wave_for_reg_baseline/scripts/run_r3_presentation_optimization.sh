@@ -179,7 +179,8 @@ prepare_qc() {
             --reference "$reference" \
             --output-dir "$mask_dir" \
             --bet "$(command -v bet)" \
-            --fractional-threshold 0.25
+            --fractional-threshold 0.55 \
+            --robust-center
     else
         echo "Reusing BET mask manifest: $mask_dir/brain_mask_manifest.json"
     fi
