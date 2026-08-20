@@ -51,6 +51,21 @@ The current production path is:
 7. `run_bart_wave_lambda0.py` runs the unregularized acceptance reconstruction.
 8. `run_bart_regularization.py` calls the pinned upstream wrapper for one
    hashed, resumable wavelet or LLR case.
+9. `prepare_regularization_evaluation.py` consolidates complete NIfTI pairs,
+   selects one exact DICOM series by UID and unfiltered `ND` metadata, and
+   records hashes and conversion provenance.
+10. `review_regularization_orientation.py` canonicalizes both inputs to RAS,
+    audits all signed axis mappings, and produces explicitly labeled L/R QC
+    figures without accepting a correction or running registration.
+11. `evaluate_regularization_volume.py` requires that recorded approval,
+    estimates one proper rigid transform from lambda zero, applies it unchanged
+    to every magnitude volume, and writes whole-volume metrics and plots.
+
+For acceleration comparisons,
+`export_bart_wave_inputs_retrospective.py` reuses the validated full synthetic
+Wave volume and theoretical PSF, builds an explicit Cartesian PE1×PE2 lattice
+plus fully sampled ACS, and exports a separate BART input tree. It does not
+repeat GRAPPA completion or Wave encoding.
 
 `reconstruct_no_wave_grappa_2d.py`, `prepare_no_wave_sense.py`, and
 `run_no_wave_sense.py` are retained diagnostic alternatives, not the selected
@@ -68,6 +83,12 @@ python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/bart
 python -m unittest discover \
     -s tools/synthetic_wave_for_reg_baseline/tests \
     -p 'test_*.py'
+```
+
+The DICOM-referenced evaluation tools additionally use:
+
+```bash
+python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/evaluation.txt
 ```
 
 The optional SENSE diagnostic additionally uses:
@@ -92,6 +113,12 @@ GPU/SENSE dependencies. Regularized production runs should call the pinned
 lambda-zero runner is retained for its timing, map montage, and acceptance
 manifest checks. `run_bart_regularization.py` provides the publishable CLI,
 provenance, validation, and safe completed-run reuse around that direct call.
+
+Evaluation intentionally has a hard orientation gate. Run the preparation and
+orientation-review programs, inspect `orientation_signed_axis_choice.png`, and
+record the user's L/R decision before registering volumes or calculating
+metrics. The signed-axis search is diagnostic only; its top-scoring mapping is
+not silently applied.
 
 Run a script with `--help` for its dataset-independent CLI, for example:
 

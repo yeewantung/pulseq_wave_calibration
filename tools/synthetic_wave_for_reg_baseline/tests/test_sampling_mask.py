@@ -13,7 +13,11 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from sampling_mask import product_mask_from_report, write_masked_bart_kspace  # noqa: E402
+from sampling_mask import (  # noqa: E402
+    product_mask_from_report,
+    retrospective_cartesian_mask,
+    write_masked_bart_kspace,
+)
 
 
 def _report() -> dict:
@@ -77,6 +81,37 @@ class ProductMaskTests(unittest.TestCase):
             self.assertTrue(info["unacquired_samples_are_exact_zero"])
             self.assertEqual(
                 info["full_chunked_readback_validation"]["acquired_mismatch_count"], 0
+            )
+
+
+class RetrospectiveMaskTests(unittest.TestCase):
+    def test_r3x2_lattice_preserves_full_pe2_acs(self) -> None:
+        mask, info = retrospective_cartesian_mask(
+            (256, 256),
+            accelerations=(3, 2),
+            residues=(1, 0),
+            fully_sampled_pe1_lines=np.arange(115, 139),
+        )
+        self.assertEqual(int(mask.sum()), 16000)
+        self.assertEqual(info["nominal_acceleration"], 6)
+        self.assertAlmostEqual(info["effective_acceleration_including_acs"], 4.096)
+        self.assertTrue(np.all(mask[115:139, :]))
+        outside_acs = np.r_[0:115, 139:256]
+        expected = (
+            outside_acs[:, None] % 3 == 1
+        ) & (np.arange(256)[None, :] % 2 == 0)
+        np.testing.assert_array_equal(mask[outside_acs, :], expected)
+        self.assertEqual(info["image_coordinate_count"], 10880)
+        self.assertEqual(info["acs_coordinate_count"], 6144)
+        self.assertEqual(info["image_acs_overlap_coordinate_count"], 1024)
+
+    def test_invalid_retrospective_residue_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PE2 residue"):
+            retrospective_cartesian_mask(
+                (8, 8),
+                accelerations=(3, 2),
+                residues=(1, 2),
+                fully_sampled_pe1_lines=[3, 4],
             )
 
 

@@ -10,6 +10,75 @@ from typing import Any, Mapping
 import numpy as np
 
 
+def retrospective_cartesian_mask(
+    shape: tuple[int, int],
+    *,
+    accelerations: tuple[int, int],
+    residues: tuple[int, int],
+    fully_sampled_pe1_lines: list[int] | np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Build a PE1×PE2 lattice plus a PE1 ACS band spanning every partition."""
+    if len(shape) != 2 or any(int(value) < 1 for value in shape):
+        raise ValueError("Sampling-mask shape must contain two positive dimensions.")
+    npe1, npe2 = (int(value) for value in shape)
+    if len(accelerations) != 2 or any(int(value) < 1 for value in accelerations):
+        raise ValueError("PE accelerations must contain two positive integers.")
+    pe1_acceleration, pe2_acceleration = (int(value) for value in accelerations)
+    if len(residues) != 2:
+        raise ValueError("Sampling residues must contain one value per PE axis.")
+    pe1_residue, pe2_residue = (int(value) for value in residues)
+    if not 0 <= pe1_residue < pe1_acceleration:
+        raise ValueError("PE1 residue must lie within its acceleration range.")
+    if not 0 <= pe2_residue < pe2_acceleration:
+        raise ValueError("PE2 residue must lie within its acceleration range.")
+
+    acs_lines = np.asarray(fully_sampled_pe1_lines, dtype=np.int64)
+    if acs_lines.ndim != 1 or acs_lines.size < 1:
+        raise ValueError("The fully sampled PE1 ACS band must contain at least one line.")
+    if np.unique(acs_lines).size != acs_lines.size:
+        raise ValueError("The fully sampled PE1 ACS band contains duplicate lines.")
+    if np.any((acs_lines < 0) | (acs_lines >= npe1)):
+        raise ValueError("The fully sampled PE1 ACS band contains an out-of-range line.")
+    acs_lines = np.sort(acs_lines)
+
+    pe1_indices = np.arange(npe1, dtype=np.int64)
+    pe2_indices = np.arange(npe2, dtype=np.int64)
+    image_pe1 = pe1_indices[pe1_indices % pe1_acceleration == pe1_residue]
+    image_pe2 = pe2_indices[pe2_indices % pe2_acceleration == pe2_residue]
+    image_mask = np.zeros((npe1, npe2), dtype=bool)
+    image_mask[np.ix_(image_pe1, image_pe2)] = True
+    acs_mask = np.zeros_like(image_mask)
+    acs_mask[acs_lines, :] = True
+    mask = image_mask | acs_mask
+
+    acquired_count = int(mask.sum())
+    image_count = int(image_mask.sum())
+    acs_count = int(acs_mask.sum())
+    overlap_count = int((image_mask & acs_mask).sum())
+    metadata = {
+        "shape": [npe1, npe2],
+        "mask_kind": "Cartesian image lattice union fully sampled PE1 ACS band",
+        "pe1_acceleration": pe1_acceleration,
+        "pe2_acceleration": pe2_acceleration,
+        "nominal_acceleration": pe1_acceleration * pe2_acceleration,
+        "pe1_residue": pe1_residue,
+        "pe2_residue": pe2_residue,
+        "image_pe1_lines": image_pe1.tolist(),
+        "image_pe2_partitions": image_pe2.tolist(),
+        "fully_sampled_pe1_lines": acs_lines.tolist(),
+        "acs_covers_full_pe2": True,
+        "image_coordinate_count": image_count,
+        "acs_coordinate_count": acs_count,
+        "image_acs_overlap_coordinate_count": overlap_count,
+        "acquired_coordinate_count": acquired_count,
+        "full_grid_coordinate_count": int(mask.size),
+        "sampling_fraction": float(mask.mean()),
+        "effective_acceleration_including_acs": float(mask.size / acquired_count),
+        "unacquired_coordinate_count": int(mask.size - acquired_count),
+    }
+    return mask, metadata
+
+
 def product_mask_from_report(report: Mapping[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
     """Build the exact PE1/PE2 union mask recorded from TWIX MDH counters."""
     try:

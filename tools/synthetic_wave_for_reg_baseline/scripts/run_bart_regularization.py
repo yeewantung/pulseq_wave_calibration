@@ -419,7 +419,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "backend": args.backend,
     }
     if args.resume and completed_manifest_reusable(manifest_path, config, expected_maps_hash):
-        print(f"Reusing validated completed run: {run_dir}")
+        print(f"Skipping; reusing validated completed run: {run_dir}")
         return json.loads(manifest_path.read_text(encoding="utf-8"))
     recover_conversion = args.resume and failed_run_recoverable(
         manifest_path, config, expected_maps_hash

@@ -1384,10 +1384,39 @@ For each future mask, explicitly define and record both PE1 and PE2 residues/off
 
 The theoretical PSF and full Wave k-space must remain identical across acceleration comparisons. Only the retrospective mask and downstream BART reconstruction settings should change. Store each acceleration result separately so R3×1, R3×2, and R3×3 cannot overwrite or be confused with one another.
 
-- [ ] Implement and validate an R3×2 synthetic sampling mask.
+- [x] Implement and validate an R3×2 synthetic sampling mask.
 - [ ] Implement and validate an R3×3 synthetic sampling mask.
 - [ ] Compare reconstruction stability and preferred regularization across acceleration factors.
-- [ ] Do not begin Phase H unless explicitly requested.
+- [x] Do not begin Phase H unless explicitly requested (authorized 2026-08-20).
+
+R3×2 was explicitly requested on 2026-08-20. Its fixed mask definition is
+PE1 residue `1 mod 3`, PE2 residue `0 mod 2`, unioned with the original PE1
+ACS band `115:139` across every PE2 partition. It contains 16,000 of 65,536
+PE coordinates (sampling fraction `0.244140625`, effective acceleration
+`4.096` including ACS) and has logical SHA-256
+`03b45bc4656b657d63204c962ff1f7e6f8d6db12ff935635d881f2aae17830ca`.
+The PE2 residue includes the center partition. The accepted full synthetic
+Wave volume, theoretical PSF, and crop-0.5 CSM are reused unchanged in a
+separate R3×2 output tree. Estimate the R3×2 maximum eigenvalue in the
+unregularized GPU reconstruction, then freeze it for all six R3×2 GPU FISTA
+cases. Every R3×2 BART reconstruction uses `-g`; do not mix CPU and GPU results
+within this acceleration sweep.
+
+The coarse R3×2 GPU sweep completed on 2026-08-20. GPU reconstruction times
+were about 26–28 s for wavelet and 39–40 s for LLR. The unified resumable
+launcher was then extended to the following coarse/fine grid:
+
+```text
+wavelet lambda: 1e-4, 1e-3, 2e-3, 4e-3, 7e-3, 1e-2
+LLR lambda:     2e-4, 2e-3, 4e-3, 8e-3, 1.4e-2, 2e-2
+LLR block size: 4, 8, 16 (full cross-product with all six LLR lambdas)
+```
+
+The existing synthesis, lambda=0, three coarse wavelet cases, and three
+coarse block-8 LLR cases remain in place and must be hash-validated/reused by
+`--resume`; they are not recomputed. The unified sweep adds 3 wavelet and 15
+LLR reconstructions. Review grids cover all wavelet values in three planes and
+the full LLR lambda×block-size grid separately in each plane.
 
 ## Phase I — final cleanup
 

@@ -32,8 +32,10 @@ class NamingAndCommandTests(unittest.TestCase):
 
     def test_names_requested_smoke_cases(self) -> None:
         self.assertEqual(canonical_lambda(1e-3), "1e-3")
+        self.assertEqual(canonical_lambda(1.4e-2), "1.4e-2")
         self.assertEqual(run_name("wavelet", 1e-3), "wavelet_lambda-1e-3")
         self.assertEqual(run_name("llr", 2e-3, 8), "llr_block-8_lambda-2e-3")
+        self.assertEqual(run_name("llr", 1.4e-2, 16), "llr_block-16_lambda-1.4e-2")
 
     def test_wavelet_options_freeze_fista_settings(self) -> None:
         self.assertEqual(
@@ -76,6 +78,19 @@ class NamingAndCommandTests(unittest.TestCase):
         start = command.index("--wave-options") + 1
         stop = command.index("--end-wave-options")
         self.assertEqual(command[start:stop], options)
+
+    def test_gpu_backend_adds_bart_gpu_flag(self) -> None:
+        options = build_wave_options(
+            "llr",
+            2e-3,
+            block_size=8,
+            iterations=100,
+            tolerance=1e-6,
+            max_eigenvalue=6.70e7,
+            backend="gpu",
+        )
+        self.assertIn("-g", options)
+        self.assertEqual(options.count("-g"), 1)
 
     def test_conversion_recovery_calls_upstream_converter(self) -> None:
         command = build_conversion_command(

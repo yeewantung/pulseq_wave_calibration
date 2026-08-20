@@ -33,6 +33,10 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/prepare_no_wave_sense.py` | Retained diagnostic | Builds a measured-only alternative input for future GRAPPA/SENSE investigation. |
 | `scripts/run_no_wave_sense.py` | Retained diagnostic | Reproduces the SENSE/ESPIRiT anatomy-support comparison. |
 | `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
+| `scripts/export_bart_wave_inputs_retrospective.py` | Acceleration-comparison workflow | Builds a validated PE1×PE2 retrospective mask from reusable full Wave data and exports a separate BART input tree. |
+| `scripts/prepare_regularization_evaluation.py` | Evaluation workflow | Consolidates complete reconstruction NIfTIs and converts one strictly selected unfiltered DICOM reference with hashes and provenance. |
+| `scripts/review_regularization_orientation.py` | Evaluation gate | Produces RAS-canonical, L/R-labeled no-registration comparisons and ranks signed-axis hypotheses without applying one. |
+| `scripts/evaluate_regularization_volume.py` | Evaluation workflow | Applies one approved orientation correction and one shared lambda-zero rigid transform, then writes registered volumes, fixed-mask 3D metrics, provenance, and sweep plots. |
 
 ## Tests
 
@@ -52,6 +56,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `requirements/phase-d.txt` | `requirements/wave_synthesis.txt` | GRAPPA plus theoretical Wave synthesis. |
 | `requirements/phase-e.txt` | `requirements/bart_reconstruction.txt` | Wave synthesis plus external BART workflows. |
 | `requirements/sense.txt` | `requirements/sense_diagnostics.txt` | BART requirements plus the retained SigPy diagnostic. |
+| none | `requirements/evaluation.txt` | BART requirements plus DICOM selection and plotting dependencies for whole-volume evaluation. |
 
 ## Historical generated artifacts
 
