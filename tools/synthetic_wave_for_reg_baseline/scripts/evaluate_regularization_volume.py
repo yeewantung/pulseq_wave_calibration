@@ -145,17 +145,30 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
     return components == int(np.argmax(sizes))
 
 
-def build_fixed_masks(reference: np.ndarray) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-    positive = reference[reference > 0]
+def load_brain_mask(
+    path: Path, reference_image: nib.spatialimages.SpatialImage
+) -> np.ndarray:
+    """Load an approved mask only when it shares the canonical reference grid."""
+    image = nib.as_closest_canonical(nib.load(str(path)))
+    if image.shape != reference_image.shape or not np.allclose(
+        image.affine, reference_image.affine, atol=1e-5
+    ):
+        raise ValueError("Fixed BET mask does not share the exact DICOM reference grid")
+    mask = np.asarray(image.dataobj) > 0
+    if int(mask.sum()) < 1_000_000:
+        raise ValueError("Fixed BET brain mask is unexpectedly small")
+    return mask
+
+
+def build_fixed_masks(
+    reference: np.ndarray, brain: np.ndarray
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    reference_values = reference[brain]
+    positive = reference_values[reference_values > 0]
     if not positive.size:
-        raise ValueError("DICOM reference has no positive voxels")
+        raise ValueError("DICOM reference has no positive voxels inside the BET mask")
     reference_p99 = float(np.percentile(positive, 99.0))
-    threshold = 0.05 * reference_p99
-    foreground = _largest_component(reference > threshold)
-    foreground = binary_closing(foreground, iterations=2)
-    foreground = binary_fill_holes(foreground)
-    if int(foreground.sum()) < 1_000_000:
-        raise ValueError("Fixed anatomy mask is unexpectedly small")
+    anatomy_threshold = 0.05 * reference_p99
 
     border_safe = np.ones(reference.shape, dtype=bool)
     border_safe[:4] = False
@@ -164,21 +177,21 @@ def build_fixed_masks(reference: np.ndarray) -> tuple[dict[str, np.ndarray], dic
     border_safe[:, -4:] = False
     border_safe[:, :, :4] = False
     border_safe[:, :, -4:] = False
-    background = border_safe & ~binary_dilation(foreground, iterations=8)
+    background = border_safe & ~binary_dilation(brain, iterations=8)
 
     gradients = np.gradient(gaussian_filter(reference, sigma=0.7))
     gradient_magnitude = np.sqrt(sum(component * component for component in gradients))
-    edge_threshold = float(np.percentile(gradient_magnitude[foreground], 80.0))
-    edge = foreground & (gradient_magnitude >= edge_threshold)
-    masks = {"foreground": foreground, "background": background, "edge": edge}
+    edge_threshold = float(np.percentile(gradient_magnitude[brain], 80.0))
+    edge = brain & (gradient_magnitude >= edge_threshold)
+    masks = {"brain": brain, "background": background, "edge": edge}
     metadata = {
-        "reference_positive_p99": reference_p99,
-        "foreground_rule": "largest connected component after DICOM > 0.05*p99; close 2; fill holes",
-        "foreground_threshold": threshold,
-        "foreground_voxel_count": int(foreground.sum()),
-        "background_rule": "fixed FOV excluding 4-voxel border and 8-voxel dilation of foreground",
+        "reference_brain_positive_p99": reference_p99,
+        "brain_rule": "externally generated and visually approved fixed FSL BET mask",
+        "brain_voxel_count": int(brain.sum()),
+        "anatomy_missed_intensity_threshold": anatomy_threshold,
+        "background_rule": "fixed FOV excluding 4-voxel border and 8-voxel dilation of BET brain mask",
         "background_voxel_count": int(background.sum()),
-        "edge_rule": "top 20% of sigma-0.7 reference gradient magnitude inside foreground",
+        "edge_rule": "top 20% of sigma-0.7 reference gradient magnitude inside BET brain mask",
         "edge_gradient_threshold": edge_threshold,
         "edge_voxel_count": int(edge.sum()),
     }
@@ -303,21 +316,21 @@ def compute_metrics(
     mask_metadata: dict[str, Any],
     reference_gradient: np.ndarray | None = None,
 ) -> tuple[dict[str, float], np.ndarray]:
-    foreground = masks["foreground"]
+    brain = masks["brain"]
     background = masks["background"]
     edge = masks["edge"]
-    scale = _lsq_scale(reference, candidate, foreground)
+    scale = _lsq_scale(reference, candidate, brain)
     scaled = (candidate * scale).astype(np.float32, copy=False)
-    reference_values = reference[foreground].astype(np.float64)
-    candidate_values = scaled[foreground].astype(np.float64)
+    reference_values = reference[brain].astype(np.float64)
+    candidate_values = scaled[brain].astype(np.float64)
     residual = candidate_values - reference_values
     rmse = float(np.sqrt(np.mean(residual * residual)))
     rms_reference = float(np.sqrt(np.mean(reference_values * reference_values)))
     mae = float(np.mean(np.abs(residual)))
     mean_reference = float(np.mean(np.abs(reference_values)))
-    reference_p99 = mask_metadata["reference_positive_p99"]
+    reference_p99 = mask_metadata["reference_brain_positive_p99"]
 
-    bbox = _bounding_box(foreground)
+    bbox = _bounding_box(brain)
     low, high = np.percentile(reference_values, [1.0, 99.0])
     data_range = float(high - low)
     reference_crop = np.clip(reference[bbox], low, high).astype(np.float32)
@@ -327,7 +340,7 @@ def compute_metrics(
     )
     axial_ssim = []
     for index in range(reference.shape[2]):
-        if int(foreground[:, :, index].sum()) < 500:
+        if int(brain[:, :, index].sum()) < 500:
             continue
         axial_ssim.append(
             structural_similarity(
@@ -347,16 +360,16 @@ def compute_metrics(
     valid_fov = np.ones(reference.shape, dtype=bool)
     metrics = {
         "intensity_scale_lsq": scale,
-        "ncc_foreground": normalized_cross_correlation(reference, scaled, foreground),
+        "ncc_brain": normalized_cross_correlation(reference, scaled, brain),
         "ncc_full_fov": normalized_cross_correlation(reference, scaled, valid_fov),
-        "nrmse_foreground": rmse / max(rms_reference, 1e-12),
-        "mae_foreground": mae,
-        "nmae_foreground": mae / max(mean_reference, 1e-12),
+        "nrmse_brain": rmse / max(rms_reference, 1e-12),
+        "mae_brain": mae,
+        "nmae_brain": mae / max(mean_reference, 1e-12),
         "psnr_p99_db": 20.0 * math.log10(reference_p99 / max(rmse, 1e-12)),
-        "ssim_3d_bbox": ssim_3d,
-        "ssim_axial_mean": float(np.mean(axial_ssim)),
-        "ssim_axial_slice_count": float(len(axial_ssim)),
-        "gradient_ncc_edge": normalized_cross_correlation(
+        "ssim_3d_brain_bbox": ssim_3d,
+        "ssim_axial_brain_mean": float(np.mean(axial_ssim)),
+        "ssim_axial_brain_slice_count": float(len(axial_ssim)),
+        "gradient_ncc_brain_edge": normalized_cross_correlation(
             reference_gradient, candidate_gradient, edge
         ),
         "edge_preservation_ratio": edge_preservation,
@@ -368,8 +381,10 @@ def compute_metrics(
             np.percentile(np.abs(scaled[background]), 95.0)
         )
         / reference_p99,
-        "anatomy_missed_fraction": float(
-            np.mean(scaled[foreground] < mask_metadata["foreground_threshold"])
+        "anatomy_missed_brain_fraction": float(
+            np.mean(
+                scaled[brain] < mask_metadata["anatomy_missed_intensity_threshold"]
+            )
         ),
     }
     return metrics, scaled
@@ -534,10 +549,10 @@ def plot_mask_qc(
     vmax = float(np.percentile(reference[reference > 0], 99.5))
     for axis, plane in zip(axes, ("sagittal", "coronal", "axial")):
         axis.imshow(_plane(reference, plane, center), cmap="gray", origin="lower", vmin=0, vmax=vmax)
-        axis.contour(_plane(masks["foreground"], plane, center), levels=[0.5], colors="lime", linewidths=0.6)
+        axis.contour(_plane(masks["brain"], plane, center), levels=[0.5], colors="lime", linewidths=0.6)
         axis.contour(_plane(masks["edge"], plane, center), levels=[0.5], colors="yellow", linewidths=0.35)
         axis.contour(_plane(masks["background"], plane, center), levels=[0.5], colors="cyan", linewidths=0.35)
-        axis.set_title(f"{plane}: foreground=green, edge=yellow, background=cyan", fontsize=8)
+        axis.set_title(f"{plane}: BET brain=green, edge=yellow, background=cyan", fontsize=8)
         axis.set_axis_off()
         _directions(axis, plane)
     figure.suptitle("Fixed DICOM-space masks used for every case", fontsize=13)
@@ -548,12 +563,11 @@ def plot_mask_qc(
 def _rank_records(records: list[dict[str, Any]]) -> None:
     regularized = [record for record in records if record["kind"] != "lambda0"]
     specifications = [
-        ("nrmse_foreground", False),
-        ("ssim_3d_bbox", True),
-        ("ncc_foreground", True),
-        ("gradient_ncc_edge", True),
-        ("background_std_normalized_p99", False),
-        ("anatomy_missed_fraction", False),
+        ("nrmse_brain", False),
+        ("ssim_3d_brain_bbox", True),
+        ("ncc_brain", True),
+        ("gradient_ncc_brain_edge", True),
+        ("edge_preservation_ratio", True),
     ]
     rank_sums = {record["case"]: 0.0 for record in regularized}
     for key, higher_is_better in specifications:
@@ -581,9 +595,9 @@ def write_metrics_csv(records: list[dict[str, Any]], path: Path) -> None:
 def plot_wavelet(records: list[dict[str, Any]], path: Path) -> None:
     rows = sorted((r for r in records if r["kind"] == "wavelet"), key=lambda r: r["lambda"])
     metrics = [
-        ("nrmse_foreground", "NRMSE ↓"),
-        ("ssim_3d_bbox", "3D SSIM ↑"),
-        ("gradient_ncc_edge", "Gradient NCC ↑"),
+        ("nrmse_brain", "Brain NRMSE ↓"),
+        ("ssim_3d_brain_bbox", "Brain 3D SSIM ↑"),
+        ("gradient_ncc_brain_edge", "Brain-edge gradient NCC ↑"),
         ("background_std_normalized_p99", "Background SD / DICOM p99 ↓"),
     ]
     figure, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
@@ -603,9 +617,9 @@ def plot_llr_heatmaps(records: list[dict[str, Any]], path: Path) -> None:
     blocks = sorted({int(r["block_size"]) for r in rows})
     lambdas = sorted({float(r["lambda"]) for r in rows})
     metrics = [
-        ("nrmse_foreground", "NRMSE ↓", "viridis_r"),
-        ("ssim_3d_bbox", "3D SSIM ↑", "viridis"),
-        ("gradient_ncc_edge", "Gradient NCC ↑", "viridis"),
+        ("nrmse_brain", "Brain NRMSE ↓", "viridis_r"),
+        ("ssim_3d_brain_bbox", "Brain 3D SSIM ↑", "viridis"),
+        ("gradient_ncc_brain_edge", "Brain-edge gradient NCC ↑", "viridis"),
         ("background_std_normalized_p99", "Background SD / p99 ↓", "viridis_r"),
     ]
     lookup = {(int(r["block_size"]), float(r["lambda"])): r for r in rows}
@@ -633,12 +647,12 @@ def plot_summary(records: list[dict[str, Any]], path: Path) -> None:
     for kind in ("lambda0", "wavelet", "llr"):
         rows = [record for record in records if record["kind"] == kind]
         color, marker = styles[kind]
-        axes[0].scatter([r["nrmse_foreground"] for r in rows], [r["ssim_3d_bbox"] for r in rows], label=kind, color=color, marker=marker)
-        axes[1].scatter([r["background_std_normalized_p99"] for r in rows], [r["gradient_ncc_edge"] for r in rows], label=kind, color=color, marker=marker)
-    axes[0].set_xlabel("Foreground NRMSE ↓")
-    axes[0].set_ylabel("3D SSIM ↑")
+        axes[0].scatter([r["nrmse_brain"] for r in rows], [r["ssim_3d_brain_bbox"] for r in rows], label=kind, color=color, marker=marker)
+        axes[1].scatter([r["background_std_normalized_p99"] for r in rows], [r["gradient_ncc_brain_edge"] for r in rows], label=kind, color=color, marker=marker)
+    axes[0].set_xlabel("Brain NRMSE ↓")
+    axes[0].set_ylabel("Brain 3D SSIM ↑")
     axes[1].set_xlabel("Background SD / DICOM p99 ↓")
-    axes[1].set_ylabel("Gradient NCC ↑")
+    axes[1].set_ylabel("Brain-edge gradient NCC ↑")
     for axis in axes:
         axis.grid(alpha=0.3)
         axis.legend()
@@ -685,6 +699,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-manifest", required=True, type=Path)
     parser.add_argument("--orientation-report", required=True, type=Path)
+    parser.add_argument("--brain-mask", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser.parse_args(argv)
 
@@ -692,6 +707,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     input_manifest_path = args.input_manifest.expanduser().resolve()
     orientation_report_path = args.orientation_report.expanduser().resolve()
+    brain_mask_path = args.brain_mask.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     input_manifest = json.loads(input_manifest_path.read_text(encoding="utf-8"))
     orientation_report = json.loads(orientation_report_path.read_text(encoding="utf-8"))
@@ -712,8 +728,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("DICOM reference did not canonicalize to RAS")
     reference = _finite_magnitude(reference_image)
     cases = load_cases(input_manifest)
-    if len(cases) != 25:
-        raise ValueError(f"Expected 25 cases, found {len(cases)}")
+    if len(cases) != int(input_manifest["case_count"]):
+        raise ValueError(
+            f"Manifest declares {input_manifest['case_count']} cases, found {len(cases)}"
+        )
+    if not any(case["kind"] == "wavelet" for case in cases) or not any(
+        case["kind"] == "llr" for case in cases
+    ):
+        raise ValueError("Evaluation requires lambda zero plus Wavelet and corrected LLR cases")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     masks_dir = output_dir / "masks"
@@ -721,7 +743,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     plots_dir = output_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
     registered_root = output_dir / "registered"
-    masks, mask_metadata = build_fixed_masks(reference)
+    brain_mask = load_brain_mask(brain_mask_path, reference_image)
+    masks, mask_metadata = build_fixed_masks(reference, brain_mask)
+    mask_metadata.update(
+        {
+            "approved_brain_mask_path": str(brain_mask_path),
+            "approved_brain_mask_sha256": sha256_file(brain_mask_path),
+        }
+    )
     mask_records = {}
     for name, mask in masks.items():
         mask_path = save_mask(mask, name, reference_image, masks_dir)
@@ -731,17 +760,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     lambda0_oriented = _load_on_reference_grid(
         lambda0_case["source_nifti"], reference_image, permutation, flips
     )
-    rigid = estimate_shared_rigid(reference, lambda0_oriented, masks["foreground"])
+    rigid = estimate_shared_rigid(reference, lambda0_oriented, masks["brain"])
     parameters = [
         *rigid["parameters"]["rotation_degrees_ras_xyz"],
         *rigid["parameters"]["translation_mm_ras_xyz"],
     ]
     lambda0_registered = rigid_resample(lambda0_oriented, parameters)
     rigid["full_resolution_ncc_before"] = normalized_cross_correlation(
-        reference, lambda0_oriented, masks["foreground"]
+        reference, lambda0_oriented, masks["brain"]
     )
     rigid["full_resolution_ncc_after"] = normalized_cross_correlation(
-        reference, lambda0_registered, masks["foreground"]
+        reference, lambda0_registered, masks["brain"]
     )
     if rigid["full_resolution_ncc_after"] <= rigid["full_resolution_ncc_before"]:
         raise ValueError("Shared rigid registration reduced full-resolution NCC")
@@ -757,8 +786,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     registration_configuration["registration_signature"] = registration_signature
     _write_json(output_dir / "shared_registration.json", registration_configuration)
 
-    foreground_coordinates = np.argwhere(masks["foreground"])
-    center = [int(round(value)) for value in foreground_coordinates.mean(axis=0)]
+    brain_coordinates = np.argwhere(masks["brain"])
+    center = [int(round(value)) for value in brain_coordinates.mean(axis=0)]
     plot_registration_qc(
         reference,
         lambda0_oriented,
@@ -843,14 +872,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "shared_registration": registration_configuration,
         "fixed_masks": {"metadata": mask_metadata, "files": mask_records},
         "metric_definitions": {
-            "intensity_scaling": "one positive LSQ scale per case inside fixed DICOM foreground",
-            "nrmse_foreground": "RMSE divided by RMS(DICOM) inside fixed foreground",
-            "psnr_p99_db": "20*log10(DICOM positive p99 / foreground RMSE)",
-            "ssim_3d_bbox": "3D SSIM on clipped fixed-foreground bounding box",
-            "gradient_ncc_edge": "NCC of sigma-0.7 gradient magnitudes in fixed edge mask",
+            "intensity_scaling": "one positive LSQ scale per case inside fixed BET brain mask",
+            "nrmse_brain": "RMSE divided by RMS(DICOM) inside fixed BET brain mask",
+            "psnr_p99_db": "20*log10(DICOM brain-positive p99 / brain-mask RMSE)",
+            "ssim_3d_brain_bbox": "3D SSIM on clipped fixed-BET-brain bounding box",
+            "gradient_ncc_brain_edge": "NCC of sigma-0.7 gradient magnitudes in fixed brain-edge mask",
             "background_metrics": "scaled reconstruction signal in fixed DICOM-space background mask",
-            "anatomy_missed_fraction": "fixed foreground fraction below the fixed DICOM foreground threshold",
-            "composite_mean_rank": "mean rank over NRMSE, 3D SSIM, foreground NCC, gradient NCC, background SD, and missed fraction; regularized cases only",
+            "anatomy_missed_brain_fraction": "fixed BET brain fraction below 0.05 of DICOM brain-positive p99",
+            "composite_mean_rank": "mean rank over brain NRMSE, brain 3D SSIM, brain NCC, brain-edge gradient NCC, and edge preservation; regularized cases only",
         },
         "metrics_csv": {"path": str(metrics_path), "sha256": sha256_file(metrics_path), "row_count": len(records)},
         "representative_cases": representative_cases,

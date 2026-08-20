@@ -62,6 +62,16 @@ The current production path is:
     estimates one proper rigid transform from lambda zero, applies it unchanged
     to every magnitude volume, and writes whole-volume metrics and plots.
 
+For the current R3 Phase-A continuation, `run_phase_a_remaining.sh` provides a
+resumable tmux-friendly orchestration entry point. Its default
+`all-before-review` stage runs the focused GPU reconstructions and prepares the
+normalized-DICOM, BET-mask, and orientation QC package. It stops before the
+visual gate. After reviewing the printed BET and L/R figures, the separate
+`all-after-review --confirm-reviewed-mask-and-lr` stage records that explicit
+decision, evaluates the fixed-mask sweep, and creates the compact comparison
+package. `validate_bart_split_complex.py` records the required lambda-zero
+equivalence of native and recombined `wave -l -v` representations.
+
 For acceleration comparisons,
 `export_bart_wave_inputs_retrospective.py` reuses the validated full synthetic
 Wave volume and theoretical PSF, builds an explicit Cartesian PE1×PE2 lattice

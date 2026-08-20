@@ -7,12 +7,18 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Proceed first with provisional optimization on the existing R3x1 product and
-synthetic R3x2 Wave data so that presentation results can be produced soon.
-Add a fixed BET brain mask, extend the Wavelet search toward smaller lambda,
-and correct LLR to use `wave -l -v` before interpreting it. Use the updated
-normalized, unfiltered DICOM and standardized whole-volume figures. Keep all
-new results separate from the accepted historical sweep.
+Resume the new isolated Phase-A run in tmux with:
+
+```bash
+bash tools/synthetic_wave_for_reg_baseline/scripts/run_phase_a_remaining.sh \
+  --stage all-before-review
+```
+
+This completes the focused GPU reconstructions, converts the normalized
+unfiltered DICOM, and prepares the fixed BET-mask and L/R review figures. It
+then stops for visual review. Only after inspecting both printed figure paths,
+run the explicitly confirmed `all-after-review` command printed by the script.
+All new results remain separate from the accepted historical sweep.
 
 After the presentation stage, use the 2021-05-10 R1 data as the best available
 baseline. Validate and freeze one partial-Fourier readout-completion method,
@@ -35,7 +41,36 @@ export FSLDIR=/path/to/software/packages/fsl/6.0.6
 . "${FSLDIR}/etc/fslconf/fsl.sh"
 ```
 
-Use GPU (`-g`) for every production BART reconstruction that supports it.
+Always use GPU (`-g`) for every BART reconstruction. Do not silently fall back
+to CPU; stop and document any command-specific incompatibility.
+
+## Phase-A continuation state
+
+The isolated output tree is:
+
+```text
+/path/to/data/20260817_product/
+  synthetic_wave_grappa_5x5x5_ncc12_r3x2_phase_a
+```
+
+It references the accepted R3x2 BART inputs and lambda-zero reconstruction by
+symlink; it does not overwrite the historical sweep. The corrected block-8 LLR
+pilot at lambda `2e-4` is complete there and differs from accepted lambda zero
+by relative L2 `0.0061681`, confirming a non-degenerate penalty.
+
+The first `wave -v -g` attempt exposed a GPU-unsafe direct pointer access in
+BART's complex-decomposition forward operator. BART commit `60dceb33` replaces
+that loop with device-aware multidimensional primitives. The production
+lambda-zero FISTA equivalence gate then passed: recombined split-complex versus
+native-complex relative L2 was `1.36985e-6`, below the frozen `1e-5` limit.
+The failed pre-fix CG attempt is retained under the Phase-A `diagnostics/`
+directory.
+
+`run_phase_a_remaining.sh` is resumable and always passes `-g`. It runs three
+Wavelet values (`1e-6`, `1e-5`, `1e-4`) and the focused corrected block-8 LLR
+range (`2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`). The accepted pilot is reused.
+The QC and evaluation stages require explicit mask and L/R approval; there is
+no automatic approval path.
 
 ## Repository state
 

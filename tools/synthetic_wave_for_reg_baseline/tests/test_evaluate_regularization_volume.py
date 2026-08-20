@@ -52,20 +52,20 @@ class MetricTests(unittest.TestCase):
         foreground[0] = False
         edge = foreground.copy()
         metadata = {
-            "reference_positive_p99": float(np.percentile(reference, 99)),
-            "foreground_threshold": 0.0,
+            "reference_brain_positive_p99": float(np.percentile(reference, 99)),
+            "anatomy_missed_intensity_threshold": 0.0,
         }
         metrics, scaled = compute_metrics(
             reference,
             reference,
-            {"foreground": foreground, "background": background, "edge": edge},
+            {"brain": foreground, "background": background, "edge": edge},
             metadata,
         )
         np.testing.assert_allclose(scaled, reference)
-        self.assertAlmostEqual(metrics["ncc_foreground"], 1.0)
-        self.assertAlmostEqual(metrics["nrmse_foreground"], 0.0)
-        self.assertAlmostEqual(metrics["ssim_3d_bbox"], 1.0)
-        self.assertAlmostEqual(metrics["gradient_ncc_edge"], 1.0)
+        self.assertAlmostEqual(metrics["ncc_brain"], 1.0)
+        self.assertAlmostEqual(metrics["nrmse_brain"], 0.0)
+        self.assertAlmostEqual(metrics["ssim_3d_brain_bbox"], 1.0)
+        self.assertAlmostEqual(metrics["gradient_ncc_brain_edge"], 1.0)
 
 
 if __name__ == "__main__":

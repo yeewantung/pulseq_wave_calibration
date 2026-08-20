@@ -10,11 +10,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
+
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from bart_cfl import sha256_file  # noqa: E402
+from bart_cfl import open_bart_memmap, sha256_file, write_bart_header  # noqa: E402
 from run_bart_regularization import (  # noqa: E402
     build_conversion_command,
     build_wave_options,
@@ -22,6 +24,7 @@ from run_bart_regularization import (  # noqa: E402
     canonical_lambda,
     completed_manifest_reusable,
     failed_run_recoverable,
+    recombine_split_complex_bart,
     run,
     run_name,
 )
@@ -91,6 +94,7 @@ class NamingAndCommandTests(unittest.TestCase):
         )
         self.assertIn("-g", options)
         self.assertEqual(options.count("-g"), 1)
+        self.assertEqual(options[:5], ["-l", "-v", "-b", "8", "-f"])
 
     def test_conversion_recovery_calls_upstream_converter(self) -> None:
         command = build_conversion_command(
@@ -208,6 +212,10 @@ class ResumeTests(unittest.TestCase):
                 mock.patch("run_bart_regularization.sha256_file", return_value="a" * 64),
                 mock.patch("run_bart_regularization._run_streamed", return_value=1.0),
                 mock.patch(
+                    "run_bart_regularization.recombine_split_complex_bart",
+                    return_value={"rule": "tested"},
+                ),
+                mock.patch(
                     "run_bart_regularization.validate_finite_bart",
                     return_value={"norm": 1.0, "all_samples_finite": True},
                 ),
@@ -219,6 +227,33 @@ class ResumeTests(unittest.TestCase):
                 manifest = run(args)
             self.assertEqual(manifest["status"], "complete")
             self.assertNotIn("recovered_failure", manifest)
+
+
+class SplitComplexTests(unittest.TestCase):
+    def test_recombines_iter_dimension_real_and_imaginary_components(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            split_base = root / "split"
+            output_base = root / "combined"
+            shape = (3, 2, 2, 1, 1, 1, 1, 1, 2)
+            write_bart_header(split_base, shape)
+            split = np.memmap(
+                split_base.with_suffix(".cfl"),
+                mode="w+",
+                dtype=np.complex64,
+                shape=shape,
+                order="F",
+            )
+            expected = np.arange(12, dtype=np.float32).reshape((3, 2, 2), order="F")
+            split[:, :, :, 0, 0, 0, 0, 0, 0] = expected
+            split[:, :, :, 0, 0, 0, 0, 0, 1] = 1j * (expected + 10)
+            split.flush()
+
+            record = recombine_split_complex_bart(split_base, output_base)
+            combined = np.squeeze(np.asarray(open_bart_memmap(output_base)))
+            np.testing.assert_allclose(combined, expected + 1j * (expected + 10))
+            self.assertEqual(record["split_shape"][8], 2)
+            self.assertEqual(record["recombined_shape"][8], 1)
 
 
 if __name__ == "__main__":

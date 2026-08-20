@@ -20,7 +20,7 @@ from prepare_regularization_evaluation import (  # noqa: E402
 def fake_dicom(instance: int, *, description: str = "t1_mprage_sag_p2_ND"):
     return SimpleNamespace(
         SeriesDescription=description,
-        ImageType=["ORIGINAL", "PRIMARY", "M", "ND"],
+        ImageType=["ORIGINAL", "PRIMARY", "M", "ND", "NORM"],
         Rows=256,
         Columns=256,
         BitsAllocated=16,
@@ -59,9 +59,20 @@ class DicomSelectionTests(unittest.TestCase):
 
     def test_rejects_display_filtered_image_type(self) -> None:
         dataset = fake_dicom(1)
-        dataset.ImageType = ["ORIGINAL", "PRIMARY", "M", "DIS3D", "DIS2D"]
-        with self.assertRaisesRegex(ValueError, "not unfiltered ND"):
+        dataset.ImageType = ["ORIGINAL", "PRIMARY", "M", "NORM", "DIS3D", "DIS2D"]
+        with self.assertRaisesRegex(ValueError, "not normalized, unfiltered ND"):
             select_dicom_series({"uid": [(Path("bad.dcm"), dataset)]}, "uid", "t1_mprage_sag_p2_ND", 1)
+
+    def test_rejects_unfiltered_but_non_normalized_series(self) -> None:
+        dataset = fake_dicom(1)
+        dataset.ImageType = ["ORIGINAL", "PRIMARY", "M", "ND"]
+        with self.assertRaisesRegex(ValueError, "not normalized, unfiltered ND"):
+            select_dicom_series(
+                {"uid": [(Path("bad.dcm"), dataset)]},
+                "uid",
+                "t1_mprage_sag_p2_ND",
+                1,
+            )
 
 
 if __name__ == "__main__":

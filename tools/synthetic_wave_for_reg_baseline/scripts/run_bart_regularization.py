@@ -16,7 +16,13 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from bart_cfl import bart_base, open_bart_memmap, sha256_file, validate_finite_bart
+from bart_cfl import (
+    bart_base,
+    open_bart_memmap,
+    sha256_file,
+    validate_finite_bart,
+    write_bart_header,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -99,7 +105,11 @@ def build_wave_options(
     validate_settings(
         regularizer, lambda_value, block_size, iterations, tolerance, max_eigenvalue
     )
-    options = ["-w"] if regularizer == "wavelet" else ["-l", "-b", str(block_size)]
+    options = (
+        ["-w"]
+        if regularizer == "wavelet"
+        else ["-l", "-v", "-b", str(block_size)]
+    )
     options.extend(
         [
             "-f",
@@ -206,7 +216,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _run_streamed(command: Sequence[str], log_path: Path, env: dict[str, str]) -> float:
-    """Stream the upstream wrapper while retaining its complete combined log."""
+    """Stream a reconstruction command while retaining its complete combined log."""
     print("Running:", " ".join(command), flush=True)
     started = time.perf_counter()
     lines: list[str] = []
@@ -226,8 +236,57 @@ def _run_streamed(command: Sequence[str], log_path: Path, env: dict[str, str]) -
     log_path.write_text("".join(lines), encoding="utf-8")
     elapsed = time.perf_counter() - started
     if returncode:
-        raise RuntimeError(f"Wave-MPRAGE wrapper failed with status {returncode}.")
+        raise RuntimeError(f"Command failed with status {returncode}: {command[0]}")
     return elapsed
+
+
+def recombine_split_complex_bart(split_base: Path, output_base: Path) -> dict[str, Any]:
+    """Recombine BART's ITER-dimension real/imaginary representation."""
+    split = open_bart_memmap(split_base)
+    if len(split.shape) < 9 or split.shape[8] != 2:
+        raise ValueError(
+            f"Expected a size-two real/imaginary ITER dimension, got {split.shape}"
+        )
+    if any(value != 1 for value in split.shape[9:]):
+        raise ValueError(f"Unexpected non-singleton dimensions after ITER: {split.shape}")
+    output_shape = list(split.shape)
+    output_shape[8] = 1
+    write_bart_header(output_base, output_shape)
+    output = np.memmap(
+        output_base.with_suffix(".cfl"),
+        mode="w+",
+        dtype=np.complex64,
+        shape=tuple(output_shape),
+        order="F",
+    )
+    maximum_off_axis_component_residual = 0.0
+    for start in range(0, split.shape[2], 8):
+        stop = min(start + 8, split.shape[2])
+        block = np.asarray(split[:, :, start:stop, ...])
+        real_component = np.take(block, 0, axis=8)
+        imaginary_component = np.take(block, 1, axis=8)
+        maximum_off_axis_component_residual = max(
+            maximum_off_axis_component_residual,
+            float(np.max(np.abs(real_component.imag))),
+            float(np.max(np.abs(imaginary_component.real))),
+        )
+        combined = real_component.real + 1j * imaginary_component.imag
+        output[:, :, start:stop, ...] = np.expand_dims(combined, axis=8)
+    output.flush()
+    if maximum_off_axis_component_residual > 1e-6:
+        raise ValueError(
+            "Split components contain values outside their real/imaginary axes: "
+            f"{maximum_off_axis_component_residual}"
+        )
+    return {
+        "split_base": str(split_base),
+        "split_shape": list(split.shape),
+        "split_cfl_sha256": sha256_file(split_base.with_suffix(".cfl")),
+        "recombined_base": str(output_base),
+        "recombined_shape": output_shape,
+        "rule": "complex = real(ITER[0]) + 1j * imag(ITER[1]); ITER dimension is BART dimension 8",
+        "maximum_off_axis_component_residual": maximum_off_axis_component_residual,
+    }
 
 
 def _parse_bart_log(path: Path) -> dict[str, float]:
@@ -417,6 +476,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "tolerance": args.tolerance,
         "maximum_eigenvalue": args.max_eigenvalue,
         "backend": args.backend,
+        "complex_representation": (
+            "split_real_imag_iter_dim_8_recombined"
+            if args.regularizer == "llr"
+            else "native_complex"
+        ),
     }
     if args.resume and completed_manifest_reusable(manifest_path, config, expected_maps_hash):
         print(f"Skipping; reusing validated completed run: {run_dir}")
@@ -444,6 +508,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         nifti_suffix=nifti_suffix,
         wave_options=wave_options,
     )
+    bart_command_output = (
+        bart_output / "image_wave_split"
+        if args.regularizer == "llr"
+        else bart_output / "image_wave"
+    )
     effective_bart_command = [
         str(bart),
         "wave",
@@ -451,7 +520,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         str(maps),
         str(bart_input / "psf"),
         str(bart_input / "wave_kspace"),
-        str(bart_output / "image_wave"),
+        str(bart_command_output),
     ]
     started_at = datetime.now(timezone.utc).isoformat()
     manifest: dict[str, Any]
@@ -478,6 +547,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "started_at_utc": started_at,
             "wrapper": str(wrapper),
             "wrapper_command": wrapper_command,
+            "execution_mode": (
+                "direct_bart_then_recombine_then_upstream_conversion"
+                if args.regularizer == "llr"
+                else "upstream_wrapper"
+            ),
             "effective_bart_command": effective_bart_command,
             "python_executable": str(python),
             "maps": {"base": str(maps), "cfl_sha256": actual_maps_hash},
@@ -491,6 +565,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "BART_BIN": str(bart),
         "PYTHON_BIN": str(python),
     }
+    reconstruction_wall_seconds: float | None = None
     try:
         if recover_conversion:
             conversion_command = build_conversion_command(
@@ -515,8 +590,40 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "reason": "upstream wrapper BART solve completed before conversion failure",
             }
             wrapper_wall_seconds = None
+        elif args.regularizer == "llr":
+            bart_output.mkdir(parents=True, exist_ok=True)
+            reconstruction_wall_seconds = _run_streamed(
+                effective_bart_command, log_path, environment
+            )
+            split_recombination = recombine_split_complex_bart(
+                bart_output / "image_wave_split", bart_output / "image_wave"
+            )
+            conversion_command = build_conversion_command(
+                wrapper,
+                python=python,
+                bart_input_dir=bart_input,
+                bart_output_dir=bart_output,
+                twix=twix,
+                sequence=sequence,
+                nifti_output_dir=nifti_output,
+                nifti_subject=nifti_subject,
+                nifti_suffix=nifti_suffix,
+            )
+            conversion_log = run_dir / "conversion.log"
+            conversion_wall_seconds = _run_streamed(
+                conversion_command, conversion_log, environment
+            )
+            manifest["split_complex_recombination"] = split_recombination
+            manifest["conversion"] = {
+                "command": conversion_command,
+                "wall_seconds": conversion_wall_seconds,
+                "log": str(conversion_log),
+                "log_sha256": sha256_file(conversion_log),
+            }
+            wrapper_wall_seconds = None
         else:
             wrapper_wall_seconds = _run_streamed(wrapper_command, log_path, environment)
+            reconstruction_wall_seconds = None
         image_base = bart_output / "image_wave"
         validation = validate_finite_bart(image_base, (256, 256, 256, 1, 1))
         if float(validation["norm"]) <= 0.0:
@@ -533,6 +640,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "status": "complete",
                 "completed_at_utc": datetime.now(timezone.utc).isoformat(),
                 "wrapper_wall_seconds": wrapper_wall_seconds,
+                "direct_reconstruction_wall_seconds": reconstruction_wall_seconds,
                 "wrapper_log": str(log_path),
                 "bart_version_output": (version.stdout + version.stderr).strip(),
                 "bart_log_fields": _parse_bart_log(log_path),

@@ -100,8 +100,9 @@ conda activate cuda133py312-macha
 source /path/to/user_workspace/bart/bart_startup.sh
 ```
 
-Use the `bart` resolved by `command -v bart`. All production BART
-reconstructions should use `-g` unless a command does not support the GPU.
+Use the `bart` resolved by `command -v bart`. Always use `-g` for every BART
+reconstruction. Do not silently fall back to CPU; stop and document any
+command-specific incompatibility.
 
 For FSL BET:
 

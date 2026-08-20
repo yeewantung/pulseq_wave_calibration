@@ -242,7 +242,7 @@ def select_dicom_series(
     expected_description: str,
     expected_count: int,
 ) -> tuple[list[tuple[Path, Any]], list[dict[str, Any]]]:
-    """Select exactly one unfiltered ND magnitude series with strict metadata checks."""
+    """Select exactly one normalized, unfiltered ND magnitude series."""
     summary = []
     for uid, records in sorted(groups.items()):
         first = records[0][1]
@@ -261,7 +261,7 @@ def select_dicom_series(
         raise ValueError(
             f"Expected {expected_count} DICOMs in selected series, found {len(selected)}"
         )
-    expected_image_type = ["ORIGINAL", "PRIMARY", "M", "ND"]
+    expected_image_type = ["ORIGINAL", "PRIMARY", "M", "ND", "NORM"]
     instance_numbers = []
     sop_uids = set()
     for path, dataset in selected:
@@ -269,8 +269,13 @@ def select_dicom_series(
         image_type = [str(value) for value in getattr(dataset, "ImageType", [])]
         if description != expected_description:
             raise ValueError(f"Unexpected SeriesDescription in {path}: {description}")
-        if image_type != expected_image_type:
-            raise ValueError(f"Selected series is not unfiltered ND magnitude in {path}: {image_type}")
+        if image_type != expected_image_type or any(
+            component in {"DIS2D", "DIS3D"} for component in image_type
+        ):
+            raise ValueError(
+                "Selected series is not normalized, unfiltered ND magnitude "
+                f"in {path}: {image_type}"
+            )
         if int(dataset.Rows) != 256 or int(dataset.Columns) != 256:
             raise ValueError(f"Unexpected DICOM matrix in {path}: {dataset.Rows}x{dataset.Columns}")
         if int(dataset.BitsAllocated) != 16 or int(dataset.BitsStored) != 12:
@@ -334,7 +339,7 @@ def convert_dicom(
         "-b", "y",
         "-ba", "y",
         "-d", "0",
-        "-f", "dicom_unfiltered_nd",
+        "-f", "dicom_normalized_unfiltered_nd",
         "-l", "o",
         "-m", "n",
         "-q", "n",
@@ -350,13 +355,31 @@ def convert_dicom(
         raise RuntimeError(
             f"dcm2niix failed with status {process.returncode}:\n{combined}"
         )
-    niftis = sorted(output_dir.glob("dicom_unfiltered_nd*.nii.gz"))
+    niftis = sorted(output_dir.glob("dicom_normalized_unfiltered_nd*.nii.gz"))
     if len(niftis) != 1:
         raise ValueError(f"Expected exactly one converted DICOM NIfTI, found {niftis}")
     sidecar = nifti_sidecar(niftis[0])
     if not sidecar.is_file():
         raise FileNotFoundError(sidecar)
     return command, combined, niftis[0], sidecar
+
+
+def canonicalize_to_ras(source: Path, destination: Path) -> Path:
+    """Save a dtype-preserving copy on the nearest canonical RAS voxel grid."""
+    import nibabel as nib
+    import numpy as np
+
+    image = nib.load(str(source))
+    canonical = nib.as_closest_canonical(image)
+    if tuple(nib.aff2axcodes(canonical.affine)) != ("R", "A", "S"):
+        raise ValueError(f"Could not canonicalize DICOM reference to RAS: {source}")
+    if destination.exists():
+        raise FileExistsError(f"Canonical DICOM output already exists: {destination}")
+    header = canonical.header.copy()
+    header.set_data_dtype(image.get_data_dtype())
+    data = np.asanyarray(canonical.dataobj)
+    nib.save(nib.Nifti1Image(data, canonical.affine, header), str(destination))
+    return destination
 
 
 def _dicom_series_metadata(selected: list[tuple[Path, Any]]) -> dict[str, Any]:
@@ -423,11 +446,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.dicom_series_description,
         args.expected_dicom_count,
     )
-    staging_dir = recon_root / "evaluation" / "dicom_unfiltered_nd_selection"
+    staging_dir = recon_root / "evaluation" / "dicom_normalized_unfiltered_nd_selection"
     selected_records = stage_selected_dicoms(selected, staging_dir)
     reference_dir = nifti_root / "dicom_reference"
-    command, converter_output, dicom_nifti, dicom_json = convert_dicom(
+    command, converter_output, converted_dicom_nifti, dicom_json = convert_dicom(
         args.dcm2niix.resolve(), staging_dir, reference_dir
+    )
+    dicom_nifti = canonicalize_to_ras(
+        converted_dicom_nifti,
+        reference_dir / "dicom_normalized_unfiltered_nd_ras.nii.gz",
     )
     dicom_nifti_record = {
         "path": str(dicom_nifti),
@@ -470,6 +497,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "version_command_returncode": version_process.returncode,
             "command": command,
             "combined_output": converter_output,
+            "converted_nifti_before_ras_canonicalization": str(converted_dicom_nifti),
         },
         "dicom_reference_nifti": dicom_nifti_record,
         "dicom_reference_json": {
@@ -488,7 +516,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "selection_rule": {
                 "SeriesInstanceUID": args.dicom_series_uid,
                 "SeriesDescription": args.dicom_series_description,
-                "ImageType": ["ORIGINAL", "PRIMARY", "M", "ND"],
+                "ImageType": ["ORIGINAL", "PRIMARY", "M", "ND", "NORM"],
                 "expected_file_count": args.expected_dicom_count,
             },
             "excluded_series": [
