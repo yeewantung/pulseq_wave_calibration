@@ -1,7 +1,15 @@
 # Synthetic Wave regularization baseline
 
-This directory contains the no-wave-to-Wave baseline experiment described in
-`R3x1_no_wave_to_wave_BART_regularization_TODO.md`.
+This directory contains the R3 presentation-optimization, R1 parameter-
+refinement, and cross-dataset transfer workflow for synthetic Wave-MPRAGE
+reconstruction.
+
+Start with:
+
+- [`EXPERIMENT_PLAN.md`](EXPERIMENT_PLAN.md) for the active scientific plan;
+- [`HANDOVER.md`](HANDOVER.md) for exact cross-session state; and
+- [`docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md`](docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md)
+  only when historical R3x1 development detail is needed.
 
 ## Layout
 
@@ -12,29 +20,22 @@ docs/          Maintenance indexes, including the old-to-new filename map
 tests/         Unit and reference-oracle tests
 ```
 
-Machine-local dataset notes and generated reconstruction artifacts remain at this directory's root. They are ignored by git; paths and scan filenames stay command-line inputs rather than source constants.
+Machine-local dataset notes and generated reconstruction artifacts are ignored
+by git. Large artifacts should live in dataset output trees rather than at this
+directory's root; paths and scan filenames remain configuration/CLI inputs.
 
-## Current baseline
+## Current experiment
 
-The selected no-wave baseline is joint-coil 5×5×5 GRAPPA at Ncc=12. It removes
-the aliasing retained by shallower kernels, preserves the full visual anatomy,
-and directly supplies completed multi-coil k-space for Wave synthesis. Tested
-SENSE/ESPIRiT variants either crop the nose or admit a detached weak-support
-noise shell and require an additional `F(Sx)` back-projection. SENSE remains a
-deferred secondary comparison; its apparently worse effective g-factor is a
-qualitative visual observation, not yet a formal measurement.
+First optimize provisionally on the 2026 R3x1 product and synthetic R3x2 Wave
+data and generate presentation results. Then use the 2021-05-10 R1 scans as
+the best available baseline after validating and freezing their partial-
+Fourier readout completion. The R1 Wavelet coarse sweep will use lambda values
+`1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`, plus lambda zero. LLR must use the
+verified BART real/imaginary split (`-v`) and output recombination.
 
-The next run will regenerate synthetic Wave inputs from the accepted 5×5×5
-k-space in a new output tree, visually gate one reusable hard-crop 0.5 ESPIRiT
-map set with λ=0, then run coarse wavelet (`1e-4`, `1e-3`, `1e-2`) and LLR
-(block 8; `2e-4`, `2e-3`, `2e-2`) pilots. Fine sweeps are deferred. Final
-ranking will combine visual review with consistently registered and normalized
-DICOM-referenced SSIM, PSNR, NRMSE, noise/CNR, sharpness, aliasing, and anatomy
-coverage metrics.
-
-The positive-λ pilot has its own troubleshooting gate: run wavelet `1e-3` and
-LLR block-8 `2e-3` first, export both, and wait for explicit visual approval
-before running the four remaining coarse endpoints.
+After R1 refinement, apply the selected parameter back to R3 without retuning
+as a cross-dataset transfer check. Because R3 is used for the preliminary
+optimization, it is not an untouched independent validation dataset.
 
 ## Which programs matter
 

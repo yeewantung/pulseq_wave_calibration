@@ -1,4 +1,9 @@
-# R3×1 No-Wave → Synthetic Wave → BART Regularization Tuning
+# HISTORICAL — R3×1 No-Wave → Synthetic Wave → BART Regularization Tuning
+
+> Archived 2026-08-20. This tracker records the completed and abandoned R3x1
+> development path. It is not the active plan. See
+> `../../EXPERIMENT_PLAN.md` and `../../HANDOVER.md` before doing new work.
+
 ## Implementation To-Do and Progress Tracker
 
 **Purpose:** Build a reproducible offline experiment for tuning BART Wave reconstruction regularization using an acquired **R3×1 no-wave** dataset and its **online scanner DICOM** as the practical reference.
