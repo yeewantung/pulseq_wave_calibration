@@ -11,3 +11,5 @@ __pycache__/
 /tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.json
 /tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.npz
 /tools/synthetic_wave_for_reg_baseline/phase_c_grappa*.npy
+
+AGENTS.md
