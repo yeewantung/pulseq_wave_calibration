@@ -169,10 +169,14 @@ separately and only after full Wave encoding.
 - [x] Reject the first expanded candidate made with robust-center BET threshold
   `0.55` plus one face-connected voxel: its 1,924,995-voxel boundary was judged
   too large. Preserve it for provenance and do not use it for metrics.
-- [x] Generate a tighter candidate from the direct FFT reference using
+- [x] Reject the tighter candidate from the direct FFT reference using
   robust-center BET threshold `0.60`, followed by the same one-voxel outward
-  margin. It contains 1,752,607 voxels, preserves the native BET boundary in
-  its QC figure, and remains marked `visual_review_required`.
+  margin. Its 1,752,607-voxel boundary was judged slightly too small; preserve
+  it for provenance and do not use it for metrics.
+- [x] Generate an intermediate candidate using robust-center BET threshold
+  `0.59` plus the same one-voxel margin. It contains 1,818,144 voxels: 3.74%
+  larger than the `0.60` candidate and 5.55% smaller than the `0.55` candidate.
+  Its manifest remains `visual_review_required`.
 - [ ] Obtain explicit user visual approval of the expanded mask boundary and
   labeled L/R orientation before calculating any metrics.
 - [ ] Evaluate the completed coarse Wavelet and block-8 LLR cases against the
