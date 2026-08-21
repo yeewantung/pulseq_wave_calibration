@@ -14,7 +14,7 @@ The execution order is now:
    completed NIfTI orientation correction and retrospective low-resolution
    support, then remove R3-specific geometry/configuration assumptions from
    the R1 path;
-3. acquire and qualify the new R1 dataset; and
+3. qualify the newly acquired R1 dataset; and
 4. switch the final parameter-selection and DICOM-ranking workflow to that R1
    dataset, then apply the R1-selected settings back to R3 without retuning.
 
@@ -29,8 +29,42 @@ inspection, coil compression, mutually exclusive direct-R1/GRAPPA source
 preparation, full Wave encoding, the separate post-Wave target-mask BART
 export, and measured ACS export from either direct R1 image data or a declared
 refscan. The next portability task follows data flow into lambda-zero BART
-reconstruction; actual R1 execution still waits for the incoming acquisition
-and its passed inspection.
+reconstruction. The R1 acquisition is now available, so measured qualification
+precedes further portability implementation.
+
+## Current implementation and execution status
+
+Completed:
+
+- [x] R3 orientation correction and canonical-RAS NIfTI export;
+- [x] retrospective low-resolution reconstruction, visual QC, and descriptive
+  analysis support;
+- [x] provisional R3 presentation optimization using no-wave GRAPPA as the
+  temporary metric reference;
+- [x] portable dataset contract and measured TWIX/DICOM inspection;
+- [x] image/refscan coil-compression support;
+- [x] direct, interpolation-free fully sampled R1 source assembly and the
+  compatible R3 GRAPPA source branch;
+- [x] manifest-backed full Wave encoding and separate post-Wave target mask;
+- [x] manifest-backed measured ACS export from direct image data or refscan.
+
+Pending:
+
+- [ ] identify the new R1 TWIX, matching DICOM directory, and Wave sequence;
+- [ ] create its concrete manifest and pass measured acquisition inspection;
+- [ ] decide whether the acquisition supplies separate development and
+  confirmation scans;
+- [ ] run and visually qualify the real R1 preparation path through measured
+  ACS export;
+- [ ] make lambda-zero and regularized BART reconstruction manifest-aware;
+- [ ] pass R1 lambda-zero forward-model, scaling, orientation, and GPU gates;
+- [ ] make evaluation preparation and metrics reference-neutral;
+- [ ] run the R1 regularization sweep, freeze the final choice, and apply it
+  unchanged to R3 as a cross-dataset transfer check.
+
+Intentionally deferred or excluded: no-wave BART PICS, completion of the older
+partial-readout R1 scans, DICOM-intensity ranking before the new R1 DICOM is
+qualified, and use of BET outside metric calculation.
 
 ### Decision recorded 2026-08-20: temporary references
 
@@ -42,24 +76,23 @@ DICOM ratios were `1.347` and `0.655`, respectively. Retain the pilot and its
 manifest as a negative result, but do not use `ecalib -I` for the production
 path or continue tuning regularization against either DICOM intensity profile.
 
-Until the new R1 acquisition arrives, use no-wave GRAPPA as the single
-temporary metric reference. No GRAPPA-versus-SENSE comparison or agreement
-gate is required. Keep SENSE as an existing optional diagnostic only, and
-defer the no-wave BART PICS regularization branch. Apply the approved BET mask
-only while calculating metrics; do not use it to alter reconstruction or
-display. DICOM voxel intensities must not enter provisional regularization
-ranking, but the evaluator must retain a configurable DICOM-reference mode for
-the new R1 dataset.
+The completed preliminary R3 work uses no-wave GRAPPA as its single temporary
+metric reference. No GRAPPA-versus-SENSE comparison or agreement gate is
+required. Keep SENSE as an existing optional diagnostic only, and defer the
+no-wave BART PICS regularization branch. Apply the approved BET mask only while
+calculating metrics; do not use it to alter reconstruction or display. DICOM
+voxel intensities must not enter provisional R3 ranking, but the evaluator
+must retain a configurable DICOM-reference mode for the new R1 dataset.
 
 ## 1. Scientific roles of the datasets
 
 ### New R1 data for final parameter refinement
 
-A new R1 dataset will be collected and is the intended final baseline. On
-arrival, inspect its sampling, readout completeness, DICOM processing, coil
-configuration, geometry, and sequence definitions before reusing any current
-assumptions. Assign independent development and confirmation scans when the
-acquisition provides enough data.
+A new R1 dataset has been collected and is the intended final baseline. Before
+reconstruction, inspect its sampling, readout completeness, DICOM processing,
+coil configuration, geometry, and sequence definitions rather than reusing
+current assumptions. Assign independent development and confirmation scans
+when the acquisition provides enough data.
 
 The older R1 candidates below are retained as documented fallbacks, not the
 active final-selection dataset.

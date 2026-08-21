@@ -10,7 +10,7 @@ new dataset.
 | --- | --- | --- |
 | Dataset inspection | Manifest integration is complete. Measured matrix, source acceleration, coils, readout oversampling, source-grid completeness, optional ACS support, and DICOM image type are checked against the contract. | Dataset manifest plus TWIX/DICOM metadata |
 | Coil compression | Manifest integration is complete. TWIX, output prefix, physical/virtual coil expectations, explicit image/refscan covariance source, and passed-inspection provenance come from the contract; chunking remains a runtime option. This supports fully sampled R1 even when no PAT refscan exists. | Dataset manifest and passed inspection report |
-| No-Wave source reconstruction | Code support is complete for both roles. The direct R1 path requires a complete centered readout and duplicate-free PE grid and applies no interpolation; existing GRAPPA remains restricted to its validated measured R3x1 stride/residue. Both produce the same compressed k-space layout. Real R1 acceptance awaits the incoming scan. | Manifest matrix/settings plus exact measured sampling report |
+| No-Wave source reconstruction | Code support is complete for both roles. The direct R1 path requires a complete centered readout and duplicate-free PE grid and applies no interpolation; existing GRAPPA remains restricted to its validated measured R3x1 stride/residue. Both produce the same compressed k-space layout. Real R1 acceptance awaits qualification of the newly available scan. | Manifest matrix/settings plus exact measured sampling report |
 | Wave synthesis | Manifest integration is complete. The source report, subject, matrix/FOV, virtual-coil count, sequence/TWIX paths, extended readout, trajectory settings, diagnostics, output allocation, and safe complete reuse derive from one hash-matched contract. | Dataset manifest plus passed inspection and validated source report |
 | BART input export | Manifest integration is complete. The synthetic target acceleration, residues, and ACS bounds build a separate post-Wave mask; full readback verifies bitwise acquired samples and exact missing zeros without mutating the accepted synthesis. The older exact product-mask CLI remains compatible. | Dataset manifest plus validated full-Wave synthesis |
 | ACS export | Manifest integration is complete. Calibration source is explicit: fully sampled R1 copies measured ACS from the validated compressed image source without interpolation or repeated compression, while compatible acquisitions can use compressed TWIX refscan data. Matrix, Ncc, support, target BART tree, provenance, and safe resume are contract-backed. | Dataset manifest plus validated measured source and target export |
@@ -21,6 +21,6 @@ new dataset.
 
 The implementation order follows data flow: propagate the manifest next
 through lambda-zero and regularized BART reconstruction, then make evaluation
-reference-neutral. The incoming dataset is not qualified merely because its
+reference-neutral. The new dataset is not qualified merely because its
 manifest parses; measured inspection checks and direct-source validation must
 also pass and later reconstruction acceptance gates remain mandatory.

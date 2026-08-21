@@ -47,14 +47,17 @@ sample, and leaves the accepted synthesis untouched. Measured ACS export is
 now manifest-aware as well. The incoming R1 route copies the declared ACS
 support from validated, compressed, fully sampled image k-space without
 interpolation or repeated compression; the compatible refscan route remains
-available. The next code step is manifest-aware lambda-zero reconstruction;
-remaining consumers are listed in `docs/dataset_portability_audit.md`.
+available. The new R1 acquisition is now ready, so its read-only identification
+and measured qualification come before manifest-aware lambda-zero work.
+Remaining consumers are listed in `docs/dataset_portability_audit.md`.
 
-The user is collecting a new R1 dataset. Once it arrives, pause provisional
-R3 selection, fill in a concrete manifest, inspect and qualify the new
-acquisition, then switch final regularization selection to it. The example is
-`configs/incoming_r1_dataset.example.json`. The older partial-readout R1
-datasets are fallbacks only and their completion work is deferred.
+The new R1 dataset has been collected; its exact filename/path is pending from
+the user. Once identified, locate the matching DICOM and Wave sequence, fill in
+a concrete copy of `configs/incoming_r1_dataset.example.json`, and inspect the
+acquisition before launching large outputs. If inspection passes, exercise the
+real path through coil compression, direct source assembly, Wave synthesis,
+target masking, and measured ACS export. The older partial-readout R1 datasets
+remain fallbacks only and their completion work is deferred.
 
 ## Environment on macha
 
