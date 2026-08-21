@@ -21,9 +21,11 @@ matches the accepted GRAPPA/SENSE affine. No historical output was overwritten.
 Retrospective low-resolution code support is complete with the current BART
 manifest, crop-first target-grid Wave synthesis, and mandatory GPU
 reconstruction path. Product structural validation and both real-data source
-operator gates pass. The large preparation/reconstruction is intentionally
-left for the user's tmux run. After that, remove R3-only shape, path, sampling,
-and DICOM assumptions from the R1-facing orchestration.
+operator gates pass. All three corrected-LLR production cases and their
+canonical-RAS exports are complete. A manifested native/matched visual-review
+package is generated and awaits user approval. After approval, implement the
+resolution tradeoff analysis, then remove R3-only shape, path, sampling, and
+DICOM assumptions from the R1-facing orchestration.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, inspect and qualify the new acquisition, then switch final
@@ -267,7 +269,8 @@ scripts/run_retrospective_low_resolution.sh
 The real source PSF identity gate passed with relative complex L2
 `4.406439186e-08`; the all-coil native Wave-operator gate passed with relative
 L2 `2.150150032e-07`. Structural validation creates no output and has passed.
-No production retrospective outputs exist yet.
+The three product reconstructions completed on 2026-08-21 with corrected LLR,
+block size 8, lambda `2e-5`, 100 iterations, and GPU `-g`.
 
 Never crop readout. Use these requested physical XYZ resolutions:
 
@@ -284,6 +287,27 @@ use logical `(RO, LIN, PAR)` matrices `256 x 256 x 172`, `256 x 172 x 256`,
 and `256 x 204 x 204`, achieving changed-axis resolutions `1.488372` mm and
 `1.254902` mm. Crop no-wave PE support before Wave encoding and rebuild the
 target PE-grid PSF; do not crop already Wave-encoded k-space.
+
+The physical-coordinate review entry point is:
+
+```text
+scripts/run_retrospective_low_resolution_review.sh
+```
+
+It compares no-wave GRAPPA, the full-resolution corrected LLR result, and all
+three LR cases. The native figure retains each matrix and selects slices by RAS
+millimetres; the matched figure linearly resamples LR magnitudes to the 1 mm
+full-resolution grid. Display uses independent positive p99.5 scaling and is
+not an intensity/SNR comparison. BET and DICOM are not used.
+
+This review caught the historical full-resolution LLR NIfTI orientation. The
+old review is retained under
+`diagnostics/rejected_visual_review_historical_orientation_reference`. The
+launcher re-exported the existing BART CFL through the corrected shared NIfTI
+producer without reconstructing and stores that canonical reference under
+`full_resolution_reference/`. The review code requires
+`NIfTICanonicalRAS=true` and affine flips `[true,false,true]` in every Wave
+export sidecar, preventing reuse of the historical file.
 
 ## Accepted historical R3 outputs
 

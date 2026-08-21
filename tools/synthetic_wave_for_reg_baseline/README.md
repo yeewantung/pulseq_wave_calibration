@@ -95,6 +95,21 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_retrospective_low_resolution.s
 Use `--validate-only` for a non-writing structural check or `--prepare-only`
 to create target BART inputs without starting reconstruction.
 
+After reconstruction, generate the physical-coordinate visual review with:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_retrospective_low_resolution_review.sh
+```
+
+`review_retrospective_low_resolution.py` reads the completed batch/case
+manifests and creates a native-grid comparison plus an explicitly labeled
+matched-1-mm comparison. It enforces common RAS center/FOV geometry and the
+corrected Wave canonical-export sidecar contract. The native figure selects
+the nearest slice to one shared RAS location and uses physical-mm extents; the
+matched figure linearly resamples only for alignment. Per-volume positive
+p99.5 scaling is display-only. Neither DICOM nor BET is used, and no
+quantitative ranking is performed.
+
 For the current R3 presentation optimization, `run_r3_presentation_optimization.sh` provides a
 resumable tmux-friendly orchestration entry point. Its default
 `all-before-review` stage runs the focused GPU reconstructions and prepares the

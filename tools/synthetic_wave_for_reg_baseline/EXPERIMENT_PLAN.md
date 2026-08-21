@@ -348,8 +348,9 @@ complex L2 `4.406439186e-08` and maximum complex error `1.685873912e-07`.
 The all-coil native-grid Wave-operator gate passed with relative L2
 `2.150150032e-07` and maximum complex error `1.317088993e-09`. Structural
 validation of the product configuration also passed without writing output.
-Production preparation and reconstruction have not yet run; no large
-retrospective result tree has been created.
+Production preparation and all three corrected-LLR reconstructions completed
+on 2026-08-21. Their manifests, finite-value checks, matrices, voxel sizes,
+canonical-RAS affines, and GPU BART logs pass.
 
 The current tool's phase-encoding-only crop is the intended behavior. For
 sagittal MPRAGE, physical X maps to logical partition/PE2, physical Y maps to
@@ -377,6 +378,18 @@ cropping already Wave-encoded data is not an equivalent ordering.
 Evaluate the expected SNR/CNR gain together with the loss in sharpness and
 spatial resolution. Preserve native-resolution images and create explicitly
 labelled reference-grid resamples only for matched visual/metric comparisons.
+
+The first manifested visual-review package now provides both representations:
+native grids use the nearest slice to one shared RAS location with physical-mm
+extents and no spatial resampling; matched grids use linear interpolation onto
+the full-resolution 1 mm RAS grid. Both use display-only per-volume positive
+p99.5 scaling. Neither DICOM nor BET participates. The initial attempt exposed
+an older full-resolution LLR NIfTI that predated the canonical-RAS exporter;
+that review is retained under a clearly rejected diagnostics directory. The
+existing BART result was re-exported without reconstruction, and the review
+code now rejects Wave NIfTIs lacking the corrected exporter sidecar contract.
+Visual approval of the corrected native/matched package is the gate before
+implementing quantitative sharpness and noise/contrast-proxy analysis.
 
 ## 10. Phase H: R1-to-R3 parameter transfer check
 
@@ -434,13 +447,15 @@ The NIfTI orientation correction and retrospective low-resolution code
 integration are complete. The latter uses the current BART-input/manifest
 contract, crop-first target-grid Wave synthesis, mandatory GPU BART
 reconstruction, norm restoration, resumable manifests, and the same canonical
-RAS exporter. Product configuration validation and the real source-operator
-gates pass. No accepted historical output was overwritten, and the large
-retrospective preparation/reconstruction remains for the user-run tmux job.
+RAS exporter. Product configuration validation, the real source-operator
+gates, and all three production reconstructions pass. The corrected
+native-grid and matched-1-mm visual review is generated and awaits user
+approval. No accepted historical output was overwritten.
 
-After that production run, the next implementation step is to remove
-hard-coded R3 geometry, dataset paths, and DICOM-only reference assumptions
-from the R1-facing orchestration.
+After visual approval, add the retrospective resolution tradeoff analysis;
+keep true SNR/CNR claims separate from single-image noise/contrast proxies.
+Then remove hard-coded R3 geometry, dataset paths, and DICOM-only reference
+assumptions from the R1-facing orchestration.
 Use GRAPPA as the temporary metric reference, apply BET only during metrics,
 and keep DICOM ranking as a configuration mode to enable on the new R1
 dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
@@ -458,8 +473,9 @@ work is:
 2. **Retrospective low resolution — code complete:** the imported tool consumes
    current BART manifests, crops only PE dimensions to four-multiple matrices,
    rebuilds the target PSF, runs BART on GPU, restores the target k-space norm,
-   and exports with the same orientation contract. Product preparation and
-   reconstruction are pending the tmux run.
+   and exports with the same orientation contract. Product preparation,
+   reconstruction, and manifested native/matched visual review are complete;
+   visual approval and quantitative resolution-tradeoff analysis remain.
 3. **Dataset portability:** replace fixed `256 x 256 x 256`, R3 sampling-line,
    subject, path, DICOM-count, and maximum-eigenvalue assumptions with values
    derived from a dataset manifest or sequence/TWIX metadata.
