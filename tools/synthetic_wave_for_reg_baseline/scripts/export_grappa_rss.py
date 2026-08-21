@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a compact RSS NIfTI from GRAPPA-completed multicoil k-space."""
+"""Export a compact RSS NIfTI from measured or completed multicoil k-space."""
 
 from __future__ import annotations
 

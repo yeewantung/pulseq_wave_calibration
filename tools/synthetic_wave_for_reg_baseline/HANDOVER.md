@@ -17,6 +17,20 @@ matched LLR lambda zero are `5.94330e-5`, `2.93558e-4`, and `1.45211e-3`.
 Both common-window reviews are reference-neutral: DICOM and BET do not
 participate. No GRAPPA or SENSE source reconstruction was used.
 
+The qualitative R1 receive-profile comparison is complete under
+`comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched
+SOS, Prescan-Normalize-off, unfiltered ND DICOM; series 9 is the SOS,
+Prescan-Normalize-on, unfiltered ND DICOM. Both were converted to canonical
+RAS and compared with direct FFT RSS of the fully sampled NCC=12 no-Wave
+k-space. The figure uses independent positive-voxel p99 display scaling and no
+registration, BET mask, or intensity ranking. Normalize-on shows the expected
+strong central brightening; normalize-off is visually closer to direct FFT
+RSS. The two DICOM affines match exactly. The FFT affine retains a documented
+0.500 mm center-convention offset in two axes and was not silently resampled.
+Series 13 is also unfiltered ND, SOS, and Normalize-on; it was converted and
+recorded separately because its protocol coil-combine mode differs from the
+matched series 9/11 comparison pair.
+
 The NIfTI orientation fix is complete. The shared Wave exporter now writes
 canonical RAS data with affine-axis flips `[true,false,true]`, matching the
 approved manual R3 correction exactly for both magnitude and phase. Its affine

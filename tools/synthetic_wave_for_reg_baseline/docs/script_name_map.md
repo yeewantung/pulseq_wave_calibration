@@ -29,7 +29,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/grappa_r3.py` | Retained diagnostic algorithm | Supports the useful 2D GRAPPA regression comparison and oracle tests. |
 | `scripts/wave_synthesis.py` | Canonical algorithm | Contains bounded-memory extended-readout and theoretical-PSF adapters. |
 | `scripts/sampling_mask.py` | Canonical support | Reconstructs and validates the authoritative product mask from inspection metadata. |
-| `scripts/export_grappa_rss.py` | Diagnostic/export | Produces compact RSS NIfTIs for visual kernel acceptance. |
+| `scripts/export_grappa_rss.py` | Diagnostic/export | Produces compact RSS NIfTIs from measured or GRAPPA-completed multicoil k-space. |
 | `scripts/prepare_no_wave_sense.py` | Retained diagnostic | Builds a measured-only alternative input for future GRAPPA/SENSE investigation. |
 | `scripts/run_no_wave_sense.py` | Retained diagnostic | Reproduces the SENSE/ESPIRiT anatomy-support comparison. |
 | `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
@@ -37,6 +37,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/run_llr_sweep.sh` | Canonical workflow | Gates split-complex lambda zero, then runs/resumes the compact block-8 LLR sweep and review. |
 | `scripts/review_regularization_sweep.py` | Canonical workflow | Builds a shared-window Wavelet or LLR review without DICOM or BET ranking. |
 | `scripts/validate_llr_lambda_zero.py` | Canonical workflow | Validates recombined split-complex LLR lambda zero against native-complex FISTA lambda zero. |
+| `scripts/prepare_r1_reference_comparison.py` | Qualitative reference audit | Audits and converts a matched SOS unfiltered DICOM pair, exports direct no-Wave FFT RSS, and creates a no-ranking comparison. |
 | `scripts/export_bart_wave_inputs_retrospective.py` | Acceleration-comparison workflow | Builds a validated PE1×PE2 retrospective mask from reusable full Wave data and exports a separate BART input tree. |
 | `scripts/prepare_regularization_evaluation.py` | Evaluation workflow | Consolidates complete reconstruction NIfTIs and converts one strictly selected unfiltered DICOM reference with hashes and provenance. |
 | `scripts/review_regularization_orientation.py` | Evaluation gate | Produces RAS-canonical, L/R-labeled no-registration comparisons and ranks signed-axis hypotheses without applying one. |

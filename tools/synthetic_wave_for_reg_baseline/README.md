@@ -109,6 +109,13 @@ lambda zero, then runs `2e-5`, `1e-4`, and `5e-4`. All reconstructions use
 GPU BART and the same approved crop-`0.6` maps. The output includes a
 DICOM-free common-window review and a manifest for each case.
 
+`scripts/prepare_r1_reference_comparison.py` audits and converts an exact
+matched unfiltered enhanced-DICOM pair, exports direct FFT RSS from fully
+sampled no-Wave multicoil k-space, and creates a qualitative side-by-side
+review. The review deliberately uses independent positive-voxel p99 display
+scaling and performs no registration, BET masking, intensity matching, or
+ranking. Pass `--resume` to hash-validate and reuse an already complete output.
+
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary
 optimization, it is not an untouched independent validation dataset.

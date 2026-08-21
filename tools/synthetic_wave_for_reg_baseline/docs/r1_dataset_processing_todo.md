@@ -74,24 +74,24 @@ separately and only after full Wave encoding.
 
 ## Coil compression and direct source
 
-- [ ] Estimate the coil basis from the fully sampled image stream in bounded
+- [x] Estimate the coil basis from the fully sampled image stream in bounded
   PE2 chunks, retaining the first 12 virtual coils.
-- [ ] Review cumulative covariance energy, basis orthogonality, finite probes,
+- [x] Review cumulative covariance energy, basis orthogonality, finite probes,
   and input/output dimensions before continuing.
-- [ ] Directly assemble `[RO, PE1, PE2, coil] = [256,256,256,12]` complex64
+- [x] Directly assemble `[RO, PE1, PE2, coil] = [256,256,256,12]` complex64
   k-space with the accepted basis. Apply no interpolation, GRAPPA, SENSE, or
   partial-Fourier completion.
-- [ ] Verify every source chunk is finite, the complete grid is nonzero, and
+- [x] Verify every source chunk is finite, the complete grid is nonzero, and
   restart provenance matches the TWIX identity and coil-basis hash.
-- [ ] Export a raw-derived no-Wave RSS quicklook for source/orientation QC only.
+- [x] Export a raw-derived no-Wave RSS quicklook for source/orientation QC only.
   It is not yet a regularization-ranking baseline.
 
 ## Synthetic Wave R3x2 preparation
 
-- [ ] Generate the theoretical PSF from the frozen sequence and Wave settings.
-- [ ] Wave-encode the complete 12-channel source before applying any sampling
+- [x] Generate the theoretical PSF from the frozen sequence and Wave settings.
+- [x] Wave-encode the complete 12-channel source before applying any sampling
   mask.
-- [ ] Review the full-Wave direct-IFFT magnitude and phase diagnostics.
+- [x] Review the full-Wave direct-IFFT magnitude and phase diagnostics.
 - [x] Apply the frozen R3x2 Cartesian lattice plus full-PE2 ACS band after Wave
   encoding.
 - [x] Verify acquired samples are bitwise identical to full Wave k-space and
@@ -134,6 +134,15 @@ separately and only after full Wave encoding.
   absence of other intensity filters, finite pixel data, and center-to-shell
   intensity behavior. Absence of the private `NormalizeAlgo:PreScan` string is
   necessary evidence but is not by itself approval for intensity ranking.
+- [x] Qualify a matched pair for qualitative receive-profile comparison only:
+  series 11 is SOS, Prescan Normalize off, unfiltered ND; series 9 is SOS,
+  Prescan Normalize on, unfiltered ND. Both contain 256 finite 256x256 frames,
+  share the acquisition, study, frame of reference, protocol, and protocol
+  coil-combine mode, and are converted to canonical RAS NIfTI. Series 10, 12,
+  and 14 contain `DIS2D`/`DIS3D` distortion-filter markers; series 13 is
+  unfiltered but has a different protocol coil-combine mode from series 11.
+  Series 13 is converted and recorded separately from the matched comparison.
+  This does not enable DICOM ranking.
 - [ ] Record the selected DICOM series UID and the decisive reconstruction
   metadata in the dataset manifest before changing
   `ranking_reference.kind` from `none` or enabling DICOM intensity ranking.
