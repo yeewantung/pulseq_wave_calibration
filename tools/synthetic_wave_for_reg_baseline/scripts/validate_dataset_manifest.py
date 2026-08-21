@@ -18,7 +18,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check-inputs",
         action="store_true",
-        help="Also require the TWIX, Wave sequence, and DICOM directory to exist.",
+        help="Also require the TWIX, Wave sequence, and enabled DICOM input to exist.",
     )
     return parser
 
@@ -30,8 +30,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         required = {
             "TWIX": (manifest.input_path("twix"), "file"),
             "Wave sequence": (manifest.input_path("wave_sequence"), "file"),
-            "DICOM directory": (manifest.dicom_directory, "directory"),
         }
+        if manifest.dicom_enabled:
+            required["DICOM directory"] = (manifest.dicom_directory, "directory")
         missing = [
             f"{label} not found: {path}"
             for label, (path, kind) in required.items()

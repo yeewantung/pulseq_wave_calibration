@@ -42,6 +42,7 @@ def valid_payload() -> dict:
             "source_reconstruction_prefix": "reconstructions/no_wave/source",
             "wave_synthesis_dir": "synthetic_wave/full_encoding",
             "bart_export_dir": "synthetic_wave/target_sampling",
+            "lambda0_reconstruction_dir": "reconstructions/synthetic_wave/lambda0",
         },
         "geometry": {
             "logical_axes": ["readout", "phase_encode_1", "phase_encode_2"],
@@ -68,6 +69,10 @@ def valid_payload() -> dict:
                 "use_gpu": True,
                 "calibration_source": "image",
                 "maximum_eigenvalue": None,
+                "ecalib_crop": 0.8,
+                "ecalib_intensity_correction": False,
+                "lambda0_iterations": 300,
+                "lambda0_tolerance": 1e-3,
             },
         },
         "wave_synthesis": {
@@ -127,6 +132,35 @@ class DatasetManifestTests(unittest.TestCase):
 
         payload["evaluation"]["dicom_intensity_ranking_enabled"] = True
         validate_dataset_manifest(payload)
+
+    def test_disabled_dicom_and_no_ranking_reference_are_valid(self) -> None:
+        payload = valid_payload()
+        payload["inputs"]["dicom"] = {
+            "enabled": False,
+            "directory": None,
+            "required_image_type_tokens": [],
+            "excluded_image_type_tokens": [],
+        }
+        payload["reconstruction"]["grappa"] = None
+        payload["evaluation"]["ranking_reference"] = {
+            "kind": "none",
+            "path": None,
+        }
+
+        validate_dataset_manifest(payload)
+
+    def test_disabled_dicom_rejects_dicom_ranking_and_tokens(self) -> None:
+        payload = valid_payload()
+        payload["inputs"]["dicom"]["enabled"] = False
+        payload["inputs"]["dicom"]["directory"] = None
+        payload["evaluation"]["ranking_reference"] = {"kind": "dicom"}
+        payload["evaluation"]["dicom_intensity_ranking_enabled"] = True
+
+        with self.assertRaises(DatasetManifestError) as context:
+            validate_dataset_manifest(payload)
+
+        self.assertIn("must be empty when DICOM is disabled", str(context.exception))
+        self.assertIn("DICOM ranking cannot be selected", str(context.exception))
 
     def test_rejects_even_grappa_kernel_and_fixed_nonpositive_eigenvalue(self) -> None:
         payload = copy.deepcopy(valid_payload())

@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_REFERENCE_KINDS = {"grappa", "dicom", "nifti"}
+_REFERENCE_KINDS = {"none", "grappa", "dicom", "nifti"}
 
 
 class DatasetManifestError(ValueError):
@@ -95,13 +95,21 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
     for field in ("twix", "wave_sequence"):
         _nonempty_string(inputs.get(field), f"inputs.{field}", errors)
     dicom = _mapping(inputs.get("dicom"), "inputs.dicom", errors)
-    _nonempty_string(dicom.get("directory"), "inputs.dicom.directory", errors)
+    dicom_enabled = dicom.get("enabled", True)
+    if not isinstance(dicom_enabled, bool):
+        errors.append("inputs.dicom.enabled must be boolean")
+    if dicom_enabled:
+        _nonempty_string(dicom.get("directory"), "inputs.dicom.directory", errors)
+    elif dicom.get("directory") is not None:
+        errors.append("inputs.dicom.directory must be null when DICOM is disabled")
     for field in ("required_image_type_tokens", "excluded_image_type_tokens"):
         tokens = dicom.get(field)
         if not isinstance(tokens, list) or not all(
             isinstance(token, str) and token for token in tokens
         ):
             errors.append(f"inputs.dicom.{field} must be a list of non-empty strings")
+        elif not dicom_enabled and tokens:
+            errors.append(f"inputs.dicom.{field} must be empty when DICOM is disabled")
 
     outputs = _mapping(payload.get("outputs"), "outputs", errors)
     relative_output_fields = (
@@ -122,6 +130,18 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
             errors.append(
                 f"outputs.{field} must be a relative path contained by outputs.root"
             )
+    optional_output_fields = ("lambda0_reconstruction_dir",)
+    for field in optional_output_fields:
+        value = outputs.get(field)
+        if value is None:
+            continue
+        _nonempty_string(value, f"outputs.{field}", errors)
+        if isinstance(value, str) and value:
+            output_path = Path(value)
+            if output_path.is_absolute() or ".." in output_path.parts:
+                errors.append(
+                    f"outputs.{field} must be a relative path contained by outputs.root"
+                )
 
     geometry = _mapping(payload.get("geometry"), "geometry", errors)
     axes = geometry.get("logical_axes")
@@ -224,15 +244,31 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
     ):
         errors.append("reconstruction.virtual_coils cannot exceed physical_coils")
 
-    grappa = _mapping(reconstruction.get("grappa"), "reconstruction.grappa", errors)
-    _vector(grappa.get("kernel"), "reconstruction.grappa.kernel", 3, errors, integer=True)
-    if isinstance(grappa.get("kernel"), list) and any(
-        _is_integer(value) and value % 2 == 0 for value in grappa["kernel"]
-    ):
-        errors.append("reconstruction.grappa.kernel values must be odd")
-    _positive_number(
-        grappa.get("regularization"), "reconstruction.grappa.regularization", errors
-    )
+    source_acceleration = sampling.get("source_acceleration_pe1_pe2")
+    grappa_value = reconstruction.get("grappa")
+    if grappa_value is None:
+        if source_acceleration != [1, 1]:
+            errors.append(
+                "reconstruction.grappa may be null only for a fully sampled source"
+            )
+    else:
+        grappa = _mapping(grappa_value, "reconstruction.grappa", errors)
+        _vector(
+            grappa.get("kernel"),
+            "reconstruction.grappa.kernel",
+            3,
+            errors,
+            integer=True,
+        )
+        if isinstance(grappa.get("kernel"), list) and any(
+            _is_integer(value) and value % 2 == 0 for value in grappa["kernel"]
+        ):
+            errors.append("reconstruction.grappa.kernel values must be odd")
+        _positive_number(
+            grappa.get("regularization"),
+            "reconstruction.grappa.regularization",
+            errors,
+        )
 
     bart = _mapping(reconstruction.get("bart"), "reconstruction.bart", errors)
     if bart.get("use_gpu") is not True:
@@ -246,6 +282,22 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
         _positive_number(
             maximum_eigenvalue, "reconstruction.bart.maximum_eigenvalue", errors
         )
+    crop = bart.get("ecalib_crop", 0.8)
+    _positive_number(crop, "reconstruction.bart.ecalib_crop", errors)
+    if isinstance(crop, (int, float)) and not isinstance(crop, bool) and crop > 1:
+        errors.append("reconstruction.bart.ecalib_crop must not exceed 1")
+    if not isinstance(bart.get("ecalib_intensity_correction", False), bool):
+        errors.append("reconstruction.bart.ecalib_intensity_correction must be boolean")
+    _positive_integer(
+        bart.get("lambda0_iterations", 300),
+        "reconstruction.bart.lambda0_iterations",
+        errors,
+    )
+    _positive_number(
+        bart.get("lambda0_tolerance", 1e-3),
+        "reconstruction.bart.lambda0_tolerance",
+        errors,
+    )
 
     wave = _mapping(payload.get("wave_synthesis"), "wave_synthesis", errors)
     _positive_integer(
@@ -299,6 +351,10 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
         )
     if reference_kind in {"grappa", "nifti"}:
         _nonempty_string(reference.get("path"), "evaluation.ranking_reference.path", errors)
+    elif reference_kind == "none" and reference.get("path") is not None:
+        errors.append("evaluation.ranking_reference.path must be null for kind 'none'")
+    if reference_kind == "dicom" and not dicom_enabled:
+        errors.append("DICOM ranking cannot be selected when DICOM is disabled")
     dicom_ranking = evaluation.get("dicom_intensity_ranking_enabled")
     if not isinstance(dicom_ranking, bool):
         errors.append("evaluation.dicom_intensity_ranking_enabled must be boolean")
@@ -356,7 +412,13 @@ class DatasetManifest:
         return self._manifest_relative_path(str(self.payload["inputs"][field]))
 
     @property
-    def dicom_directory(self) -> Path:
+    def dicom_enabled(self) -> bool:
+        return bool(self.payload["inputs"]["dicom"].get("enabled", True))
+
+    @property
+    def dicom_directory(self) -> Path | None:
+        if not self.dicom_enabled:
+            return None
         return self._manifest_relative_path(
             str(self.payload["inputs"]["dicom"]["directory"])
         )
@@ -379,7 +441,8 @@ class DatasetManifest:
         resolved = copy.deepcopy(dict(self.payload))
         resolved["inputs"]["twix"] = str(self.input_path("twix"))
         resolved["inputs"]["wave_sequence"] = str(self.input_path("wave_sequence"))
-        resolved["inputs"]["dicom"]["directory"] = str(self.dicom_directory)
+        if self.dicom_enabled:
+            resolved["inputs"]["dicom"]["directory"] = str(self.dicom_directory)
         resolved["outputs"]["root"] = str(self.output_root)
         for field in (
             "inspection_report",
@@ -389,6 +452,10 @@ class DatasetManifest:
             "bart_export_dir",
         ):
             resolved["outputs"][field] = str(self.output_path(field))
+        if "lambda0_reconstruction_dir" in resolved["outputs"]:
+            resolved["outputs"]["lambda0_reconstruction_dir"] = str(
+                self.output_path("lambda0_reconstruction_dir")
+            )
         for container in (
             resolved["evaluation"].get("ranking_reference", {}),
             resolved["evaluation"].get("brain_mask", {}),

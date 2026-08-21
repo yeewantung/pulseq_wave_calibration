@@ -148,6 +148,7 @@ class ManifestInspectionTests(unittest.TestCase):
                 "source_reconstruction_prefix": "reconstructions/no_wave/source",
                 "wave_synthesis_dir": "synthetic_wave/full_encoding",
                 "bart_export_dir": "synthetic_wave/target_sampling",
+                "lambda0_reconstruction_dir": "reconstructions/synthetic_wave/lambda0",
             }
             (root / "dataset.json").write_text(json.dumps(payload), encoding="utf-8")
             twix, dicom, report, manifest = resolve_inspection_paths(args)
@@ -155,6 +156,78 @@ class ManifestInspectionTests(unittest.TestCase):
             self.assertEqual(dicom, root / "inputs" / "dicom")
             self.assertEqual(report, root / "outputs" / "metadata" / "report.json")
             self.assertIsNotNone(manifest)
+
+    def test_disabled_dicom_resolves_none_and_skips_series_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            example = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "incoming_r1_dataset.example.json"
+            )
+            payload = json.loads(example.read_text(encoding="utf-8"))
+            payload["inputs"]["dicom"] = {
+                "enabled": False,
+                "directory": None,
+                "required_image_type_tokens": [],
+                "excluded_image_type_tokens": [],
+            }
+            payload["evaluation"]["ranking_reference"] = {
+                "kind": "none",
+                "path": None,
+            }
+            manifest_path = root / "dataset.json"
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            args = Namespace(
+                dataset_manifest=manifest_path,
+                twix=None,
+                dicom_dir=None,
+                output=None,
+            )
+
+            _, dicom, _, manifest = resolve_inspection_paths(args)
+
+            self.assertIsNone(dicom)
+            self.assertIsNotNone(manifest)
+            assert manifest is not None
+            twix = {
+                "selected_measurement_index": 0,
+                "measurements": [
+                    {
+                        "header": {
+                            "base_resolution": 256,
+                            "acceleration_pe1": 1,
+                            "acceleration_pe2": 1,
+                        },
+                        "streams": {
+                            "image": {
+                                "coil_count": 64,
+                                "readout_oversampling_factor": 2.0,
+                                "acquired_readout_samples": 512,
+                                "output_readout_samples_after_remove_os": 256,
+                                "center_column": {"unique_values": [256]},
+                            }
+                        },
+                    }
+                ],
+                "selected_measurement_sampling": {
+                    "matrix_pe1": 256,
+                    "matrix_pe2": 256,
+                    "image_unique_coordinate_count": 256 * 256,
+                    "image_duplicate_coordinate_count": 0,
+                    "image_inferred_pe1_stride": 1,
+                    "out_of_range_coordinates": [],
+                    "refscan_unique_pe1_lines": [],
+                    "refscan_unique_pe2_partitions": [],
+                },
+            }
+            result = compare_report_to_manifest(
+                manifest,
+                twix,
+                {"enabled": False, "series": []},
+            )
+            self.assertTrue(result["all_passed"])
+            self.assertEqual(result["checks"][-1]["name"], "dicom_inspection")
 
     def test_report_checks_matrix_sampling_coils_and_dicom_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -22,6 +24,12 @@ from bart_cfl import (
     sha256_file,
     validate_finite_bart,
 )
+from checkpoint_io import write_json_atomic
+from dataset_manifest import (
+    DatasetManifestError,
+    load_dataset_manifest,
+    load_passed_inspection,
+)
 
 
 AXIS_ROLES = ("phase", "readout", "slice")
@@ -32,8 +40,13 @@ AFFINE_AXIS_FLIPS = (True, False, True)
 def _build_parser() -> argparse.ArgumentParser:
     """Build the unregularized BART acceptance-run command interface."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bart", required=True, type=Path)
-    parser.add_argument("--bart-input-dir", required=True, type=Path)
+    parser.add_argument(
+        "--dataset-manifest",
+        type=Path,
+        help="Use the validated dataset contract for all inputs, outputs, and settings.",
+    )
+    parser.add_argument("--bart", type=Path)
+    parser.add_argument("--bart-input-dir", type=Path)
     parser.add_argument(
         "--calibration-base",
         type=Path,
@@ -42,19 +55,25 @@ def _build_parser() -> argparse.ArgumentParser:
             "<bart-input-dir>/kspace_calib."
         ),
     )
-    parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--twix", required=True, type=Path)
-    parser.add_argument("--sequence", required=True, type=Path)
-    parser.add_argument("--measurement-index", type=int, default=1)
-    parser.add_argument("--subject", default="20260817product")
-    parser.add_argument("--ecalib-crop", type=float, default=0.8)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--twix", type=Path)
+    parser.add_argument("--sequence", type=Path)
+    parser.add_argument("--measurement-index", type=int)
+    parser.add_argument("--subject")
+    parser.add_argument("--ecalib-crop", type=float)
     parser.add_argument(
         "--ecalib-intensity-correction",
         action="store_true",
+        default=None,
         help="Pass -I to BART ecalib for adaptive-combine-like map normalization.",
     )
-    parser.add_argument("--cg-iterations", type=int, default=300)
-    parser.add_argument("--cg-tolerance", type=float, default=1e-3)
+    parser.add_argument("--cg-iterations", type=int)
+    parser.add_argument("--cg-tolerance", type=float)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse only a complete manifest-backed reconstruction with intact hashes.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser
 
@@ -144,10 +163,18 @@ def _save_map_montages(maps_base: Path, output_dir: Path) -> list[str]:
     logical = maps.reshape((*maps.shape[:5], -1), order="F")
     if logical.shape[4] != 1 or logical.shape[5] != 1:
         raise ValueError("Map diagnostics require one ESPIRiT map set and trailing singleton axes.")
+    coil_count = int(logical.shape[3])
+    columns = min(4, coil_count)
+    rows = math.ceil(coil_count / columns)
     outputs = []
     for part in ("mag", "phase"):
-        figure, axes = plt.subplots(3, 4, figsize=(13, 10), squeeze=False)
+        figure, axes = plt.subplots(
+            rows, columns, figsize=(3.25 * columns, 3.1 * rows), squeeze=False
+        )
         for coil, axis in enumerate(axes.ravel()):
+            if coil >= coil_count:
+                axis.axis("off")
+                continue
             plane = np.asarray(logical[:, :, logical.shape[2] // 2, coil, 0, 0])
             data = np.abs(plane) if part == "mag" else np.angle(plane)
             kwargs = {"cmap": "gray"} if part == "mag" else {
@@ -176,6 +203,8 @@ def _convert_nifti(
     sequence: Path,
     measurement_index: int,
     subject: str,
+    matrix_rolinpar: tuple[int, int, int],
+    fov_mm_rolinpar: tuple[float, float, float],
 ) -> dict[str, Any]:
     """Convert logical BART output using the upstream TWIX orientation convention."""
     import nibabel as nib
@@ -193,8 +222,10 @@ def _convert_nifti(
 
     image = open_bart_memmap(image_base)
     logical = np.asarray(image).reshape(image.shape[:3], order="F")
-    if logical.shape != (256, 256, 256):
-        raise ValueError(f"Expected logical BART image [256,256,256], got {logical.shape}.")
+    if logical.shape != matrix_rolinpar:
+        raise ValueError(
+            f"Expected logical BART image {matrix_rolinpar}, got {logical.shape}."
+        )
 
     input_manifest = json.loads((bart_input_dir / "manifest.json").read_text(encoding="utf-8"))
     kspace_norm = float(input_manifest["masked_wave_kspace"]["norm"])
@@ -211,8 +242,11 @@ def _convert_nifti(
         seq.read(str(sequence), remove_duplicates=False)
     definitions = seq.definitions
     fov_mm = np.asarray(definitions["FOV"], dtype=float) * 1000.0
-    if not np.allclose(fov_mm, [256.0, 256.0, 256.0], atol=1e-3):
-        raise ValueError(f"Unexpected sequence FOV for logical output: {fov_mm.tolist()} mm.")
+    if not np.allclose(fov_mm, fov_mm_rolinpar, atol=1e-3):
+        raise ValueError(
+            "Sequence and dataset-contract FOV disagree: "
+            f"{fov_mm.tolist()} versus {list(fov_mm_rolinpar)} mm."
+        )
     voxel_size_mm = tuple(float(value) for value in fov_mm / np.asarray(logical.shape))
     affine, _, twix_info = make_nifti_affine_from_twix(
         twix_file=twix,
@@ -245,7 +279,9 @@ def _convert_nifti(
         "BARTOutputAlreadyReadoutDeoversampled": True,
         "SequenceReadoutOversamplingFactor": int(definitions["ReadoutOversamplingFactor"]),
         "AdditionalReadoutCropApplied": False,
-        "ReadoutCropReason": "bart wave output is already on the 256-sample sensitivity-map grid",
+        "ReadoutCropReason": (
+            "bart wave output is already on the logical sensitivity-map grid"
+        ),
         "SourceTwix": str(twix),
         "SourceSequence": str(sequence),
         "NIfTITwixArrayAxisRoles": list(AXIS_ROLES),
@@ -272,7 +308,15 @@ def _convert_nifti(
         saved = nib.load(str(nii_path))
         if saved.shape != logical.shape or not np.isfinite(np.asanyarray(saved.dataobj)).all():
             raise ValueError(f"Saved NIfTI validation failed: {nii_path}")
-        outputs.append({"part": part, "nifti": str(nii_path), "json": str(json_path)})
+        outputs.append(
+            {
+                "part": part,
+                "nifti": str(nii_path),
+                "nifti_sha256": sha256_file(nii_path),
+                "json": str(json_path),
+                "json_sha256": sha256_file(json_path),
+            }
+        )
 
     import matplotlib.pyplot as plt
 
@@ -294,7 +338,7 @@ def _convert_nifti(
     plt.close(figure)
     return {
         "outputs": outputs,
-        "voxel_size_mm": list(affine_voxel_size),
+        "voxel_size_mm": [float(value) for value in stored_voxel_size_mm],
         "central_slice_quicklook": str(quicklook),
     }
 
@@ -314,18 +358,147 @@ def _extract_bart_times(log_path: Path) -> dict[str, float]:
     return result
 
 
+def _completed_reconstruction_reusable(
+    manifest_path: Path,
+    *,
+    dataset_sha256: str,
+    bart_input_manifest_sha256: str,
+) -> bool:
+    """Accept reuse only when upstream provenance and persisted outputs still match."""
+    if not manifest_path.is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("status") != "lambda0_complete_awaiting_visual_review":
+            return False
+        if manifest.get("dataset_manifest", {}).get("sha256") != dataset_sha256:
+            return False
+        if manifest.get("bart_input_manifest", {}).get(
+            "sha256"
+        ) != bart_input_manifest_sha256:
+            return False
+        for record in manifest["nifti"]["outputs"]:
+            if sha256_file(Path(record["nifti"])) != record["nifti_sha256"]:
+                return False
+            if sha256_file(Path(record["json"])) != record["json_sha256"]:
+                return False
+        for section in ("ecalib", "wave_lambda0"):
+            base = Path(manifest[section]["output_base"])
+            if sha256_file(base.with_suffix(".cfl")) != manifest[section][
+                "output_cfl_sha256"
+            ]:
+                return False
+        return True
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
+    """Resolve either a manifest-backed run or the compatible explicit interface."""
+    explicit = (
+        args.bart,
+        args.bart_input_dir,
+        args.calibration_base,
+        args.output_dir,
+        args.twix,
+        args.sequence,
+        args.measurement_index,
+        args.subject,
+        args.ecalib_crop,
+        args.ecalib_intensity_correction,
+        args.cg_iterations,
+        args.cg_tolerance,
+    )
+    if args.dataset_manifest is not None:
+        if any(value is not None for value in explicit) or args.overwrite:
+            raise ValueError(
+                "--dataset-manifest cannot be combined with explicit reconstruction "
+                "options or --overwrite"
+            )
+        dataset = load_dataset_manifest(args.dataset_manifest)
+        inspection = load_passed_inspection(dataset)
+        bart_command = shutil.which("bart")
+        if bart_command is None:
+            raise FileNotFoundError(
+                "bart is not on PATH; source /path/to/user_workspace/bart/bart_startup.sh first"
+            )
+        bart_settings = dataset.payload["reconstruction"]["bart"]
+        if "lambda0_reconstruction_dir" not in dataset.payload["outputs"]:
+            raise ValueError(
+                "Manifest-backed lambda zero requires "
+                "outputs.lambda0_reconstruction_dir"
+            )
+        return {
+            "dataset": dataset,
+            "bart": Path(bart_command).resolve(),
+            "bart_input": dataset.output_path("bart_export_dir") / "bart_inputs",
+            "calibration_base": None,
+            "output_dir": dataset.output_path("lambda0_reconstruction_dir"),
+            "twix": dataset.input_path("twix"),
+            "sequence": dataset.input_path("wave_sequence"),
+            "measurement_index": int(inspection["twix"]["selected_measurement_index"]),
+            "subject": dataset.subject,
+            "crop": float(bart_settings.get("ecalib_crop", 0.8)),
+            "intensity_correction": bool(
+                bart_settings.get("ecalib_intensity_correction", False)
+            ),
+            "iterations": int(bart_settings.get("lambda0_iterations", 300)),
+            "tolerance": float(bart_settings.get("lambda0_tolerance", 1e-3)),
+            "matrix": tuple(int(value) for value in dataset.payload["geometry"]["matrix"]),
+            "fov_mm": tuple(float(value) for value in dataset.payload["geometry"]["fov_mm"]),
+            "virtual_coils": int(dataset.payload["reconstruction"]["virtual_coils"]),
+        }
+
+    required = {
+        "--bart": args.bart,
+        "--bart-input-dir": args.bart_input_dir,
+        "--output-dir": args.output_dir,
+        "--twix": args.twix,
+        "--sequence": args.sequence,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise ValueError(
+            "Use --dataset-manifest, or provide " + ", ".join(missing)
+        )
+    if args.resume:
+        raise ValueError("--resume requires --dataset-manifest")
+    return {
+        "dataset": None,
+        "bart": args.bart.expanduser().resolve(),
+        "bart_input": args.bart_input_dir.expanduser().resolve(),
+        "calibration_base": args.calibration_base,
+        "output_dir": args.output_dir.expanduser().resolve(),
+        "twix": args.twix.expanduser().resolve(),
+        "sequence": args.sequence.expanduser().resolve(),
+        "measurement_index": 1 if args.measurement_index is None else args.measurement_index,
+        "subject": "20260817product" if args.subject is None else args.subject,
+        "crop": 0.8 if args.ecalib_crop is None else args.ecalib_crop,
+        "intensity_correction": bool(args.ecalib_intensity_correction),
+        "iterations": 300 if args.cg_iterations is None else args.cg_iterations,
+        "tolerance": 1e-3 if args.cg_tolerance is None else args.cg_tolerance,
+        "matrix": (256, 256, 256),
+        "fov_mm": (256.0, 256.0, 256.0),
+        "virtual_coils": 12,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Calibrate ESPIRiT maps, run lambda-zero Wave CG, and export review files."""
-    bart = args.bart.expanduser().resolve()
-    bart_input = args.bart_input_dir.expanduser().resolve()
+    resolved = _resolve_run(args)
+    dataset = resolved["dataset"]
+    bart = resolved["bart"]
+    bart_input = resolved["bart_input"]
     calibration_base = bart_base(
-        args.calibration_base.expanduser().resolve()
-        if args.calibration_base is not None
+        resolved["calibration_base"].expanduser().resolve()
+        if resolved["calibration_base"] is not None
         else bart_input / "kspace_calib"
     )
-    output_dir = args.output_dir.expanduser().resolve()
-    twix = args.twix.expanduser().resolve()
-    sequence = args.sequence.expanduser().resolve()
+    output_dir = resolved["output_dir"]
+    twix = resolved["twix"]
+    sequence = resolved["sequence"]
+    matrix = resolved["matrix"]
+    ncc = resolved["virtual_coils"]
     for path in (bart, twix, sequence):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -334,6 +507,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             path = base.with_suffix(suffix)
             if not path.is_file():
                 raise FileNotFoundError(path)
+    bart_input_manifest_path = bart_input / "manifest.json"
+    if not bart_input_manifest_path.is_file():
+        raise FileNotFoundError(bart_input_manifest_path)
+    bart_input_manifest = json.loads(
+        bart_input_manifest_path.read_text(encoding="utf-8")
+    )
+    if bart_input_manifest.get("status") != "calibration_kspace_ready_for_ecalib":
+        raise ValueError("Measured ACS is not ready for BART ecalib.")
+    if dataset is not None and bart_input_manifest.get("dataset_manifest", {}).get(
+        "sha256"
+    ) != dataset.sha256:
+        raise ValueError("BART inputs use a stale dataset manifest.")
+    bart_input_manifest_sha256 = sha256_file(bart_input_manifest_path)
+    manifest_path = output_dir / "manifest.json"
+    if (
+        dataset is not None
+        and args.resume
+        and _completed_reconstruction_reusable(
+            manifest_path,
+            dataset_sha256=dataset.sha256,
+            bart_input_manifest_sha256=bart_input_manifest_sha256,
+        )
+    ):
+        print(f"Reusing validated lambda-zero reconstruction: {output_dir}")
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
     if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -350,20 +548,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             calibration_base,
             maps_base,
             eigenvalues_base,
-            crop=args.ecalib_crop,
-            intensity_correction=args.ecalib_intensity_correction,
+            crop=resolved["crop"],
+            intensity_correction=resolved["intensity_correction"],
         ),
         output_dir / "ecalib.log",
     )
-    ecalib["output"] = validate_finite_bart(maps_base, (256, 256, 256, 12, 1))
+    ecalib["output"] = validate_finite_bart(maps_base, (*matrix, ncc, 1))
+    ecalib["output_base"] = str(maps_base)
     ecalib["output_cfl_sha256"] = sha256_file(maps_base.with_suffix(".cfl"))
     ecalib["eigenvalue_output"] = validate_finite_bart(
-        eigenvalues_base, (256, 256, 256, 1, 1)
+        eigenvalues_base, (*matrix, 1, 1)
     )
     ecalib["eigenvalue_cfl_sha256"] = sha256_file(
         eigenvalues_base.with_suffix(".cfl")
     )
-    ecalib["intensity_correction"] = args.ecalib_intensity_correction
+    ecalib["intensity_correction"] = resolved["intensity_correction"]
     ecalib["input_base"] = str(calibration_base)
     ecalib["diagnostic_montages"] = _save_map_montages(maps_base, output_dir)
 
@@ -375,8 +574,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             bart_input / "psf",
             bart_input / "wave_kspace",
             image_base,
-            iterations=args.cg_iterations,
-            tolerance=args.cg_tolerance,
+            iterations=resolved["iterations"],
+            tolerance=resolved["tolerance"],
         ),
         output_dir / "wave_lambda0.log",
     )
@@ -384,7 +583,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     wave["algorithm"] = "conjugate gradient selected by bart wave without -w or -l"
     wave["backend"] = "gpu"
     wave["lambda"] = 0.0
-    wave["output"] = validate_finite_bart(image_base, (256, 256, 256, 1, 1))
+    wave["output"] = validate_finite_bart(image_base, (*matrix, 1, 1))
+    wave["output_base"] = str(image_base)
     wave["output_cfl_sha256"] = sha256_file(image_base.with_suffix(".cfl"))
 
     nifti_started = time.perf_counter()
@@ -394,8 +594,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         output_dir=output_dir,
         twix=twix,
         sequence=sequence,
-        measurement_index=args.measurement_index,
-        subject=args.subject,
+        measurement_index=resolved["measurement_index"],
+        subject=resolved["subject"],
+        matrix_rolinpar=matrix,
+        fov_mm_rolinpar=resolved["fov_mm"],
     )
     nifti["conversion_wall_seconds"] = time.perf_counter() - nifti_started
 
@@ -405,13 +607,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "bart_executable": str(bart),
         "bart_version_output": bart_version_output,
         "bart_input_dir": str(bart_input),
+        "bart_input_manifest": {
+            "path": str(bart_input_manifest_path),
+            "sha256": bart_input_manifest_sha256,
+        },
+        "dataset_manifest": dataset.provenance() if dataset is not None else None,
+        "config": {
+            "matrix_rolinpar": list(matrix),
+            "fov_mm_rolinpar": list(resolved["fov_mm"]),
+            "virtual_coils": ncc,
+            "ecalib_crop": resolved["crop"],
+            "ecalib_intensity_correction": resolved["intensity_correction"],
+            "lambda0_iterations": resolved["iterations"],
+            "lambda0_tolerance": resolved["tolerance"],
+            "gpu_wave_reconstruction": True,
+        },
         "ecalib": ecalib,
         "wave_lambda0": wave,
         "nifti": nifti,
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
     }
-    manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    if sha256_file(bart_input_manifest_path) != bart_input_manifest_sha256:
+        raise ValueError("BART input manifest changed during reconstruction.")
+    write_json_atomic(manifest_path, manifest)
     print(f"Run manifest: {manifest_path}")
     return manifest
 

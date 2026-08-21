@@ -70,7 +70,7 @@ INTEGER_DICOM_FIELDS = {
 def _build_parser() -> argparse.ArgumentParser:
     """Build the metadata-inspection command interface."""
     parser = argparse.ArgumentParser(
-        description="Create a metadata-only report for TWIX and DICOM inputs."
+        description="Create a metadata-only report for TWIX and optional DICOM inputs."
     )
     parser.add_argument(
         "--dataset-manifest",
@@ -92,7 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def resolve_inspection_paths(
     args: argparse.Namespace,
-) -> tuple[Path, Path, Path, DatasetManifest | None]:
+) -> tuple[Path, Path | None, Path, DatasetManifest | None]:
     """Resolve either one authoritative manifest or the legacy explicit paths."""
     explicit = (args.twix, args.dicom_dir, args.output)
     if args.dataset_manifest is not None:
@@ -646,6 +646,14 @@ def compare_report_to_manifest(
         add_check("acs_support_pe1_pe2", expected_acs, observed_acs, observed_acs == expected_acs)
 
     dicom_contract = contract["inputs"]["dicom"]
+    if dicom_contract.get("enabled", True) is False:
+        add_check("dicom_inspection", "disabled", "disabled", True)
+        failed = [check["name"] for check in checks if not check["passed"]]
+        return {
+            "all_passed": not failed,
+            "failed_checks": failed,
+            "checks": checks,
+        }
     required_tokens = set(dicom_contract["required_image_type_tokens"])
     excluded_tokens = set(dicom_contract["excluded_image_type_tokens"])
     matching_uids: list[str] = []
@@ -697,7 +705,14 @@ def _print_summary(report: Mapping[str, Any]) -> None:
         f"{sampling['image_inferred_pe1_stride']} / "
         f"{sampling['image_pe1_residues_for_inferred_stride']}"
     )
-    print(f"DICOM series: {report['dicom']['series_count']}; unfiltered baseline indices: {report['dicom']['unfiltered_baseline_series_indices']}")
+    if report["dicom"].get("enabled", True):
+        print(
+            f"DICOM series: {report['dicom']['series_count']}; "
+            "unfiltered baseline indices: "
+            f"{report['dicom']['unfiltered_baseline_series_indices']}"
+        )
+    else:
+        print("DICOM inspection: disabled by dataset manifest")
     if "contract_checks" in report:
         checks = report["contract_checks"]
         print(
@@ -717,11 +732,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     twix_path, dicom_path, output_path, manifest = resolve_inspection_paths(args)
     if not twix_path.is_file():
         raise FileNotFoundError(f"TWIX file not found: {twix_path}")
-    if not dicom_path.is_dir():
+    if dicom_path is not None and not dicom_path.is_dir():
         raise NotADirectoryError(f"DICOM directory not found: {dicom_path}")
 
     twix_report = inspect_twix(twix_path, probe_samples=args.probe_samples)
-    dicom_report = inspect_dicom_directory(dicom_path)
+    dicom_report = (
+        inspect_dicom_directory(dicom_path)
+        if dicom_path is not None
+        else {
+            "enabled": False,
+            "reason": "disabled by dataset manifest",
+            "series_count": 0,
+            "series": [],
+            "unfiltered_baseline_series_indices": [],
+        }
+    )
     report: dict[str, Any] = {
         "format_version": 1,
         "pipeline_step": "data and mask verification",

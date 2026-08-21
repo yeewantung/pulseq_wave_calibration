@@ -23,6 +23,8 @@ discoverable:
   source-reconstruction entry point.
 - `outputs.wave_synthesis_dir` contains the reusable, unmasked full-Wave data;
 - `outputs.bart_export_dir` contains the separately masked target BART inputs.
+- `outputs.lambda0_reconstruction_dir` contains the unregularized BART Wave
+  acceptance reconstruction and its NIfTI review files.
 
 ## Scientific fields
 
@@ -43,13 +45,16 @@ discoverable:
   `bart.calibration_source` separately selects measured `image` or `refscan`
   data for ESPIRiT calibration; there is no automatic fallback. `bart.use_gpu`
   must remain `true`; a null maximum eigenvalue means it will be measured for
-  the dataset rather than copied from the R3 experiment.
+  the dataset rather than copied from the R3 experiment. The ESPIRiT crop,
+  optional `-I` setting, and lambda-zero iteration/tolerance are explicit.
 - `wave_synthesis` records the extended readout allocation, trajectory
   calibration dimensions, orientation/sign convention, and diagnostic coils.
-- `evaluation.ranking_reference` can be `grappa`, `nifti`, or `dicom`. The
-  separate DICOM-ranking flag must agree with that choice. Keep it disabled and
-  use GRAPPA during current development; change the manifest after the incoming
-  dataset and its DICOM processing have passed qualification.
+- `inputs.dicom.enabled: false` makes the DICOM directory null, disables its
+  metadata gate, and requires empty image-type token lists.
+- `evaluation.ranking_reference` can be `none`, `grappa`, `nifti`, or `dicom`.
+  The separate DICOM-ranking flag must agree with that choice. The current R1
+  contract uses `none` because Prescan Normalize contaminated its DICOM
+  intensity profile.
 - `evaluation.brain_mask.usage` is fixed to `metrics_only`. A mask is never an
   input to reconstruction or ordinary image display.
 
@@ -123,10 +128,9 @@ before reconstruction for an R1 manifest. Conversely, direct assembly requires
 R1 and cannot accept accelerated source data. The two paths intentionally write
 the same downstream k-space layout.
 
-Coil compression refuses an existing basis/report prefix. GRAPPA likewise
-refuses existing checkpoints or results unless `--resume` is explicit, so a
-new dataset contract cannot overwrite an accepted run accidentally. Direct R1
-assembly has the same overwrite protection.
+Coil compression, GRAPPA, and direct R1 assembly refuse unrelated existing
+results. Their manifest routes support conservative `--resume` reuse bound to
+the current contract and persisted provenance.
 
 ## Wave synthesis and target-mask export
 
@@ -181,3 +185,25 @@ Both branches write `kspace_calib.hdr/.cfl` into the configured target
 outside its support, and attach calibration provenance to the existing BART
 input manifest. Completed reuse is bound to the dataset, target-export
 manifest, source identity, mask support, shape, and complete CFL hash.
+
+## Tmux-friendly R1 execution
+
+The small wrapper keeps long preparation separate from the visual-review gate.
+On Macha, run:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh prepare
+```
+
+After reviewing the full-Wave diagnostics, continue in tmux with:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
+    reconstruct \
+    /path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2/dataset_manifest.json \
+    --confirm-full-wave-reviewed
+```
+
+The reconstruction branch sources the host BART setup and calls the
+manifest-aware lambda-zero runner. Every `bart wave` reconstruction includes
+`-g`; `ecalib -I` remains disabled in the current contract.

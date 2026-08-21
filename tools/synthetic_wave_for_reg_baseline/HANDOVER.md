@@ -7,11 +7,11 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Use no-wave GRAPPA as the single temporary metric reference. Do not add a
-GRAPPA-versus-SENSE comparison gate, and defer the no-wave BART PICS branch.
-Apply the approved BET mask only while calculating metrics. Keep DICOM
-intensity ranking disabled for this R3 development dataset, with a
-configuration switch to enable it after the new R1 dataset is qualified.
+Run the new MID00198 R1 preparation in tmux, then inspect the unmasked
+full-Wave diagnostics before approving the separate R3x2 mask and lambda-zero
+reconstruction. DICOM is explicitly disabled as a reference because Prescan
+Normalize was enabled. No GRAPPA or SENSE source reconstruction is used for
+this fully sampled dataset.
 
 The NIfTI orientation fix is complete. The shared Wave exporter now writes
 canonical RAS data with affine-axis flips `[true,false,true]`, matching the
@@ -47,8 +47,8 @@ sample, and leaves the accepted synthesis untouched. Measured ACS export is
 now manifest-aware as well. The incoming R1 route copies the declared ACS
 support from validated, compressed, fully sampled image k-space without
 interpolation or repeated compression; the compatible refscan route remains
-available. The new R1 acquisition is now ready, so its read-only identification
-and measured qualification come before manifest-aware lambda-zero work.
+available. The new R1 acquisition is ready, its manifest-backed metadata
+inspection and sample probe pass, and the lambda-zero runner is manifest-aware.
 Remaining consumers are listed in `docs/dataset_portability_audit.md`.
 
 The new R1 dataset is under
@@ -57,10 +57,10 @@ selects MID00198 `t1_mprage_sag_p2.dat` as the actual fully sampled source:
 256 cubed logical matrix, 64 coils, complete duplicate-free PE support, and no
 refscan. MID00196 `pulseq151fix_mprage.dat` is measured R3x1 and must not enter
 the direct R1 path. Prescan Normalize was enabled for the available DICOM, so
-do not use DICOM intensities as baseline or ranking input. Follow
-`docs/r1_dataset_processing_todo.md`: first add an explicit no-reference/
-disabled-DICOM contract mode, then create and inspect the concrete manifest
-before generating large outputs. The intended source path is image-derived
+do not use DICOM intensities as baseline or ranking input. The concrete
+manifest and passed inspection live under
+`20260821_product_synthetic_wave_r1_ncc12_r3x2`; follow
+`docs/r1_dataset_processing_todo.md`. The intended source path is image-derived
 64-to-12 coil compression, direct k-space assembly, full Wave encoding, a
 separate R3x2 target mask, and image-derived measured ACS.
 

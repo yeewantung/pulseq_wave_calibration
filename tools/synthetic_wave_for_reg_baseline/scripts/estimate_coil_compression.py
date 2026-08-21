@@ -71,7 +71,39 @@ def _build_parser() -> argparse.ArgumentParser:
         default=4,
         help="Readout stride used for covariance estimation, matching the reference utility.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Reuse only an intact basis produced from the current dataset manifest.",
+    )
     return parser
+
+
+def _completed_basis_reusable(
+    npz_path: Path,
+    report_path: Path,
+    *,
+    dataset_sha256: str,
+    physical_coils: int,
+    virtual_coils: int,
+) -> bool:
+    """Validate a completed manifest-backed coil basis before reusing it."""
+    if not npz_path.is_file() or not report_path.is_file():
+        return False
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        with np.load(npz_path) as archive:
+            basis = np.asarray(archive["basis"])
+        return (
+            report.get("dataset_manifest", {}).get("sha256") == dataset_sha256
+            and report.get("matrix_file_sha256") == sha256_file(npz_path)
+            and Path(report["matrix_file"]).resolve() == npz_path.resolve()
+            and int(report["physical_coil_count"]) == physical_coils
+            and basis.shape == (physical_coils, virtual_coils)
+            and np.isfinite(basis).all()
+        )
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 def resolve_coil_compression_inputs(
@@ -398,6 +430,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     json_path = output_prefix.with_suffix(".json")
     existing = [path for path in (npz_path, json_path) if path.exists()]
     if existing:
+        if (
+            args.resume
+            and manifest is not None
+            and _completed_basis_reusable(
+                npz_path,
+                json_path,
+                dataset_sha256=manifest.sha256,
+                physical_coils=int(expected_coils),
+                virtual_coils=max(ncc_values),
+            )
+        ):
+            print(f"Reusing validated coil-compression basis: {npz_path}")
+            return 0
         raise FileExistsError(
             "Coil-compression outputs already exist; choose a new output prefix: "
             + ", ".join(str(path) for path in existing)
@@ -414,6 +459,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
     np.savez(npz_path, **arrays)
     report["matrix_file"] = str(npz_path)
+    report["matrix_file_sha256"] = sha256_file(npz_path)
     report["report_file"] = str(json_path)
     if manifest is not None:
         report["dataset_manifest"] = manifest.provenance()

@@ -56,20 +56,20 @@ separately and only after full Wave encoding.
 
 ## Before large output generation
 
-- [ ] Extend the dataset contract to support `ranking_reference.kind: none`
+- [x] Extend the dataset contract to support `ranking_reference.kind: none`
   and disabled DICOM inspection/ranking. Do not insert a placeholder DICOM or
   GRAPPA reference merely to satisfy the schema.
-- [ ] Create a concrete dataset manifest for MID00198 with a descriptive output
+- [x] Create a concrete dataset manifest for MID00198 with a descriptive output
   root outside the repository, such as `synthetic_wave_r1_ncc12_r3x2`.
-- [ ] Record the candidate Wave sequence path and checksum in that contract.
-- [ ] Freeze logical axis mapping and confirm that target R3x2 means the
+- [x] Record the candidate Wave sequence path and its inspected identity.
+- [x] Freeze logical axis mapping and confirm that target R3x2 means the
   intended TWIX PE1/PE2 axes.
-- [ ] Freeze the retrospective mask residues and ACS support. The current
+- [x] Freeze the retrospective mask residues and ACS support. The current
   candidate is acceleration `[3,2]`, residues `[1,0]`, and PE1 ACS `[115,139)`.
-- [ ] Run manifest-backed metadata inspection and one small image-stream sample
+- [x] Run manifest-backed metadata inspection and one small image-stream sample
   probe. Require complete centered readout, complete PE support, 64 coils, and
   no duplicate coordinates.
-- [ ] Choose a distinct, non-historical output root; never overwrite the R3
+- [x] Choose a distinct, non-historical output root; never overwrite the R3
   results or any accepted dataset tree.
 
 ## Coil compression and direct source
@@ -101,7 +101,7 @@ separately and only after full Wave encoding.
 
 ## Reconstruction gates
 
-- [ ] Finish manifest support in the lambda-zero runner before launching it.
+- [x] Finish manifest support in the lambda-zero runner before launching it.
 - [ ] Source BART through `/path/to/user_workspace/bart/bart_startup.sh` and require `-g` for
   every `bart wave` reconstruction.
 - [ ] Estimate one dataset-specific ESPIRiT map set from measured ACS. Do not

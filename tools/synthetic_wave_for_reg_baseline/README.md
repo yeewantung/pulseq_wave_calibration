@@ -29,12 +29,11 @@ directory's root; paths and scan filenames remain configuration/CLI inputs.
 
 ## Current experiment
 
-Continue development on the 2026 R3x1 product and synthetic R3x2 Wave data,
-using no-wave GRAPPA as the single temporary metric reference. DICOM
-intensities are excluded from provisional regularization ranking, and BET is
-applied only during metric calculation. No-wave SENSE remains an optional
-diagnostic, while the no-wave BART PICS branch is deferred. The `ecalib -I`
-pilot is retained as a negative result.
+The current execution target is the fully sampled 2026-08-21 MID00198 R1
+dataset and its retrospective synthetic R3x2 Wave reconstruction. It uses
+image-derived 64-to-12 coil compression and direct source assembly, with no
+GRAPPA or SENSE interpolation. DICOM ranking is disabled because Prescan
+Normalize was enabled. The `ecalib -I` pilot remains a negative result.
 
 Wave NIfTI export now stores magnitude and phase directly in canonical RAS
 using the product-DICOM-validated affine-axis convention. Downstream manual
@@ -49,9 +48,10 @@ tmux-friendly launcher are
 `scripts/run_retrospective_low_resolution.sh`. No large retrospective outputs
 are created by validation alone.
 
-A new R1 dataset will replace this temporary reference contract after it is
-collected and qualified. The older 2021 R1 scans remain partial-readout
-fallbacks only. The final R1 Wavelet coarse sweep will use lambda values
+MID00198 has passed manifest-backed metadata inspection and a sample probe.
+Large source preparation and reconstruction acceptance remain pending. The
+older 2021 R1 scans remain partial-readout fallbacks only. The final R1 Wavelet
+coarse sweep will use lambda values
 `1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`, plus lambda zero. LLR must use the
 verified BART real/imaginary split (`-v`) and output recombination.
 
@@ -73,6 +73,18 @@ The target mask is applied only after full Wave encoding and written to a
 separate output tree with sample-by-sample validation. The remaining
 consumer-by-consumer work is tracked in
 [`docs/dataset_portability_audit.md`](docs/dataset_portability_audit.md).
+
+For the current dataset, use the two-mode tmux wrapper. Preparation stops at
+the full-Wave visual gate; reconstruction requires explicit approval:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh prepare
+
+tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
+    reconstruct \
+    /path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2/dataset_manifest.json \
+    --confirm-full-wave-reviewed
+```
 
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary

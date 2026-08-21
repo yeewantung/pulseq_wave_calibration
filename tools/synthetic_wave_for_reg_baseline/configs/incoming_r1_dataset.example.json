@@ -6,6 +6,7 @@
     "twix": "/path/to/meas_incoming_r1.dat",
     "wave_sequence": "/path/to/synthetic_wave_sequence.seq",
     "dicom": {
+      "enabled": true,
       "directory": "/path/to/unfiltered_normalized_dicom",
       "required_image_type_tokens": [
         "ND",
@@ -23,7 +24,8 @@
     "coil_compression_prefix": "calibration/coil_compression",
     "source_reconstruction_prefix": "reconstructions/no_wave/source",
     "wave_synthesis_dir": "synthetic_wave/full_encoding",
-    "bart_export_dir": "synthetic_wave/target_sampling"
+    "bart_export_dir": "synthetic_wave/target_sampling",
+    "lambda0_reconstruction_dir": "reconstructions/synthetic_wave/lambda0"
   },
   "geometry": {
     "logical_axes": [
@@ -76,7 +78,11 @@
     "bart": {
       "use_gpu": true,
       "calibration_source": "image",
-      "maximum_eigenvalue": null
+      "maximum_eigenvalue": null,
+      "ecalib_crop": 0.8,
+      "ecalib_intensity_correction": false,
+      "lambda0_iterations": 300,
+      "lambda0_tolerance": 0.001
     }
   },
   "wave_synthesis": {
