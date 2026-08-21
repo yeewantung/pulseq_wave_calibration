@@ -82,6 +82,9 @@ brain-median-scaled intensity-profile comparison. It does not run or select
 regularization, and it treats no-wave GRAPPA/SENSE only as comparison
 references.
 
+The measured ACS calibration is shared from the parent full-Wave BART inputs;
+the R3x2 directory supplies the retrospectively masked k-space and linked PSF.
+
 For acceleration comparisons,
 `export_bart_wave_inputs_retrospective.py` reuses the validated full synthetic
 Wave volume and theoretical PSF, builds an explicit Cartesian PE1×PE2 lattice

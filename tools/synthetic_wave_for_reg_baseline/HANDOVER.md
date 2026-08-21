@@ -87,8 +87,10 @@ The next isolated intensity-profile test is driven by
 `ecalib -I`, runs only Wave lambda zero with `-g`, and then compares the result
 with both IDEA DICOM variants and the existing no-wave GRAPPA/SENSE and Wave
 outputs. Those existing reconstructions are comparison references only, not a
-true baseline, and the pilot does not select a regularization parameter. Its
-default output tree is:
+true baseline, and the pilot does not select a regularization parameter. The
+measured ACS comes explicitly from the parent full-Wave BART inputs; the R3x2
+directory supplies the masked reconstruction k-space and linked PSF without
+duplicating the 1.5 GB calibration CFL. The default output tree is:
 
 ```text
 /path/to/data/20260817_product/

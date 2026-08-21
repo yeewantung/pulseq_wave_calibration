@@ -69,6 +69,7 @@ DATASET_ROOT="/path/to/data/20260817_product"
 WAVE_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2"
 PRESENTATION_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization"
 BART_INPUT_DIR="$WAVE_ROOT/bart_inputs"
+CALIBRATION_BASE="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12/bart_inputs/kspace_calib"
 TWIX="$DATASET_ROOT/meas_MID00345_FID35555_t1_mprage_sag_p2.dat"
 SEQUENCE_ROOT="/path/to/user_workspace/scan_protocols/20260817_integrated/v151"
 SEQUENCE="$SEQUENCE_ROOT/mprage_3d_wave_FOV256x256x256_res1x1x1_ETL256_R1-1_R2-3_os4_amp8_cyc10_SAG_prisma_v151.seq"
@@ -89,14 +90,17 @@ echo "Log: $LOG_PATH"
 reconstruction_reusable() {
     local manifest="$RECON_DIR/manifest.json"
     [[ -f "$manifest" ]] || return 1
-    "$PYTHON_EXECUTABLE" - "$manifest" <<'PY'
+    "$PYTHON_EXECUTABLE" - "$manifest" "$CALIBRATION_BASE" <<'PY'
 import json
 import sys
+from pathlib import Path
 
 manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+expected_calibration = str(Path(sys.argv[2]).resolve())
 valid = (
     manifest.get("status") == "lambda0_complete_awaiting_visual_review"
     and manifest.get("ecalib", {}).get("intensity_correction") is True
+    and manifest.get("ecalib", {}).get("input_base") == expected_calibration
     and "-I" in manifest.get("ecalib", {}).get("command", [])
     and manifest.get("wave_lambda0", {}).get("backend") == "gpu"
     and "-g" in manifest.get("wave_lambda0", {}).get("command", [])
@@ -117,6 +121,7 @@ run_reconstruction() {
     "$PYTHON_EXECUTABLE" "$SCRIPT_DIR/run_bart_wave_lambda0.py" \
         --bart "$BART_EXECUTABLE" \
         --bart-input-dir "$BART_INPUT_DIR" \
+        --calibration-base "$CALIBRATION_BASE" \
         --output-dir "$RECON_DIR" \
         --twix "$TWIX" \
         --sequence "$SEQUENCE" \

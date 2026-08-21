@@ -33,6 +33,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bart", required=True, type=Path)
     parser.add_argument("--bart-input-dir", required=True, type=Path)
+    parser.add_argument(
+        "--calibration-base",
+        type=Path,
+        help=(
+            "BART ACS basename for ecalib. Defaults to "
+            "<bart-input-dir>/kspace_calib."
+        ),
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--twix", required=True, type=Path)
     parser.add_argument("--sequence", required=True, type=Path)
@@ -300,12 +308,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     """Calibrate ESPIRiT maps, run lambda-zero Wave CG, and export review files."""
     bart = args.bart.expanduser().resolve()
     bart_input = args.bart_input_dir.expanduser().resolve()
+    calibration_base = bart_base(
+        args.calibration_base.expanduser().resolve()
+        if args.calibration_base is not None
+        else bart_input / "kspace_calib"
+    )
     output_dir = args.output_dir.expanduser().resolve()
     twix = args.twix.expanduser().resolve()
     sequence = args.sequence.expanduser().resolve()
-    for path in (bart, twix, sequence, bart_input / "kspace_calib.cfl"):
+    for path in (bart, twix, sequence):
         if not path.is_file():
             raise FileNotFoundError(path)
+    for base in (calibration_base, bart_input / "psf", bart_input / "wave_kspace"):
+        for suffix in (".hdr", ".cfl"):
+            path = base.with_suffix(suffix)
+            if not path.is_file():
+                raise FileNotFoundError(path)
     if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -319,7 +337,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ecalib = _run_logged(
         build_ecalib_command(
             bart,
-            bart_input / "kspace_calib",
+            calibration_base,
             maps_base,
             eigenvalues_base,
             crop=args.ecalib_crop,
@@ -336,6 +354,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         eigenvalues_base.with_suffix(".cfl")
     )
     ecalib["intensity_correction"] = args.ecalib_intensity_correction
+    ecalib["input_base"] = str(calibration_base)
     ecalib["diagnostic_montages"] = _save_map_montages(maps_base, output_dir)
 
     image_base = output_dir / "image_wave"
