@@ -21,7 +21,9 @@
     "root": "/path/to/incoming_r1_synthetic_wave",
     "inspection_report": "metadata/dataset_inspection.json",
     "coil_compression_prefix": "calibration/coil_compression",
-    "source_reconstruction_prefix": "reconstructions/no_wave/source"
+    "source_reconstruction_prefix": "reconstructions/no_wave/source",
+    "wave_synthesis_dir": "synthetic_wave/full_encoding",
+    "bart_export_dir": "synthetic_wave/target_sampling"
   },
   "geometry": {
     "logical_axes": [
@@ -49,6 +51,13 @@
       3,
       2
     ],
+    "synthetic_wave_residue_pe1_pe2": [
+      1,
+      0
+    ],
+    "synthetic_wave_mask_kind": "cartesian_with_full_pe1_acs",
+    "synthetic_wave_acs_pe1_start": 115,
+    "synthetic_wave_acs_pe1_stop_exclusive": 139,
     "readout_oversampling_factor": 2.0,
     "require_complete_source_grid": true
   },
@@ -68,6 +77,20 @@
       "use_gpu": true,
       "maximum_eigenvalue": null
     }
+  },
+  "wave_synthesis": {
+    "extended_readout_samples": 1024,
+    "calibration_ncalib1": 72,
+    "calibration_nacs": 32,
+    "orientation": "SAG",
+    "pe1_phase_sign": -1,
+    "pe2_phase_sign": -1,
+    "diagnostic_coils": [
+      1,
+      2,
+      3,
+      4
+    ]
   },
   "evaluation": {
     "ranking_reference": {

@@ -51,6 +51,11 @@ def _positive_number(value: Any, name: str, errors: list[str]) -> None:
         errors.append(f"{name} must be a positive number")
 
 
+def _nonnegative_integer(value: Any, name: str, errors: list[str]) -> None:
+    if not _is_integer(value) or value < 0:
+        errors.append(f"{name} must be a nonnegative integer")
+
+
 def _vector(
     value: Any,
     name: str,
@@ -103,6 +108,8 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
         "inspection_report",
         "coil_compression_prefix",
         "source_reconstruction_prefix",
+        "wave_synthesis_dir",
+        "bart_export_dir",
     )
     for field in ("root", *relative_output_fields):
         _nonempty_string(outputs.get(field), f"outputs.{field}", errors)
@@ -141,6 +148,33 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
         errors,
         integer=True,
     )
+    residues = sampling.get("synthetic_wave_residue_pe1_pe2")
+    if isinstance(residues, list) and len(residues) == 2:
+        for index, value in enumerate(residues):
+            _nonnegative_integer(
+                value, f"sampling.synthetic_wave_residue_pe1_pe2[{index}]", errors
+            )
+        accelerations = sampling.get("synthetic_wave_acceleration_pe1_pe2")
+        if isinstance(accelerations, list) and len(accelerations) == 2:
+            for index, (residue, acceleration) in enumerate(
+                zip(residues, accelerations)
+            ):
+                if _is_integer(residue) and _is_integer(acceleration) and residue >= acceleration:
+                    errors.append(
+                        f"sampling synthetic-Wave residue {index} must be below its acceleration"
+                    )
+    else:
+        errors.append("sampling.synthetic_wave_residue_pe1_pe2 must contain exactly 2 values")
+    if sampling.get("synthetic_wave_mask_kind") != "cartesian_with_full_pe1_acs":
+        errors.append(
+            "sampling.synthetic_wave_mask_kind must be 'cartesian_with_full_pe1_acs'"
+        )
+    acs_start = sampling.get("synthetic_wave_acs_pe1_start")
+    acs_stop = sampling.get("synthetic_wave_acs_pe1_stop_exclusive")
+    _nonnegative_integer(acs_start, "sampling.synthetic_wave_acs_pe1_start", errors)
+    _positive_integer(
+        acs_stop, "sampling.synthetic_wave_acs_pe1_stop_exclusive", errors
+    )
     _positive_number(
         sampling.get("readout_oversampling_factor"),
         "sampling.readout_oversampling_factor",
@@ -156,6 +190,19 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
             errors,
             integer=True,
         )
+
+    geometry_payload = payload.get("geometry")
+    matrix_payload = (
+        geometry_payload.get("matrix") if isinstance(geometry_payload, Mapping) else None
+    )
+    if (
+        _is_integer(acs_start)
+        and _is_integer(acs_stop)
+        and isinstance(matrix_payload, list)
+        and len(matrix_payload) == 3
+        and not (0 <= acs_start < acs_stop <= matrix_payload[1])
+    ):
+        errors.append("synthetic-Wave ACS PE1 bounds must lie inside geometry.matrix[1]")
 
     reconstruction = _mapping(payload.get("reconstruction"), "reconstruction", errors)
     _positive_integer(
@@ -194,6 +241,46 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
     if maximum_eigenvalue is not None:
         _positive_number(
             maximum_eigenvalue, "reconstruction.bart.maximum_eigenvalue", errors
+        )
+
+    wave = _mapping(payload.get("wave_synthesis"), "wave_synthesis", errors)
+    _positive_integer(
+        wave.get("extended_readout_samples"),
+        "wave_synthesis.extended_readout_samples",
+        errors,
+    )
+    for field in ("calibration_ncalib1", "calibration_nacs"):
+        _positive_integer(wave.get(field), f"wave_synthesis.{field}", errors)
+    if wave.get("orientation") not in {"SAG", "TRA"}:
+        errors.append("wave_synthesis.orientation must be 'SAG' or 'TRA'")
+    for field in ("pe1_phase_sign", "pe2_phase_sign"):
+        if wave.get(field) not in {-1, 1}:
+            errors.append(f"wave_synthesis.{field} must be -1 or 1")
+    diagnostic_coils = wave.get("diagnostic_coils")
+    if not isinstance(diagnostic_coils, list) or not diagnostic_coils:
+        errors.append("wave_synthesis.diagnostic_coils must be a non-empty list")
+    else:
+        for index, coil in enumerate(diagnostic_coils):
+            _positive_integer(coil, f"wave_synthesis.diagnostic_coils[{index}]", errors)
+        integer_coils = [coil for coil in diagnostic_coils if _is_integer(coil)]
+        if len(set(integer_coils)) != len(integer_coils):
+            errors.append("wave_synthesis.diagnostic_coils must not contain duplicates")
+        if _is_integer(virtual_coils) and any(
+            _is_integer(coil) and coil > virtual_coils for coil in diagnostic_coils
+        ):
+            errors.append("wave_synthesis.diagnostic_coils cannot exceed virtual_coils")
+    extended = wave.get("extended_readout_samples")
+    if (
+        _is_integer(extended)
+        and isinstance(matrix_payload, list)
+        and len(matrix_payload) == 3
+        and (
+            extended < matrix_payload[0]
+            or (extended - matrix_payload[0]) % 2 != 0
+        )
+    ):
+        errors.append(
+            "wave_synthesis.extended_readout_samples must center-embed geometry.matrix[0]"
         )
 
     evaluation = _mapping(payload.get("evaluation"), "evaluation", errors)
@@ -294,6 +381,8 @@ class DatasetManifest:
             "inspection_report",
             "coil_compression_prefix",
             "source_reconstruction_prefix",
+            "wave_synthesis_dir",
+            "bart_export_dir",
         ):
             resolved["outputs"][field] = str(self.output_path(field))
         for container in (

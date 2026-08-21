@@ -40,6 +40,8 @@ def valid_payload() -> dict:
             "inspection_report": "metadata/report.json",
             "coil_compression_prefix": "calibration/coil_compression",
             "source_reconstruction_prefix": "reconstructions/no_wave/source",
+            "wave_synthesis_dir": "synthetic_wave/full_encoding",
+            "bart_export_dir": "synthetic_wave/target_sampling",
         },
         "geometry": {
             "logical_axes": ["readout", "phase_encode_1", "phase_encode_2"],
@@ -49,6 +51,10 @@ def valid_payload() -> dict:
         "sampling": {
             "source_acceleration_pe1_pe2": [1, 1],
             "synthetic_wave_acceleration_pe1_pe2": [3, 2],
+            "synthetic_wave_residue_pe1_pe2": [1, 0],
+            "synthetic_wave_mask_kind": "cartesian_with_full_pe1_acs",
+            "synthetic_wave_acs_pe1_start": 115,
+            "synthetic_wave_acs_pe1_stop_exclusive": 139,
             "readout_oversampling_factor": 2.0,
             "require_complete_source_grid": True,
             "expected_acs_pe1_pe2": [24, 192],
@@ -59,6 +65,15 @@ def valid_payload() -> dict:
             "coil_compression_source": "image",
             "grappa": {"kernel": [5, 5, 5], "regularization": 0.01},
             "bart": {"use_gpu": True, "maximum_eigenvalue": None},
+        },
+        "wave_synthesis": {
+            "extended_readout_samples": 1024,
+            "calibration_ncalib1": 72,
+            "calibration_nacs": 32,
+            "orientation": "SAG",
+            "pe1_phase_sign": -1,
+            "pe2_phase_sign": -1,
+            "diagnostic_coils": [1, 2, 3, 4],
         },
         "evaluation": {
             "ranking_reference": {"kind": "grappa", "path": "references/grappa.nii.gz"},
@@ -124,6 +139,20 @@ class DatasetManifestTests(unittest.TestCase):
 
         with self.assertRaisesRegex(DatasetManifestError, "contained by outputs.root"):
             validate_dataset_manifest(payload)
+
+    def test_rejects_invalid_target_mask_and_wave_embedding(self) -> None:
+        payload = valid_payload()
+        payload["sampling"]["synthetic_wave_residue_pe1_pe2"] = [3, 0]
+        payload["sampling"]["synthetic_wave_acs_pe1_stop_exclusive"] = 241
+        payload["wave_synthesis"]["extended_readout_samples"] = 1023
+
+        with self.assertRaises(DatasetManifestError) as context:
+            validate_dataset_manifest(payload)
+
+        message = str(context.exception)
+        self.assertIn("residue 0 must be below", message)
+        self.assertIn("ACS PE1 bounds", message)
+        self.assertIn("must center-embed", message)
 
     def test_downstream_gate_requires_matching_passed_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

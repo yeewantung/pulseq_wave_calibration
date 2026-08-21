@@ -61,12 +61,15 @@ settings, and evaluation-reference policy. See
 metrics-only mask use. Its inspector integration records a hashed, fully
 resolved contract snapshot and checks declared acquisition expectations against
 TWIX/DICOM metadata, including raw/post-OS readout sizes and MDH center column.
-Coil compression, direct fully sampled R1 source assembly, and the existing
-R3x1 GRAPPA source path now consume that passed contract. Coil compression can
+Coil compression, direct fully sampled R1 source assembly, the existing R3x1
+GRAPPA source path, full Wave synthesis, and target BART input export now
+consume that passed contract. Coil compression can
 explicitly use either the image or refscan stream, so R1 does not depend on a
 PAT refscan being present. The source sampling gates are mutually exclusive,
 preventing either interpolation of R1 or direct copying of accelerated R3 data.
-The remaining consumer-by-consumer work is tracked in
+The target mask is applied only after full Wave encoding and written to a
+separate output tree with sample-by-sample validation. The remaining
+consumer-by-consumer work is tracked in
 [`docs/dataset_portability_audit.md`](docs/dataset_portability_audit.md).
 
 After R1 refinement, apply the selected parameter back to R3 without retuning

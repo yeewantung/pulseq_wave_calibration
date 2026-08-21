@@ -24,9 +24,8 @@ reconstruction path. Product structural validation and both real-data source
 operator gates pass. All three corrected-LLR production cases and their
 canonical-RAS exports are complete. A manifested native/matched visual-review
 package and descriptive quantitative resolution-tradeoff analysis are
-complete. No automatic resolution selection was made. The next implementation
-step is to remove R3-only shape, path, sampling, and DICOM assumptions from the
-R1-facing orchestration.
+complete. No automatic resolution selection was made. Dataset-portability work
+is proceeding consumer by consumer through the R1-facing orchestration.
 
 The first dataset-portability layer is complete. A validated JSON contract now
 separates acquired sampling from the synthetic-Wave target and records paths,
@@ -39,9 +38,14 @@ manifest and rejects non-R3x1 sampling. Direct fully sampled R1 source assembly
 is now implemented as the mutually exclusive alternative: it requires complete
 centered readout and PE support, can derive the coil basis from the image stream
 when no PAT refscan exists, performs no interpolation, and produces resumable
-compressed k-space with bound provenance. The next code step is
-manifest propagation through Wave synthesis and BART input export; remaining
-consumers are listed in `docs/dataset_portability_audit.md`.
+compressed k-space with bound provenance. Manifest propagation through Wave
+synthesis and BART input export is also complete. Full Wave encoding now
+derives its allocation, trajectory settings, diagnostics, and provenance from
+the contract. Its separate exporter applies the declared retrospective target
+lattice and full-PE2 ACS band only after Wave encoding, validates every masked
+sample, and leaves the accepted synthesis untouched. The next code step is
+manifest-aware measured ACS export; remaining consumers are listed in
+`docs/dataset_portability_audit.md`.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, fill in a concrete manifest, inspect and qualify the new

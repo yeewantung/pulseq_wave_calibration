@@ -10,11 +10,10 @@ python tools/synthetic_wave_for_reg_baseline/scripts/validate_dataset_manifest.p
     /path/to/dataset.json --check-inputs
 ```
 
-All paths are absolute or relative to the manifest file, except
-`outputs.inspection_report`, which must be a contained relative path and is
-resolved below `outputs.root`. Generated
-reports store the manifest path, SHA-256, and a fully resolved snapshot so a
-later run does not depend on the current working directory.
+Input paths are absolute or relative to the manifest file. Every named output
+path or prefix must be relative, cannot contain `..`, and is resolved below
+`outputs.root`. Generated reports store the manifest path and SHA-256 so a
+later run cannot silently consume a different contract revision.
 
 The other contained output prefixes keep calibration and reconstruction files
 discoverable:
@@ -22,6 +21,8 @@ discoverable:
 - `outputs.coil_compression_prefix` writes the basis `.npz` and report `.json`;
 - `outputs.source_reconstruction_prefix` is shared by the compatible no-Wave
   source-reconstruction entry point.
+- `outputs.wave_synthesis_dir` contains the reusable, unmasked full-Wave data;
+- `outputs.bart_export_dir` contains the separately masked target BART inputs.
 
 ## Scientific fields
 
@@ -30,6 +31,9 @@ discoverable:
 - `sampling.source_acceleration_pe1_pe2` describes the acquired no-Wave data.
   `sampling.synthetic_wave_acceleration_pe1_pe2` describes the mask applied
   only after synthetic Wave encoding. They are intentionally separate.
+- The target-mask residue and half-open PE1 ACS bounds are explicit. The
+  current mask kind is a Cartesian image lattice union a PE1 ACS band that is
+  fully sampled across PE2.
 - `sampling.require_complete_source_grid` states whether the source image
   stream itself must cover every PE coordinate. It should be `true` for the
   incoming fully sampled R1 development scan.
@@ -38,6 +42,8 @@ discoverable:
   complete image stream for an R1 acquisition that has no PAT refscan.
   `bart.use_gpu` must remain `true`; a null maximum eigenvalue means it will be
   measured for the dataset rather than copied from the R3 experiment.
+- `wave_synthesis` records the extended readout allocation, trajectory
+  calibration dimensions, orientation/sign convention, and diagnostic coils.
 - `evaluation.ranking_reference` can be `grappa`, `nifti`, or `dicom`. The
   separate DICOM-ranking flag must agree with that choice. Keep it disabled and
   use GRAPPA during current development; change the manifest after the incoming
@@ -119,3 +125,35 @@ Coil compression refuses an existing basis/report prefix. GRAPPA likewise
 refuses existing checkpoints or results unless `--resume` is explicit, so a
 new dataset contract cannot overwrite an accepted run accidentally. Direct R1
 assembly has the same overwrite protection.
+
+## Wave synthesis and target-mask export
+
+The next two consumers use the same passed contract and the validated source
+report. Run full Wave encoding first:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/synthesize_wave_kspace.py \
+    --dataset-manifest /path/to/dataset.json --resume
+```
+
+This command derives subject, matrix/FOV, virtual-coil count, sequence, TWIX,
+extended readout, trajectory settings, diagnostics, and output paths from the
+manifest. It accepts an existing output only when `--resume` finds a complete
+matching synthesis with intact source-report and PSF provenance.
+
+Inspect the magnitude and phase montages under the configured
+`outputs.wave_synthesis_dir`. Only after approving them, export the
+manifest-defined synthetic target sampling:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/export_bart_wave_inputs.py \
+    --dataset-manifest /path/to/dataset.json \
+    --visual-review-approved --resume
+```
+
+The exporter requires unmasked full-Wave k-space, applies the target lattice
+and ACS band after Wave encoding, verifies all acquired samples bitwise and all
+omitted samples as exact zero, and links the validated PSF into a separate
+`outputs.bart_export_dir/bart_inputs` tree. It never edits the accepted
+synthesis manifest. A resumed run must match the dataset SHA-256, synthesis
+manifest SHA-256, mask configuration, and output hashes.

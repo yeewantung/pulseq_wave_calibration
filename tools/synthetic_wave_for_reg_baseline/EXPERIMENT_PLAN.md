@@ -24,6 +24,13 @@ select the more transferable final parameters. Results selected against the
 temporary R3 reference must be labelled developmental and repeated after the
 new R1 dataset is available.
 
+As of 2026-08-21, reusable code support is complete through dataset
+inspection, coil compression, mutually exclusive direct-R1/GRAPPA source
+preparation, full Wave encoding, and the separate post-Wave target-mask BART
+export. The next portability task follows data flow into measured ACS export;
+actual R1 execution still waits for the incoming acquisition and its passed
+inspection.
+
 ### Decision recorded 2026-08-20: temporary references
 
 The BART `ecalib -I` pilot did not correct the relevant receive-profile
