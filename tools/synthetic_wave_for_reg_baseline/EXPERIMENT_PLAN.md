@@ -27,8 +27,8 @@ temporary R3 reference must be labelled developmental and repeated after the
 new R1 dataset is available.
 
 As of 2026-08-21, the fully sampled R1 source preparation, synthetic-Wave
-encoding, GPU lambda-zero/coarse/refined reconstructions, approved-mask metric
-support, and combined 38-case exact-grid evaluation are complete. The next
+encoding, GPU lambda-zero/coarse/refined/targeted reconstructions, approved-mask
+metric support, and combined 49-case exact-grid evaluation are complete. The next
 decision is visual and quantitative finalist selection, not more general
 infrastructure work.
 

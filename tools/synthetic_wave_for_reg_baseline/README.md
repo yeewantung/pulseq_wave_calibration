@@ -254,7 +254,7 @@ under the dataset output root. The canonical combined evaluation is
 LLR block-size-by-lambda plots, and a shared direct-FFT display window for each
 method/block. It performs no composite ranking or parameter selection.
 
-After review of that combined grid, run the small follow-up sweep in tmux with:
+The small follow-up sweep can be run or resumed in tmux with:
 
 ```bash
 tools/synthetic_wave_for_reg_baseline/scripts/run_regularization_targeted_sweep.sh \
@@ -267,6 +267,15 @@ Wavelet `1.5e-2`, four block-4 LLR values around `5e-3`, and LLR block-8 and
 block-16 boundary extensions at `1.5e-2`, `2e-2`, and `3e-2`. It runs 11 cases
 through the same manifest-backed GPU BART path and never replaces accepted
 reconstructions.
+
+All 11 follow-up cases are complete. Combined with the retained cases, the
+49-case exact-grid report is
+`evaluation/direct_fft_reference/geometry_validation/targeted_grid_geometry_validation.json`,
+and the current metric package is
+`evaluation/direct_fft_reference/regularization_targeted_metrics`. The LLR
+heatmap labels deliberately unrun cells in the scientifically ragged grid.
+Wavelet `1.5e-2` has the lowest NRMSE, while block-4 LLR peaks near `6e-3` and
+blocks 8/16 turn after `1e-2`.
 
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a

@@ -228,8 +228,17 @@ separately and only after full Wave encoding.
   block-4 LLR `3e-3`, `4e-3`, `6e-3`, and `7.5e-3`; and block-8 and block-16
   LLR `1.5e-2`, `2e-2`, and `3e-2`. All 11 cases use the frozen crop-`0.6`
   maps and the GPU-only reconstruction entry point.
-- [ ] Run the 11-case targeted sweep and combine its manifests with the 38
-  retained cases for a new exact-grid report and metric package.
+- [x] Run the 11-case targeted sweep and combine its manifests with the 38
+  retained cases. The 49-case exact-grid gate passed with identical `256^3`,
+  1-mm RAS geometry and no registration or interpolation. The new report is
+  `geometry_validation/targeted_grid_geometry_validation.json`, and the
+  hash-bound evaluation is `regularization_targeted_metrics`.
+- [x] Confirm the targeted endpoints. Wavelet `1.5e-2` now has the lowest NRMSE
+  (`0.033252`), highest intensity NCC, and closest edge ratio, while `2e-2`
+  retains the highest SSIM (`0.979635`). Block-4 LLR NRMSE and SSIM peak at
+  `6e-3`. Block-8 and block-16 NRMSE/SSIM both worsen above `1e-2`, so their
+  useful ranges are now bracketed; block 16 at `1e-2` retains the lowest LLR
+  NRMSE (`0.037416`).
 - [ ] Select one Wavelet and one LLR finalist, then choose the R1 regularization
   using quantitative metrics plus visual review. DICOM remains qualitative and
   cannot break a metric tie.

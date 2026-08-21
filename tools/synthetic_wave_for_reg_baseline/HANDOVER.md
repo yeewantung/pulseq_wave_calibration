@@ -7,13 +7,11 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Run the small follow-up grid requested after review of the combined R1 metrics,
-then choose one Wavelet and one LLR finalist; no final parameter has been
-selected. Use `scripts/run_regularization_targeted_sweep.sh` in tmux with
-`--confirm-approved-reference-and-mask`. It adds Wavelet `1.5e-2`; block-4 LLR
-`3e-3`, `4e-3`, `6e-3`, and `7.5e-3`; and block-8/block-16 LLR `1.5e-2`,
-`2e-2`, and `3e-2`, for 11 cases total. Its separate output root is
-`reconstructions/synthetic_wave/regularization_targeted_ecalib_crop-0p6`.
+Review the current shared-window figures and choose one Wavelet and one LLR
+finalist; no final parameter has been selected. The 11-case targeted follow-up
+is complete under
+`reconstructions/synthetic_wave/regularization_targeted_ecalib_crop-0p6`, and
+every reconstruction records `bart wave -g`.
 
 The direct FFT RSS of the fully sampled NCC=12 no-Wave k-space is the approved
 quantitative reference, and DICOM remains qualitative only. The approved
@@ -22,32 +20,25 @@ user-confirmed robust-center BET `f=0.59` result with a one-voxel outward
 dilation, bound together with the reference in
 `evaluation/direct_fft_reference/metrics_reference_manifest.json`.
 
-The focused refinement reconstructions are complete. The retained coarse cases
-and 28 new manifests form a 38-case evaluation set: ten Wavelet cases from
-lambda zero through `5e-2`, one matched block-8 LLR lambda-zero control, and a
-full positive-lambda cross-product for LLR blocks `4`, `8`, and `16` at
-`2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`, `1e-3`, `2e-3`, `5e-3`, and `1e-2`.
-Every reconstruction is complete and records `bart wave -g`.
-
-The combined exact-grid gate passed all 38 cases at exact `256^3`, 1-mm,
+The combined exact-grid gate passed all 49 retained and targeted cases at exact `256^3`, 1-mm,
 canonical RAS geometry with zero affine difference and no registration or
 interpolation. Its canonical report is
-`evaluation/direct_fft_reference/geometry_validation/refined_grid_geometry_validation.json`.
+`evaluation/direct_fft_reference/geometry_validation/targeted_grid_geometry_validation.json`.
 The hash-bound metric package is
-`evaluation/direct_fft_reference/regularization_refinement_metrics`; it has 38
+`evaluation/direct_fft_reference/regularization_targeted_metrics`; it has 49
 finite rows, eight plots, a block-size-by-lambda heatmap, and separate shared-
 window reviews for Wavelet and each LLR block size. Candidate export scaling is
 undone before a single mask-restricted LSQ scalar is fitted. There is no DICOM,
 bias correction, histogram matching, composite score, or automatic selection.
 
-Wavelet `2e-2` leads NRMSE (`0.033386`), SSIM (`0.979635`), intensity NCC, and
-edge-ratio closeness (`0.997389`); its edge-gradient NCC is below the `2e-3`
-peak (`0.995591`). The `5e-2` endpoint worsens fidelity, so the Wavelet optimum
-is bracketed. LLR has no single metric winner: block 16 at `1e-2` has the
-lowest NRMSE (`0.037416`) and closest edge ratio (`1.007207`), block 4 at
-`5e-3` has the highest SSIM (`0.974607`), and block 4 at `2e-3` has the highest
-gradient NCC (`0.995653`). Use the common-window figures to resolve these
-trade-offs rather than treating any one metric leader as the selected result.
+Wavelet `1.5e-2` leads NRMSE (`0.033252`), intensity NCC, and edge-ratio
+closeness (`1.001633`), while `2e-2` retains the highest SSIM (`0.979635`) and
+`2e-3` the highest edge-gradient NCC (`0.995591`). For LLR, block 4 at `6e-3`
+has its lowest NRMSE (`0.037453`) and highest SSIM (`0.974612`); block 16 at
+`1e-2` remains the overall LLR NRMSE leader (`0.037416`). Both block 8 and 16
+worsen in NRMSE and SSIM beyond `1e-2`, so their upper ranges are bracketed.
+Use the common-window figures to resolve these trade-offs rather than treating
+any one metric leader as the selected result.
 
 The qualitative R1 receive-profile comparison is complete under
 `comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched

@@ -284,21 +284,34 @@ def _plot_llr_heatmaps(records: list[dict[str, Any]], path: Path) -> None:
     blocks = sorted({int(row["block_size"]) for row in rows})
     lambdas = sorted({float(row["lambda"]) for row in rows})
     lookup = {(int(row["block_size"]), float(row["lambda"])): row for row in rows}
-    expected = {(block, value) for block in blocks for value in lambdas}
-    if set(lookup) != expected:
-        raise ValueError("LLR heatmap requires a complete block-size by lambda grid")
     metrics = (
         ("nrmse_brain", "Brain NRMSE ↓", "viridis_r"),
         ("ssim_3d_brain_bbox", "Brain 3D SSIM ↑", "viridis"),
         ("gradient_ncc_brain_edge", "Edge gradient NCC ↑", "viridis"),
         ("edge_preservation_ratio", "Edge ratio → 1", "coolwarm"),
     )
-    figure, axes = plt.subplots(2, 2, figsize=(10, 9), constrained_layout=True)
+    figure_height = max(9.0, 4.0 + 0.55 * len(lambdas))
+    figure, axes = plt.subplots(
+        2, 2, figsize=(10, figure_height), constrained_layout=True
+    )
     for axis, (key, title, cmap) in zip(axes.ravel(), metrics):
         matrix = np.asarray(
-            [[lookup[(block, value)][key] for block in blocks] for value in lambdas]
+            [
+                [
+                    lookup[(block, value)][key]
+                    if (block, value) in lookup
+                    else np.nan
+                    for block in blocks
+                ]
+                for value in lambdas
+            ]
         )
-        image = axis.imshow(matrix, cmap=cmap, aspect="auto")
+        # A ragged grid is scientifically useful here: block 4 is sampled near
+        # its local optimum while blocks 8 and 16 extend the upper boundary.
+        # Mark unrun combinations explicitly rather than implying measurements.
+        color_map = plt.get_cmap(cmap).copy()
+        color_map.set_bad("#d9d9d9")
+        image = axis.imshow(np.ma.masked_invalid(matrix), cmap=color_map, aspect="auto")
         axis.set_xticks(range(len(blocks)), labels=blocks)
         axis.set_yticks(range(len(lambdas)), labels=[f"{value:g}" for value in lambdas])
         axis.set_xlabel("LLR block size")
@@ -306,12 +319,24 @@ def _plot_llr_heatmaps(records: list[dict[str, Any]], path: Path) -> None:
         axis.set_title(title)
         for row_index in range(len(lambdas)):
             for column_index in range(len(blocks)):
-                rgba = image.cmap(image.norm(matrix[row_index, column_index]))
+                value = matrix[row_index, column_index]
+                if not np.isfinite(value):
+                    axis.text(
+                        column_index,
+                        row_index,
+                        "not run",
+                        ha="center",
+                        va="center",
+                        color="black",
+                        fontsize=5,
+                    )
+                    continue
+                rgba = image.cmap(image.norm(value))
                 luminance = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
                 axis.text(
                     column_index,
                     row_index,
-                    f"{matrix[row_index, column_index]:.5g}",
+                    f"{value:.5g}",
                     ha="center",
                     va="center",
                     color="black" if luminance > 0.55 else "white",

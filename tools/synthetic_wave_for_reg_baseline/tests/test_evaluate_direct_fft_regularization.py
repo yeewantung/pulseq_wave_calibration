@@ -16,7 +16,11 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from bart_cfl import sha256_file  # noqa: E402
-from evaluate_direct_fft_regularization import _load_candidate, _metric_leaders  # noqa: E402
+from evaluate_direct_fft_regularization import (  # noqa: E402
+    _load_candidate,
+    _metric_leaders,
+    _plot_llr_heatmaps,
+)
 
 
 class CandidateLoadingTests(unittest.TestCase):
@@ -81,6 +85,26 @@ class MetricLeaderTests(unittest.TestCase):
             leaders["llr_by_block"]["8"]["highest_gradient_ncc_brain_edge"]["lambda"],
             2e-4,
         )
+
+    def test_ragged_llr_grid_heatmap_marks_unrun_cases(self) -> None:
+        records = []
+        for block_size, lambda_value in ((4, 3e-3), (8, 2e-2)):
+            records.append(
+                {
+                    "regularizer": "llr",
+                    "block_size": block_size,
+                    "lambda": lambda_value,
+                    "nrmse_brain": 0.04,
+                    "ssim_3d_brain_bbox": 0.97,
+                    "gradient_ncc_brain_edge": 0.99,
+                    "edge_preservation_ratio": 1.01,
+                }
+            )
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+            output = Path(temporary) / "ragged_grid.png"
+            _plot_llr_heatmaps(records, output)
+            self.assertGreater(output.stat().st_size, 0)
 
 
 if __name__ == "__main__":
