@@ -38,6 +38,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/review_regularization_sweep.py` | Canonical workflow | Builds a shared-window Wavelet or LLR review without DICOM or BET ranking. |
 | `scripts/validate_llr_lambda_zero.py` | Canonical workflow | Validates recombined split-complex LLR lambda zero against native-complex FISTA lambda zero. |
 | `scripts/prepare_r1_reference_comparison.py` | Qualitative reference audit | Audits and converts a matched SOS unfiltered DICOM pair, exports direct no-Wave FFT RSS, and creates a no-ranking comparison. |
+| `scripts/validate_metrics_geometry.py` | Evaluation gate | Hash-validates the approved direct-FFT reference, metrics-only mask, and required reconstruction cases on one exact RAS grid without registration or interpolation. |
 | `scripts/export_bart_wave_inputs_retrospective.py` | Acceleration-comparison workflow | Builds a validated PE1×PE2 retrospective mask from reusable full Wave data and exports a separate BART input tree. |
 | `scripts/prepare_regularization_evaluation.py` | Evaluation workflow | Consolidates complete reconstruction NIfTIs and converts one strictly selected unfiltered DICOM reference with hashes and provenance. |
 | `scripts/review_regularization_orientation.py` | Evaluation gate | Produces RAS-canonical, L/R-labeled no-registration comparisons and ranks signed-axis hypotheses without applying one. |

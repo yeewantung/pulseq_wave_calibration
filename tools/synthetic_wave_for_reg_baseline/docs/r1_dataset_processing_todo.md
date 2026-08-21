@@ -163,10 +163,12 @@ separately and only after full Wave encoding.
   `evaluation/direct_fft_reference/metrics_reference_manifest.json`. This
   evaluation overlay records their hashes and preserves the immutable dataset
   manifest hash already bound to completed reconstructions.
-- [ ] Verify that the direct FFT reference and every candidate have identical
+- [x] Verify that the direct FFT reference and every completed coarse candidate
+  have identical
   shape, voxel size, affine, and RAS axis convention. Because they arise from
   the same source grid, calculate metrics without image registration or
-  interpolation; stop if the geometry differs.
+  interpolation; stop if the geometry differs. The manifested gate passed all
+  10 cases with exact `256^3`, 1-mm RAS geometry and zero affine difference.
 - [x] Reject the first expanded candidate made with robust-center BET threshold
   `0.55` plus one face-connected voxel: its 1,924,995-voxel boundary was judged
   too large. Preserve it for provenance and do not use it for metrics.

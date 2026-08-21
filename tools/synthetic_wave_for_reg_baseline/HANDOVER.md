@@ -37,6 +37,14 @@ the labeled L/R orientation on 2026-08-21. Its mask manifest now has
 stable, hash-bound entry point for both the direct FFT RSS reference and this
 metrics-only mask; do not infer a mask from the rejected candidates.
 
+The exact-grid geometry/provenance gate has passed all 10 existing coarse
+cases: six Wavelet and four block-8 LLR. Reference, mask, and candidates are
+all `256^3`, 1-mm, canonical RAS with zero affine difference. No registration
+or interpolation was performed. The report is
+`evaluation/direct_fft_reference/geometry_validation/geometry_validation.json`.
+The next checklist action is fixed-mask coarse evaluation against direct FFT
+RSS; retain both solver-matched lambda-zero cases as controls rather than truth.
+
 The qualitative R1 receive-profile comparison is complete under
 `comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched
 SOS, Prescan-Normalize-off, unfiltered ND DICOM; series 9 is the SOS,

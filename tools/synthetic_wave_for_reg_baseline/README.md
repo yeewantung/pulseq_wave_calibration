@@ -222,6 +222,11 @@ For MID00198 R1 evaluation, the approved direct FFT RSS reference and approved
 dataset output root. Evaluation code should consume that record rather than
 selecting among BET candidate directories.
 
+Before metrics, `validate_metrics_geometry.py` hash-validates that reference,
+its approved mask, and an explicitly required set of regularization cases. It
+requires exact RAS shape, voxel size, and affine equality, verifies GPU BART
+provenance, and writes a gate report without registration or interpolation.
+
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a
 brain-median-scaled intensity-profile comparison. It does not run or select
