@@ -15,6 +15,8 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from dataset_manifest import load_dataset_manifest  # noqa: E402
+from export_bart_calibration_acs import _build_parser as calibration_parser  # noqa: E402
+from export_bart_calibration_acs import run as export_calibration  # noqa: E402
 from export_bart_wave_inputs import _build_parser as export_parser  # noqa: E402
 from export_bart_wave_inputs import run as export_bart_inputs  # noqa: E402
 from synthesize_wave_kspace import _build_parser as synthesis_parser  # noqa: E402
@@ -94,6 +96,8 @@ def _write_fixture(root: Path) -> tuple[Path, object]:
                     "output": str(source_path),
                     "shape": [4, 6, 5, 2],
                     "finite": True,
+                    "interpolation": "none",
+                    "grappa_applied": False,
                 },
             }
         ),
@@ -241,6 +245,77 @@ class ManifestBartExportTests(unittest.TestCase):
             )
             resumed = export_bart_inputs(resumed_args)
             self.assertEqual(resumed["status"], "manifest_bart_inputs_ready")
+
+
+class ManifestCalibrationExportTests(unittest.TestCase):
+    def test_uses_measured_r1_image_acs_without_interpolation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path, dataset = _write_fixture(Path(temporary))
+            export_dir = dataset.output_path("bart_export_dir")
+            bart_dir = export_dir / "bart_inputs"
+            bart_dir.mkdir(parents=True)
+            synthesis_provenance = {"path": "/fixture/synthesis.json", "sha256": "wave"}
+            export_dir.joinpath("manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "manifest_bart_inputs_ready",
+                        "dataset_manifest": {"sha256": dataset.sha256},
+                        "source_synthesis_manifest": synthesis_provenance,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bart_dir.joinpath("manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": (
+                            "masked_wave_inputs_ready_for_map_estimation_and_reconstruction"
+                        ),
+                        "dataset_manifest": {"sha256": dataset.sha256},
+                        "source_synthesis_manifest": synthesis_provenance,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            source_prefix = dataset.output_path("source_reconstruction_prefix")
+            source_path = source_prefix.with_name(source_prefix.name + "_full_ncc2.npy")
+            source = np.load(source_path)
+            source[:] = (
+                np.arange(source.size, dtype=np.float32).reshape(source.shape)
+                + np.complex64(1j)
+            )
+            np.save(source_path, source)
+            args = calibration_parser().parse_args(
+                ["--dataset-manifest", str(path), "--pe2-chunk", "2"]
+            )
+
+            calibration = export_calibration(args)
+
+            exported = np.memmap(
+                bart_dir / "kspace_calib.cfl",
+                mode="r",
+                dtype=np.complex64,
+                shape=(4, 6, 5, 2),
+                order="F",
+            )
+            np.testing.assert_array_equal(exported[:, 2:4, :, :], source[:, 2:4, :, :])
+            self.assertFalse(np.any(exported[:, :2, :, :]))
+            self.assertFalse(np.any(exported[:, 4:, :, :]))
+            self.assertEqual(calibration["calibration_source"], "image")
+            self.assertTrue(calibration["acquired_payload_matches_measured_source"])
+            nested = json.loads((bart_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(nested["status"], "calibration_kspace_ready_for_ecalib")
+
+            resumed_args = calibration_parser().parse_args(
+                ["--dataset-manifest", str(path), "--resume"]
+            )
+            resumed = export_calibration(resumed_args)
+            self.assertEqual(resumed["bart_cfl_sha256"], calibration["bart_cfl_sha256"])
+
+            source[0, 0, 0, 0] += np.complex64(1)
+            np.save(source_path, source)
+            with self.assertRaisesRegex(FileExistsError, "not safely reusable"):
+                export_calibration(resumed_args)
 
 
 if __name__ == "__main__":

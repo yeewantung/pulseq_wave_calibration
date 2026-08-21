@@ -40,8 +40,10 @@ discoverable:
 - `reconstruction` holds coil counts, GRAPPA settings, and BART settings.
   `coil_compression_source` explicitly selects `image` or `refscan`; use the
   complete image stream for an R1 acquisition that has no PAT refscan.
-  `bart.use_gpu` must remain `true`; a null maximum eigenvalue means it will be
-  measured for the dataset rather than copied from the R3 experiment.
+  `bart.calibration_source` separately selects measured `image` or `refscan`
+  data for ESPIRiT calibration; there is no automatic fallback. `bart.use_gpu`
+  must remain `true`; a null maximum eigenvalue means it will be measured for
+  the dataset rather than copied from the R3 experiment.
 - `wave_synthesis` records the extended readout allocation, trajectory
   calibration dimensions, orientation/sign convention, and diagnostic coils.
 - `evaluation.ranking_reference` can be `grappa`, `nifti`, or `dicom`. The
@@ -157,3 +159,25 @@ omitted samples as exact zero, and links the validated PSF into a separate
 `outputs.bart_export_dir/bart_inputs` tree. It never edits the accepted
 synthesis manifest. A resumed run must match the dataset SHA-256, synthesis
 manifest SHA-256, mask configuration, and output hashes.
+
+## Measured ACS export
+
+After the target BART tree is complete, export the calibration data with:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/export_bart_calibration_acs.py \
+    --dataset-manifest /path/to/dataset.json --resume
+```
+
+For `bart.calibration_source: image`, the command requires a fully sampled R1
+source prepared by the direct, interpolation-free path. It copies the declared
+PE1 ACS band across every PE2 partition from that already compressed source;
+it neither applies GRAPPA nor compresses the data a second time. For
+`calibration_source: refscan`, it reads the measured rectangular TWIX refscan
+and applies the accepted coil basis, preserving the compatible product route.
+
+Both branches write `kspace_calib.hdr/.cfl` into the configured target
+`bart_inputs` directory, verify the measured ACS payload, require exact zeros
+outside its support, and attach calibration provenance to the existing BART
+input manifest. Completed reuse is bound to the dataset, target-export
+manifest, source identity, mask support, shape, and complete CFL hash.

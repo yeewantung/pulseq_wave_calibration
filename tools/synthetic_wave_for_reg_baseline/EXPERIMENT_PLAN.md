@@ -26,10 +26,11 @@ new R1 dataset is available.
 
 As of 2026-08-21, reusable code support is complete through dataset
 inspection, coil compression, mutually exclusive direct-R1/GRAPPA source
-preparation, full Wave encoding, and the separate post-Wave target-mask BART
-export. The next portability task follows data flow into measured ACS export;
-actual R1 execution still waits for the incoming acquisition and its passed
-inspection.
+preparation, full Wave encoding, the separate post-Wave target-mask BART
+export, and measured ACS export from either direct R1 image data or a declared
+refscan. The next portability task follows data flow into lambda-zero BART
+reconstruction; actual R1 execution still waits for the incoming acquisition
+and its passed inspection.
 
 ### Decision recorded 2026-08-20: temporary references
 

@@ -93,7 +93,8 @@ The current production path is:
 4. `synthesize_wave_kspace.py` applies the theoretical sequence PSF.
 5. `export_bart_wave_inputs.py` masks and exports the synthetic Wave data.
 6. `export_bart_calibration_acs.py` exports measured no-wave ACS for one
-   reusable BART ESPIRiT calibration.
+   reusable BART ESPIRiT calibration. Its manifest route explicitly selects
+   direct fully sampled image data or a measured refscan.
 7. `run_bart_wave_lambda0.py` runs the unregularized acceptance reconstruction.
 8. `run_bart_regularization.py` calls the pinned upstream wrapper for one
    hashed, resumable wavelet or LLR case.

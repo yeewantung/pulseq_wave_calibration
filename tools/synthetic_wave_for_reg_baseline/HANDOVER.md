@@ -43,9 +43,12 @@ synthesis and BART input export is also complete. Full Wave encoding now
 derives its allocation, trajectory settings, diagnostics, and provenance from
 the contract. Its separate exporter applies the declared retrospective target
 lattice and full-PE2 ACS band only after Wave encoding, validates every masked
-sample, and leaves the accepted synthesis untouched. The next code step is
-manifest-aware measured ACS export; remaining consumers are listed in
-`docs/dataset_portability_audit.md`.
+sample, and leaves the accepted synthesis untouched. Measured ACS export is
+now manifest-aware as well. The incoming R1 route copies the declared ACS
+support from validated, compressed, fully sampled image k-space without
+interpolation or repeated compression; the compatible refscan route remains
+available. The next code step is manifest-aware lambda-zero reconstruction;
+remaining consumers are listed in `docs/dataset_portability_audit.md`.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, fill in a concrete manifest, inspect and qualify the new

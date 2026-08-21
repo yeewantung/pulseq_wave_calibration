@@ -75,6 +75,7 @@
     },
     "bart": {
       "use_gpu": true,
+      "calibration_source": "image",
       "maximum_eigenvalue": null
     }
   },

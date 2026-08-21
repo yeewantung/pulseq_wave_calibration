@@ -64,7 +64,11 @@ def valid_payload() -> dict:
             "virtual_coils": 12,
             "coil_compression_source": "image",
             "grappa": {"kernel": [5, 5, 5], "regularization": 0.01},
-            "bart": {"use_gpu": True, "maximum_eigenvalue": None},
+            "bart": {
+                "use_gpu": True,
+                "calibration_source": "image",
+                "maximum_eigenvalue": None,
+            },
         },
         "wave_synthesis": {
             "extended_readout_samples": 1024,
@@ -104,12 +108,14 @@ class DatasetManifestTests(unittest.TestCase):
     def test_rejects_cpu_bart_and_nonmetric_mask_use(self) -> None:
         payload = valid_payload()
         payload["reconstruction"]["bart"]["use_gpu"] = False
+        payload["reconstruction"]["bart"]["calibration_source"] = "automatic"
         payload["evaluation"]["brain_mask"]["usage"] = "reconstruction"
 
         with self.assertRaises(DatasetManifestError) as context:
             validate_dataset_manifest(payload)
 
         self.assertIn("use_gpu must be true", str(context.exception))
+        self.assertIn("calibration_source", str(context.exception))
         self.assertIn("must be 'metrics_only'", str(context.exception))
 
     def test_dicom_reference_and_enable_switch_must_agree(self) -> None:

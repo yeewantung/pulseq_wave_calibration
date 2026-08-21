@@ -237,6 +237,10 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
     bart = _mapping(reconstruction.get("bart"), "reconstruction.bart", errors)
     if bart.get("use_gpu") is not True:
         errors.append("reconstruction.bart.use_gpu must be true")
+    if bart.get("calibration_source") not in {"image", "refscan"}:
+        errors.append(
+            "reconstruction.bart.calibration_source must be 'image' or 'refscan'"
+        )
     maximum_eigenvalue = bart.get("maximum_eigenvalue")
     if maximum_eigenvalue is not None:
         _positive_number(
