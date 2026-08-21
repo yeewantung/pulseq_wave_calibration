@@ -26,6 +26,7 @@ from bart_cfl import (
 
 AXIS_ROLES = ("phase", "readout", "slice")
 AXIS_FLIPS = (True, False, False)
+AFFINE_AXIS_FLIPS = (True, False, True)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -184,6 +185,7 @@ def _convert_nifti(
     sys.path.insert(0, str(reference_recon))
     from utils.nifti_export_twix import (
         apply_array_axis_flips,
+        canonicalize_arrays_to_ras,
         make_nifti_affine_from_twix,
         normalize_magnitude,
         save_nifti_with_json,
@@ -212,17 +214,21 @@ def _convert_nifti(
     if not np.allclose(fov_mm, [256.0, 256.0, 256.0], atol=1e-3):
         raise ValueError(f"Unexpected sequence FOV for logical output: {fov_mm.tolist()} mm.")
     voxel_size_mm = tuple(float(value) for value in fov_mm / np.asarray(logical.shape))
-    affine, affine_voxel_size, twix_info = make_nifti_affine_from_twix(
+    affine, _, twix_info = make_nifti_affine_from_twix(
         twix_file=twix,
         scan_index=measurement_index,
         npy_shape=logical.shape,
         twix_array_axis_roles=AXIS_ROLES,
-        twix_array_axis_flips=(False, False, False),
+        twix_array_axis_flips=AFFINE_AXIS_FLIPS,
         twix_coord_system="LPS",
         twix_inplane_rot_sign=-1.0,
         twix_use_fov_for_voxel_size=False,
         voxel_size_mm=voxel_size_mm,
     )
+    (magnitude, phase), affine, orientation_transform = canonicalize_arrays_to_ras(
+        (magnitude, phase), affine
+    )
+    stored_voxel_size_mm = np.linalg.norm(affine[:3, :3], axis=0)
 
     nifti_dir = output_dir / "nifti"
     nifti_dir.mkdir(parents=True, exist_ok=True)
@@ -244,7 +250,11 @@ def _convert_nifti(
         "SourceSequence": str(sequence),
         "NIfTITwixArrayAxisRoles": list(AXIS_ROLES),
         "NIfTIPhysicalArrayFlipsApplied": list(AXIS_FLIPS),
-        "NIfTIVoxelSizeMm": list(affine_voxel_size),
+        "NIfTIAffineAxisFlips": list(AFFINE_AXIS_FLIPS),
+        "NIfTICanonicalRAS": True,
+        "NIfTIOrientationTransform": orientation_transform,
+        "NIfTIStoredImageShape": [int(value) for value in magnitude.shape],
+        "NIfTIVoxelSizeMm": [float(value) for value in stored_voxel_size_mm],
         "TwixOrientation": twix_info,
         "PyPulseqWarnings": [str(item.message) for item in caught],
     }

@@ -13,10 +13,15 @@ Apply the approved BET mask only while calculating metrics. Keep DICOM
 intensity ranking disabled for this R3 development dataset, with a
 configuration switch to enable it after the new R1 dataset is qualified.
 
-The immediate implementation work is to fix NIfTI orientation at export and
-integrate retrospective low-resolution support with the current BART manifest
-and mandatory GPU reconstruction path. Then remove R3-only shape, path,
-sampling, and DICOM assumptions from the R1-facing orchestration.
+The NIfTI orientation fix is complete. The shared Wave exporter now writes
+canonical RAS data with affine-axis flips `[true,false,true]`, matching the
+approved manual R3 correction exactly for both magnitude and phase. Its affine
+matches the accepted GRAPPA/SENSE affine. No historical output was overwritten.
+
+The next queued implementation step is retrospective low-resolution support
+with the current BART manifest and mandatory GPU reconstruction path. After
+that, remove R3-only shape, path, sampling, and DICOM assumptions from the
+R1-facing orchestration.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, inspect and qualify the new acquisition, then switch final
@@ -202,10 +207,10 @@ metadata; test partial-Fourier completion and crop the oversampled image FOV.
 
 ## Frozen regularization decisions
 
-Execution order is NIfTI orientation correction, retrospective low-resolution
-integration, dataset-portability work, and then qualification/refinement on
-the new R1 acquisition. Parameters selected during R3 development are
-provisional and R3-specific.
+NIfTI orientation correction is complete. Remaining execution order is
+retrospective low-resolution integration, dataset-portability work, and then
+qualification/refinement on the new R1 acquisition. Parameters selected during
+R3 development are provisional and R3-specific.
 
 Wavelet coarse sweep after the new R1 development scan is qualified:
 

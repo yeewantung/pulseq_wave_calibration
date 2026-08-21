@@ -33,6 +33,10 @@ applied only during metric calculation. No-wave SENSE remains an optional
 diagnostic, while the no-wave BART PICS branch is deferred. The `ecalib -I`
 pilot is retained as a negative result.
 
+Wave NIfTI export now stores magnitude and phase directly in canonical RAS
+using the product-DICOM-validated affine-axis convention. Downstream manual
+signed-axis correction is no longer required for newly exported results.
+
 A new R1 dataset will replace this temporary reference contract after it is
 collected and qualified. The older 2021 R1 scans remain partial-readout
 fallbacks only. The final R1 Wavelet coarse sweep will use lambda values

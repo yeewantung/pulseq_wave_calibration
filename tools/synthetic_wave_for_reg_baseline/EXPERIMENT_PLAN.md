@@ -10,9 +10,10 @@ The execution order is now:
 
 1. use the no-wave GRAPPA reconstruction from the existing R3x1 product scan
    as the single temporary development reference;
-2. finish the reusable infrastructure needed by later stages: correct NIfTI
-   orientation at export, integrate retrospective low-resolution support, and
-   remove R3-specific geometry/configuration assumptions from the R1 path;
+2. finish the reusable infrastructure needed by later stages: retain the
+   completed NIfTI orientation correction, integrate retrospective
+   low-resolution support, and remove R3-specific geometry/configuration
+   assumptions from the R1 path;
 3. acquire and qualify the new R1 dataset; and
 4. switch the final parameter-selection and DICOM-ranking workflow to that R1
    dataset, then apply the R1-selected settings back to R3 without retuning.
@@ -422,17 +423,19 @@ Do this only after the experiments and presentation outputs are frozen.
 
 ## 13. Immediate next step
 
-Fix NIfTI orientation at the export boundary so all reconstruction methods
-write geometry-correct canonical RAS outputs without a downstream manual
-signed-axis correction. Then integrate the retrospective low-resolution code
+The NIfTI orientation correction is complete. Wave magnitude and phase now
+export directly in canonical RAS and match the previously approved R3 manual
+X/Z correction exactly, with the same affine as the accepted GRAPPA and SENSE
+outputs. No accepted historical output was overwritten.
+
+The next queued step is to integrate the retrospective low-resolution code
 with the current BART-input/manifest contract and GPU BART reconstruction.
 
-In parallel with those two concrete gaps, remove hard-coded R3 geometry,
-dataset paths, and DICOM-only reference assumptions from the R1-facing
-orchestration. Use GRAPPA as the temporary metric reference, apply BET only
-during metrics, and keep DICOM ranking as a configuration mode to enable on
-the new R1 dataset. Defer no-wave BART PICS and the older R1 partial-readout
-work.
+After retrospective-LR integration, remove hard-coded R3 geometry, dataset
+paths, and DICOM-only reference assumptions from the R1-facing orchestration.
+Use GRAPPA as the temporary metric reference, apply BET only during metrics,
+and keep DICOM ranking as a configuration mode to enable on the new R1
+dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
 
 ## 14. Remaining readiness gaps for the incoming R1 dataset
 
@@ -440,10 +443,11 @@ The regularization engine, split-complex LLR handling, resumable manifests,
 and core metric functions are already available. The remaining infrastructure
 work is:
 
-1. **NIfTI orientation at source:** unify GRAPPA, BART lambda zero,
-   regularized Wave, and retrospective-LR exporters around one tested
-   geometry contract; write canonical RAS data/affines directly; and remove
-   reliance on the R3-only manual signed-axis correction.
+1. **NIfTI orientation at source — complete:** the shared Wave exporter now
+   writes canonical RAS data/affines directly and no longer requires the
+   R3-only manual signed-axis correction. GRAPPA and SENSE already use the same
+   validated affine. Retrospective-LR will consume the shared exporter during
+   its integration.
 2. **Retrospective low resolution:** integrate the separate repository,
    consume current BART manifests, crop only PE dimensions, rebuild the target
    PSF, run BART on GPU, restore the target k-space norm, and export with the
