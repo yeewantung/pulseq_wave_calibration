@@ -51,13 +51,18 @@ available. The new R1 acquisition is now ready, so its read-only identification
 and measured qualification come before manifest-aware lambda-zero work.
 Remaining consumers are listed in `docs/dataset_portability_audit.md`.
 
-The new R1 dataset has been collected; its exact filename/path is pending from
-the user. Once identified, locate the matching DICOM and Wave sequence, fill in
-a concrete copy of `configs/incoming_r1_dataset.example.json`, and inspect the
-acquisition before launching large outputs. If inspection passes, exercise the
-real path through coil compression, direct source assembly, Wave synthesis,
-target masking, and measured ACS export. The older partial-readout R1 datasets
-remain fallbacks only and their completion work is deferred.
+The new R1 dataset is under
+`/path/to/data/20260821_product`. Metadata inspection
+selects MID00198 `t1_mprage_sag_p2.dat` as the actual fully sampled source:
+256 cubed logical matrix, 64 coils, complete duplicate-free PE support, and no
+refscan. MID00196 `pulseq151fix_mprage.dat` is measured R3x1 and must not enter
+the direct R1 path. Prescan Normalize was enabled for the available DICOM, so
+do not use DICOM intensities as baseline or ranking input. Follow
+`docs/r1_dataset_processing_todo.md`: first add an explicit no-reference/
+disabled-DICOM contract mode, then create and inspect the concrete manifest
+before generating large outputs. The intended source path is image-derived
+64-to-12 coil compression, direct k-space assembly, full Wave encoding, a
+separate R3x2 target mask, and image-derived measured ACS.
 
 ## Environment on macha
 

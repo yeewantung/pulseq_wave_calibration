@@ -5,6 +5,8 @@ Updated: 2026-08-21
 This is the active experiment plan. The original R3x1-centered tracker is
 preserved as a historical record in
 `docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md`.
+The dataset-specific execution checklist is
+`docs/r1_dataset_processing_todo.md`.
 
 The execution order is now:
 
@@ -50,8 +52,9 @@ Completed:
 
 Pending:
 
-- [ ] identify the new R1 TWIX, matching DICOM directory, and Wave sequence;
-- [ ] create its concrete manifest and pass measured acquisition inspection;
+- [x] identify the fully sampled R1 TWIX and candidate Wave sequence;
+- [ ] create its concrete no-DICOM-reference manifest and pass measured
+  acquisition inspection;
 - [ ] decide whether the acquisition supplies separate development and
   confirmation scans;
 - [ ] run and visually qualify the real R1 preparation path through measured
@@ -65,6 +68,13 @@ Pending:
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
 partial-readout R1 scans, DICOM-intensity ranking before the new R1 DICOM is
 qualified, and use of BET outside metric calculation.
+
+The selected fully sampled source is MID00198 in the 2026-08-21 product
+folder. It has a complete 256 cubed logical grid, 64 coils, and no refscan;
+therefore it uses image-derived 64-to-12 coil compression and direct measured
+k-space assembly. MID00196 is measured R3x1 and is explicitly excluded from
+the direct R1 route. Prescan Normalize was enabled for the available DICOM, so
+the initial R1 experiment has no DICOM or other intensity-ranking baseline.
 
 ### Decision recorded 2026-08-20: temporary references
 

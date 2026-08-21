@@ -7,7 +7,9 @@ reconstruction.
 Start with:
 
 - [`EXPERIMENT_PLAN.md`](EXPERIMENT_PLAN.md) for the active scientific plan;
-- [`HANDOVER.md`](HANDOVER.md) for exact cross-session state; and
+- [`HANDOVER.md`](HANDOVER.md) for exact cross-session state;
+- [`docs/r1_dataset_processing_todo.md`](docs/r1_dataset_processing_todo.md)
+  for the measured 2026-08-21 R1 execution checklist; and
 - [`docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md`](docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md)
   only when historical R3x1 development detail is needed.
 
