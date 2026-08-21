@@ -33,6 +33,10 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/prepare_no_wave_sense.py` | Retained diagnostic | Builds a measured-only alternative input for future GRAPPA/SENSE investigation. |
 | `scripts/run_no_wave_sense.py` | Retained diagnostic | Reproduces the SENSE/ESPIRiT anatomy-support comparison. |
 | `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
+| `scripts/run_wavelet_sweep.sh` | Canonical workflow | Runs/resumes the compact R1 Wavelet sweep and its reference-neutral review. |
+| `scripts/run_llr_sweep.sh` | Canonical workflow | Gates split-complex lambda zero, then runs/resumes the compact block-8 LLR sweep and review. |
+| `scripts/review_regularization_sweep.py` | Canonical workflow | Builds a shared-window Wavelet or LLR review without DICOM or BET ranking. |
+| `scripts/validate_llr_lambda_zero.py` | Canonical workflow | Validates recombined split-complex LLR lambda zero against native-complex FISTA lambda zero. |
 | `scripts/export_bart_wave_inputs_retrospective.py` | Acceleration-comparison workflow | Builds a validated PE1×PE2 retrospective mask from reusable full Wave data and exports a separate BART input tree. |
 | `scripts/prepare_regularization_evaluation.py` | Evaluation workflow | Consolidates complete reconstruction NIfTIs and converts one strictly selected unfiltered DICOM reference with hashes and provenance. |
 | `scripts/review_regularization_orientation.py` | Evaluation gate | Produces RAS-canonical, L/R-labeled no-registration comparisons and ranks signed-axis hypotheses without applying one. |

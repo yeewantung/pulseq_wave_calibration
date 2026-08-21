@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a reference-neutral visual and numerical review of a Wavelet sweep."""
+"""Create a reference-neutral visual and numerical regularization review."""
 
 from __future__ import annotations
 
@@ -16,15 +16,21 @@ from bart_cfl import open_bart_memmap, sha256_file
 from checkpoint_io import write_json_atomic
 
 
-LAMBDA_LABELS = ("0", "1e-6", "1e-5", "1e-4", "1e-3", "1e-2")
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lambda-zero-manifest", required=True, type=Path)
     parser.add_argument("--sweep-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--regularizer", required=True, choices=("wavelet", "llr"))
+    parser.add_argument("--block-size", type=int, default=8)
+    parser.add_argument("--lambda-labels", required=True, nargs="+")
     return parser
+
+
+def _run_name(regularizer: str, label: str, block_size: int) -> str:
+    if regularizer == "wavelet":
+        return f"wavelet_lambda-{label}"
+    return f"llr_block-{block_size}_lambda-{label}"
 
 
 def _relative_l2(candidate_base: Path, reference_base: Path) -> float:
@@ -105,6 +111,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     lambda_zero_manifest = args.lambda_zero_manifest.expanduser().resolve()
     sweep_root = args.sweep_root.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
+    labels = tuple(args.lambda_labels)
+    if not labels or labels[0] != "0":
+        raise ValueError("The first lambda label must be 0 for the matched reference.")
+    if args.regularizer == "llr" and args.block_size < 1:
+        raise ValueError("LLR block size must be positive.")
+    regularizer_title = (
+        "Wavelet" if args.regularizer == "wavelet" else f"LLR block {args.block_size}"
+    )
+    output_prefix = (
+        "wavelet" if args.regularizer == "wavelet" else f"llr_block-{args.block_size}"
+    )
     accepted = json.loads(lambda_zero_manifest.read_text(encoding="utf-8"))
     if float(accepted.get("config", {}).get("ecalib_crop", -1)) != 0.6:
         raise ValueError("Review requires the approved crop-0.6 lambda zero.")
@@ -113,26 +130,34 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     records = []
     volumes = []
     common_affine: np.ndarray | None = None
-    fista_zero_base = sweep_root / "wavelet_lambda-0" / "bart" / "image_wave"
-    for label in LAMBDA_LABELS:
-        run_dir = sweep_root / f"wavelet_lambda-{label}"
+    fista_zero_base = (
+        sweep_root / _run_name(args.regularizer, "0", args.block_size) / "bart" / "image_wave"
+    )
+    for label in labels:
+        run_dir = sweep_root / _run_name(args.regularizer, label, args.block_size)
         manifest_path = run_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("status") != "complete":
-            raise ValueError(f"Incomplete Wavelet case: {manifest_path}")
+            raise ValueError(f"Incomplete regularization case: {manifest_path}")
+        if manifest.get("config", {}).get("regularizer") != args.regularizer:
+            raise ValueError(f"Regularizer/config mismatch: {manifest_path}")
         if manifest.get("config", {}).get("lambda_label") != label:
-            raise ValueError(f"Wavelet label/config mismatch: {manifest_path}")
+            raise ValueError(f"Lambda label/config mismatch: {manifest_path}")
+        if args.regularizer == "llr" and manifest.get("config", {}).get(
+            "block_size"
+        ) != args.block_size:
+            raise ValueError(f"LLR block-size/config mismatch: {manifest_path}")
         if manifest.get("source_provenance", {}).get("lambda_zero_manifest", {}).get(
             "sha256"
         ) != source_hash:
             raise ValueError(
-                f"Wavelet case does not use the approved lambda zero: {manifest_path}"
+                f"Case does not use the approved lambda zero: {manifest_path}"
             )
         volume, affine, nifti_record = _load_restored_magnitude(run_dir)
         if common_affine is None:
             common_affine = affine
         elif not np.allclose(affine, common_affine, atol=1e-5):
-            raise ValueError(f"Wavelet NIfTI affine mismatch: {manifest_path}")
+            raise ValueError(f"Regularization NIfTI affine mismatch: {manifest_path}")
         relative_l2 = _relative_l2(
             run_dir / "bart" / "image_wave", fista_zero_base
         )
@@ -151,7 +176,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     positive = volumes[0][volumes[0] > 0]
     display_window = [0.0, float(np.percentile(positive, 99.5))]
     figure, axes = plt.subplots(2, len(volumes), figsize=(18, 8.0), squeeze=False)
-    for column, (label, volume) in enumerate(zip(LAMBDA_LABELS, volumes)):
+    for column, (label, volume) in enumerate(zip(labels, volumes)):
         planes = (
             volume[:, volume.shape[1] // 2, :],
             volume[:, :, volume.shape[2] // 2],
@@ -166,17 +191,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 vmax=display_window[1],
             )
             axis.set_title(
-                ("FISTA λ=0" if label == "0" else f"Wavelet λ={label}")
+                ("FISTA λ=0" if label == "0" else f"{regularizer_title} λ={label}")
                 + f"\n{view}"
             )
             _add_orientation_labels(axis, view=view)
             axis.axis("off")
     figure.suptitle(
-        "R1 synthetic R3×2 Wavelet sweep — common FISTA-λ=0 intensity window"
+        f"R1 synthetic R3×2 {regularizer_title} sweep — common FISTA-λ=0 intensity window"
     )
     figure.tight_layout(rect=(0, 0, 1, 0.96), h_pad=2.5)
     output_dir.mkdir(parents=True, exist_ok=True)
-    comparison = output_dir / "wavelet_sweep_common_window.png"
+    comparison = output_dir / f"{output_prefix}_sweep_common_window.png"
     figure.savefig(comparison, dpi=150)
     plt.close(figure)
 
@@ -187,11 +212,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         [record["relative_l2_from_fista_lambda_zero"] for record in positive_records],
         marker="o",
     )
-    axis.set_xlabel("Wavelet lambda")
+    axis.set_xlabel(f"{regularizer_title} lambda")
     axis.set_ylabel("Relative L2 from FISTA lambda zero")
     axis.grid(True, which="both", alpha=0.3)
     figure.tight_layout()
-    difference_plot = output_dir / "wavelet_sweep_relative_l2.png"
+    difference_plot = output_dir / f"{output_prefix}_sweep_relative_l2.png"
     figure.savefig(difference_plot, dpi=150)
     plt.close(figure)
 
@@ -199,7 +224,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "format_version": 1,
         "status": "awaiting_visual_selection",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "purpose": "reference-neutral Wavelet review; no DICOM, BET, or candidate ranking",
+        "purpose": (
+            f"reference-neutral {regularizer_title} review; "
+            "no DICOM, BET, or candidate ranking"
+        ),
+        "regularizer": args.regularizer,
+        "block_size": args.block_size if args.regularizer == "llr" else None,
         "lambda_zero_manifest": {
             "path": str(lambda_zero_manifest),
             "sha256": source_hash,
@@ -214,7 +244,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     write_json_atomic(output_dir / "review_manifest.json", report)
-    print(f"Wavelet review manifest: {output_dir / 'review_manifest.json'}")
+    print(f"Regularization review manifest: {output_dir / 'review_manifest.json'}")
     return report
 
 

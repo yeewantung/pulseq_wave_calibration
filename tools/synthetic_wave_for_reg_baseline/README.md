@@ -97,6 +97,18 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_wavelet_sweep.sh \
 It runs solver-matched lambda zero and the five frozen positive lambdas, then
 writes a DICOM-free, common-window review under the sweep's `review` directory.
 
+For the compact block-8 LLR presentation sweep, use:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_llr_sweep.sh \
+    --confirm-crop-0p6-reviewed
+```
+
+It first gates split-complex LLR lambda zero against native-complex FISTA
+lambda zero, then runs `2e-5`, `1e-4`, and `5e-4`. All reconstructions use
+GPU BART and the same approved crop-`0.6` maps. The output includes a
+DICOM-free common-window review and a manifest for each case.
+
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary
 optimization, it is not an untouched independent validation dataset.

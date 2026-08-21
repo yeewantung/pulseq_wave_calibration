@@ -7,11 +7,15 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Review the completed MID00198 R1 Wavelet coarse sweep and choose whether a
-focused refinement is warranted. The sweep uses the approved crop-`0.6` maps,
-measured `6.70e7` maximum eigenvalue, GPU FISTA, and a solver-matched FISTA
-lambda zero. Its common-window review is reference-neutral: DICOM and BET do
-not participate. No GRAPPA or SENSE source reconstruction was used.
+Review the completed MID00198 R1 Wavelet and compact block-8 LLR sweeps, then
+choose whether a focused refinement is warranted. Both use the approved
+crop-`0.6` maps, measured `6.70e7` maximum eigenvalue, GPU FISTA, and a
+solver-matched FISTA lambda zero. The LLR split-complex equivalence gate passed
+at relative L2 `2.73366e-6` against native-complex FISTA lambda zero. Its
+positive lambdas are `2e-5`, `1e-4`, and `5e-4`; their relative L2 changes from
+matched LLR lambda zero are `5.94330e-5`, `2.93558e-4`, and `1.45211e-3`.
+Both common-window reviews are reference-neutral: DICOM and BET do not
+participate. No GRAPPA or SENSE source reconstruction was used.
 
 The NIfTI orientation fix is complete. The shared Wave exporter now writes
 canonical RAS data with affine-axis flips `[true,false,true]`, matching the

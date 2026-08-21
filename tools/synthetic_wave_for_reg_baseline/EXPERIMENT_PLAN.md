@@ -65,6 +65,8 @@ Pending:
 - [ ] pass R1 lambda-zero forward-model, scaling, orientation, and GPU gates;
 - [ ] make evaluation preparation and metrics reference-neutral;
 - [x] run the R1 Wavelet coarse sweep with a solver-matched FISTA lambda zero;
+- [x] pass the split-complex lambda-zero gate and run the compact R1 block-8
+  LLR sweep;
 - [ ] freeze the final choice and apply it
   unchanged to R3 as a cross-dataset transfer check.
 
@@ -332,6 +334,12 @@ Before any new LLR sweep:
 4. run a small block-8 lambda pilot and confirm that the proximal operation is
    non-degenerate; and
 5. only then define a new lambda/block-size sweep.
+
+The R1 block-8 correctness gate passed on 2026-08-21: recombined split-complex
+lambda zero differed from native-complex FISTA lambda zero by relative L2
+`2.73366e-6`, below the fixed `1e-5` limit. The presentation-oriented coarse
+cases `2e-5`, `1e-4`, and `5e-4` are complete. Block-size refinement remains
+deferred.
 
 Do not use the old LLR sweep to select parameters. A brain mask may make small
 differences easier to measure, but it does not correct the singleton-dimension

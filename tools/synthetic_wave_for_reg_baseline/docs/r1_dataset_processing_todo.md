@@ -143,9 +143,15 @@ separately and only after full Wave encoding.
   solver-matched lambda zero plus `1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`.
   All cases are complete, finite, canonical RAS, and bound to the approved
   crop-`0.6` maps and measured maximum eigenvalue.
+- [x] Run the urgent compact block-8 LLR sweep with the verified `-l -v -g`
+  path: solver-matched lambda zero plus `2e-5`, `1e-4`, and `5e-4`. The
+  split/native FISTA lambda-zero gate passed at relative L2 `2.73366e-6`, and
+  all cases are complete, finite, canonical RAS, and manifest-backed.
 - [ ] Visually select a coarse Wavelet range from the common-window review.
   Do not rank against DICOM; use the FISTA lambda-zero case as the matched
   solver baseline.
+- [ ] Visually review the block-8 LLR common-window sheet; do not select a
+  final LLR lambda until it is considered alongside the Wavelet sweep.
 - [ ] Keep BET restricted to metric support and keep all DICOM intensities out
   of ranking until a suitable DICOM acquisition is available and qualified.
 - [ ] Define a raw-derived no-Wave comparison reference only after its coil
