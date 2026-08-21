@@ -35,9 +35,13 @@ metrics-only mask use. `inspect_product_dataset.py --dataset-manifest ...`
 resolves the contract, records its hash/snapshot, and checks measured
 TWIX/DICOM metadata. Coil compression and compatible R3x1 GRAPPA now consume
 that passed, hash-matched inspection. GRAPPA derives its allocations from the
-manifest and rejects non-R3x1 sampling. The next code step is a direct fully
-sampled no-Wave source path for the incoming R1 scan; remaining consumers are
-listed in `docs/dataset_portability_audit.md`.
+manifest and rejects non-R3x1 sampling. Direct fully sampled R1 source assembly
+is now implemented as the mutually exclusive alternative: it requires complete
+centered readout and PE support, can derive the coil basis from the image stream
+when no PAT refscan exists, performs no interpolation, and produces resumable
+compressed k-space with bound provenance. The next code step is
+manifest propagation through Wave synthesis and BART input export; remaining
+consumers are listed in `docs/dataset_portability_audit.md`.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, fill in a concrete manifest, inspect and qualify the new

@@ -56,6 +56,7 @@ def valid_payload() -> dict:
         "reconstruction": {
             "physical_coils": 32,
             "virtual_coils": 12,
+            "coil_compression_source": "image",
             "grappa": {"kernel": [5, 5, 5], "regularization": 0.01},
             "bart": {"use_gpu": True, "maximum_eigenvalue": None},
         },

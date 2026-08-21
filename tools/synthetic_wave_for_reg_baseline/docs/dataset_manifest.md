@@ -34,6 +34,8 @@ discoverable:
   stream itself must cover every PE coordinate. It should be `true` for the
   incoming fully sampled R1 development scan.
 - `reconstruction` holds coil counts, GRAPPA settings, and BART settings.
+  `coil_compression_source` explicitly selects `image` or `refscan`; use the
+  complete image stream for an R1 acquisition that has no PAT refscan.
   `bart.use_gpu` must remain `true`; a null maximum eigenvalue means it will be
   measured for the dataset rather than copied from the R3 experiment.
 - `evaluation.ranking_reference` can be `grappa`, `nifti`, or `dicom`. The
@@ -71,20 +73,49 @@ python tools/synthetic_wave_for_reg_baseline/scripts/estimate_coil_compression.p
     --dataset-manifest /path/to/dataset.json
 ```
 
-The existing joint-coil GRAPPA entry point accepts the same contract and
-derives its matrix, Ncc, kernel, regularization, input basis, and output prefix:
+There is no implicit calibration-stream fallback. The incoming R1 example uses
+`image`, while a current R3 contract should use `refscan`. The selected stream
+and its dimensions are recorded in the coil-compression report.
+
+For a fully sampled R1 source, validate the runtime TWIX layout without reading
+its payload:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/assemble_fully_sampled_no_wave_kspace.py \
+    --dataset-manifest /path/to/dataset.json --validate-only
+```
+
+After that passes, run the chunked, resumable direct assembly. It applies the
+validated coil basis but performs no GRAPPA or other sample interpolation:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/assemble_fully_sampled_no_wave_kspace.py \
+    --dataset-manifest /path/to/dataset.json --resume
+```
+
+The command requires a duplicate-free complete PE grid, a centered complete
+readout, zero-origin compact TWIX support, and exact runtime
+`[RO, coil, PE1, PE2]` geometry. Its output is
+`[RO, PE1, PE2, virtual coil]` complex64 k-space under the configured source
+prefix. Resume state is bound to the manifest, inspection report, TWIX file
+identity, coil-basis hash, matrix, and coil counts.
+
+For the existing R3 source, the joint-coil GRAPPA entry point accepts the same
+contract and derives its matrix, Ncc, kernel, regularization, input basis, and
+output prefix:
 
 ```bash
 python tools/synthetic_wave_for_reg_baseline/scripts/reconstruct_no_wave_grappa_3d.py \
     --dataset-manifest /path/to/dataset.json --resume
 ```
 
-That program remains intentionally restricted to measured PE1 stride/residue
+The GRAPPA program remains intentionally restricted to measured PE1 stride/residue
 `3/[1]`, source acceleration `3x1`, and full-PE2 refscan coverage. It exits
-before reconstruction for an R1 manifest. A direct fully sampled source path is
-the next required consumer for the incoming R1 acquisition; R1 data must not be
-silently routed through the R3 interpolation operator.
+before reconstruction for an R1 manifest. Conversely, direct assembly requires
+R1 and cannot accept accelerated source data. The two paths intentionally write
+the same downstream k-space layout.
 
 Coil compression refuses an existing basis/report prefix. GRAPPA likewise
 refuses existing checkpoints or results unless `--resume` is explicit, so a
-new dataset contract cannot overwrite an accepted run accidentally.
+new dataset contract cannot overwrite an accepted run accidentally. Direct R1
+assembly has the same overwrite protection.

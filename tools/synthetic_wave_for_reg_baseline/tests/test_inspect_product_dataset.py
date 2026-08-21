@@ -97,12 +97,14 @@ class StreamSummaryTests(unittest.TestCase):
             Sli = Ave = Phs = Eco = Rep = Set = Seg = Ida = Idb = Idc = Idd = Ide = np.zeros(2)
             centerLin = np.array([127.0, 127.0])
             centerPar = np.array([128.0, 128.0])
+            centerCol = np.array([256.0, 256.0])
             IsReflected = np.array([False, True])
 
         result = _stream_summary(FakeStream())
         self.assertEqual(result["acquisition_count"], 2)
         self.assertEqual(result["readout_oversampling_factor"], 2.0)
         self.assertEqual(result["counters"]["Lin"]["unique_values"], [1, 4])
+        self.assertEqual(result["center_column"]["unique_values"], [256])
         self.assertEqual(result["reflected_acquisition_count"], 1)
 
 
@@ -175,6 +177,9 @@ class ManifestInspectionTests(unittest.TestCase):
                             "image": {
                                 "coil_count": 32,
                                 "readout_oversampling_factor": 2.0,
+                                "acquired_readout_samples": 512,
+                                "output_readout_samples_after_remove_os": 256,
+                                "center_column": {"unique_values": [256]},
                             }
                         },
                     }
@@ -211,6 +216,9 @@ class ManifestInspectionTests(unittest.TestCase):
                             "image": {
                                 "coil_count": 32,
                                 "readout_oversampling_factor": 2.0,
+                                "acquired_readout_samples": 512,
+                                "output_readout_samples_after_remove_os": 256,
+                                "center_column": {"unique_values": [256]},
                             }
                         },
                     }
@@ -236,6 +244,51 @@ class ManifestInspectionTests(unittest.TestCase):
 
             self.assertFalse(result["all_passed"])
             self.assertIn("complete_source_pe_grid", result["failed_checks"])
+
+    def test_partial_offcenter_readout_failure_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest(Path(temporary))
+            twix = {
+                "selected_measurement_index": 0,
+                "measurements": [
+                    {
+                        "header": {
+                            "base_resolution": 256,
+                            "acceleration_pe1": 1,
+                            "acceleration_pe2": 1,
+                        },
+                        "streams": {
+                            "image": {
+                                "coil_count": 32,
+                                "readout_oversampling_factor": 2.0,
+                                "acquired_readout_samples": 404,
+                                "output_readout_samples_after_remove_os": 202,
+                                "center_column": {"unique_values": [148]},
+                            }
+                        },
+                    }
+                ],
+                "selected_measurement_sampling": {
+                    "matrix_pe1": 240,
+                    "matrix_pe2": 192,
+                    "image_unique_coordinate_count": 240 * 192,
+                    "refscan_unique_pe1_lines": list(range(24)),
+                    "refscan_unique_pe2_partitions": list(range(192)),
+                },
+            }
+            dicom = {
+                "series": [
+                    {
+                        "image_type": "ORIGINAL\\PRIMARY\\M\\ND\\NORM",
+                        "series_instance_uid": "1.2.3",
+                    }
+                ]
+            }
+
+            result = compare_report_to_manifest(manifest, twix, dicom)
+
+            self.assertFalse(result["all_passed"])
+            self.assertIn("complete_centered_readout", result["failed_checks"])
 
 
 if __name__ == "__main__":

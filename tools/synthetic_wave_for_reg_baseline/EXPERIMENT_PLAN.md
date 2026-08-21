@@ -482,9 +482,12 @@ synthetic-Wave sampling, paths, reconstruction settings, and evaluation policy;
 the dataset inspector consumes it and records measured contract checks. Coil
 compression and the accepted R3x1 GRAPPA entry point now consume the passed
 contract; GRAPPA allocations are matrix-derived and an exact measured-sampling
-gate prevents R1 misuse. The next implementation step is the direct fully
-sampled no-Wave source path needed by the incoming R1 dataset, without GRAPPA
-interpolation.
+gate prevents R1 misuse. The direct fully sampled no-Wave source path is also
+implemented: it requires a centered complete readout and duplicate-free PE
+grid, permits explicitly image-derived coil compression when no PAT refscan is
+present, applies no interpolation, and creates resumable provenance-bound
+k-space. The next implementation step is manifest propagation
+through Wave synthesis and BART input export.
 Use GRAPPA as the temporary metric reference, apply BET only during metrics,
 and keep DICOM ranking as a configuration mode to enable on the new R1
 dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
@@ -508,8 +511,8 @@ work is:
    without selecting a winning resolution.
 3. **Dataset portability — in progress:** the shared manifest, validator,
    example, hard-code audit, inspection integration, coil compression, and
-   compatible R3x1 GRAPPA integration are complete. Add the direct R1 source
-   path, then propagate the contract through Wave/BART export, regularized
+   both direct R1 and compatible R3x1 GRAPPA source preparation are complete in
+   code. Propagate the contract through Wave/BART export, regularized
    reconstruction, and evaluation to replace fixed
    `256 x 256 x 256`, R3 sampling-line, subject, path, DICOM-count, and
    maximum-eigenvalue assumptions with manifest or sequence/TWIX metadata.

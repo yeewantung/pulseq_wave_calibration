@@ -20,6 +20,7 @@ from estimate_coil_compression import (  # noqa: E402
     apply_coil_compression_coillast,
     coil_basis_from_covariance,
     resolve_coil_compression_inputs,
+    select_calibration_stream,
 )
 from dataset_manifest import load_dataset_manifest  # noqa: E402
 
@@ -102,9 +103,10 @@ class CoilCompressionTests(unittest.TestCase):
                 twix=None,
                 output_prefix=None,
                 ncc=None,
+                calibration_source=None,
             )
 
-            twix, output, ncc, physical_coils, resolved_manifest = (
+            twix, output, ncc, physical_coils, source, resolved_manifest = (
                 resolve_coil_compression_inputs(args)
             )
 
@@ -112,7 +114,18 @@ class CoilCompressionTests(unittest.TestCase):
             self.assertEqual(output, root / "outputs" / "calibration" / "coil_compression")
             self.assertEqual(ncc, [12])
             self.assertEqual(physical_coils, 64)
+            self.assertEqual(source, "image")
             self.assertEqual(resolved_manifest.sha256, manifest.sha256)
+
+    def test_calibration_stream_has_no_implicit_fallback(self) -> None:
+        class Stream:
+            flagRemoveOS = False
+            squeeze = False
+
+        image = Stream()
+        self.assertIs(select_calibration_stream({"image": image}, "image"), image)
+        with self.assertRaisesRegex(ValueError, "no declared refscan"):
+            select_calibration_stream({"image": image}, "refscan")
 
 
 if __name__ == "__main__":

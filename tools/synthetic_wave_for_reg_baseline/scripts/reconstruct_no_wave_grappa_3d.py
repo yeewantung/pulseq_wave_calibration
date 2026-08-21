@@ -13,6 +13,12 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from checkpoint_io import (
+    load_coil_basis,
+    open_or_create_complex64_npy,
+    validate_resume_pair,
+    write_json_atomic,
+)
 from grappa_3d_r3 import (
     NormalEquations3D,
     accumulate_normal_equations_3d,
@@ -161,37 +167,11 @@ def resolve_grappa_run_inputs(args: argparse.Namespace) -> GrappaRunInputs:
     )
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Atomically replace a small JSON progress or result document."""
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def _load_basis(path: Path, ncc: int) -> np.ndarray:
-    """Load the leading nested virtual-coil basis requested by the run."""
-    with np.load(path) as archive:
-        basis = np.asarray(archive["basis"], dtype=np.complex64)
-    if basis.ndim != 2 or not 1 <= ncc <= basis.shape[1]:
-        raise ValueError(f"Invalid basis {basis.shape} or requested Ncc={ncc}.")
-    return basis[:, :ncc]
-
-
-def _open_or_create_memmap(
-    path: Path,
-    shape: tuple[int, ...],
-    *,
-    resume: bool,
-) -> np.memmap:
-    """Open a complex64 NPY checkpoint without silently accepting wrong shape."""
-    if resume and path.is_file():
-        array = np.load(path, mmap_mode="r+")
-        if array.shape != shape or array.dtype != np.complex64:
-            raise ValueError(f"Checkpoint {path} has {array.shape} {array.dtype}, expected {shape}.")
-        return array
-    if path.exists():
-        raise FileExistsError(f"Refusing to overwrite existing checkpoint: {path}")
-    return np.lib.format.open_memmap(path, mode="w+", dtype=np.complex64, shape=shape)
+# Private aliases preserve compatibility with earlier tests and local imports.
+_write_json = write_json_atomic
+_load_basis = load_coil_basis
+_open_or_create_memmap = open_or_create_complex64_npy
+_validate_resume_pair = validate_resume_pair
 
 
 def _progress_start(path: Path, *, resume: bool) -> int:
@@ -199,14 +179,6 @@ def _progress_start(path: Path, *, resume: bool) -> int:
     if resume and path.is_file():
         return int(json.loads(path.read_text(encoding="utf-8"))["next_partition"])
     return 0
-
-
-def _validate_resume_pair(data_path: Path, progress_path: Path, *, resume: bool) -> None:
-    """Reject mismatched data/progress files that could silently skip partitions."""
-    if resume and data_path.is_file() != progress_path.is_file():
-        raise ValueError(
-            f"Resume requires both checkpoint files or neither: {data_path}, {progress_path}."
-        )
 
 
 def build_compressed_acs(

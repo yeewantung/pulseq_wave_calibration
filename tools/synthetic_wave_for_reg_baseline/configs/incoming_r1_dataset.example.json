@@ -55,6 +55,7 @@
   "reconstruction": {
     "physical_coils": 64,
     "virtual_coils": 12,
+    "coil_compression_source": "image",
     "grappa": {
       "kernel": [
         5,

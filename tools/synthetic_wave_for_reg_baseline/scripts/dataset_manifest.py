@@ -164,6 +164,10 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
     _positive_integer(
         reconstruction.get("virtual_coils"), "reconstruction.virtual_coils", errors
     )
+    if reconstruction.get("coil_compression_source") not in {"image", "refscan"}:
+        errors.append(
+            "reconstruction.coil_compression_source must be 'image' or 'refscan'"
+        )
     physical_coils = reconstruction.get("physical_coils")
     virtual_coils = reconstruction.get("virtual_coils")
     if (

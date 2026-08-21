@@ -58,6 +58,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Virtual-coil counts to report; the largest basis is saved.",
     )
     parser.add_argument(
+        "--calibration-source",
+        choices=("image", "refscan"),
+        help="Stream used for covariance estimation; explicit-path default is refscan.",
+    )
+    parser.add_argument(
         "--pe2-chunk", type=int, default=8, help="Number of refscan PE2 partitions read at once."
     )
     parser.add_argument(
@@ -71,12 +76,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def resolve_coil_compression_inputs(
     args: argparse.Namespace,
-) -> tuple[Path, Path, list[int], int | None, DatasetManifest | None]:
+) -> tuple[Path, Path, list[int], int | None, str, DatasetManifest | None]:
     """Resolve manifest-backed inputs while preserving the original explicit CLI."""
     if args.dataset_manifest is not None:
-        if args.twix is not None or args.output_prefix is not None or args.ncc is not None:
+        if (
+            args.twix is not None
+            or args.output_prefix is not None
+            or args.ncc is not None
+            or args.calibration_source is not None
+        ):
             raise ValueError(
-                "--dataset-manifest cannot be combined with --twix, --output-prefix, or --ncc"
+                "--dataset-manifest cannot be combined with explicit dataset, Ncc, "
+                "or calibration-source options"
             )
         manifest = load_dataset_manifest(args.dataset_manifest)
         load_passed_inspection(manifest)
@@ -86,6 +97,7 @@ def resolve_coil_compression_inputs(
             manifest.output_path("coil_compression_prefix"),
             [int(reconstruction["virtual_coils"])],
             int(reconstruction["physical_coils"]),
+            str(reconstruction["coil_compression_source"]),
             manifest,
         )
 
@@ -98,6 +110,7 @@ def resolve_coil_compression_inputs(
         args.output_prefix.expanduser().resolve(),
         [12, 16, 24] if args.ncc is None else list(args.ncc),
         None,
+        "refscan" if args.calibration_source is None else args.calibration_source,
         None,
     )
 
@@ -128,29 +141,43 @@ def configure_stream(stream: Any) -> Any:
     return stream
 
 
-def iter_refscan_coillast_chunks(
-    refscan: Any,
+def iter_stream_coillast_chunks(
+    stream: Any,
     *,
     pe2_chunk: int,
 ) -> Iterator[tuple[int, int, np.ndarray]]:
-    """Yield refscan chunks in canonical ``[RO, PE1, PE2, coil]`` layout."""
+    """Yield image/refscan chunks in canonical ``[RO, PE1, PE2, coil]`` layout."""
     if pe2_chunk < 1:
         raise ValueError("pe2_chunk must be positive.")
-    configure_stream(refscan)
-    size = tuple(int(value) for value in refscan.sqzSize)
+    configure_stream(stream)
+    size = tuple(int(value) for value in stream.sqzSize)
     if len(size) != 4:
-        raise ValueError(f"Expected refscan [RO, coil, PE1, PE2], received {size}.")
+        raise ValueError(f"Expected stream [RO, coil, PE1, PE2], received {size}.")
     nro, ncoil, npe1, npe2 = size
 
     for start in range(0, npe2, pe2_chunk):
         stop = min(start + pe2_chunk, npe2)
-        raw = np.asarray(refscan[:, :, :, start:stop], dtype=np.complex64)
+        raw = np.asarray(stream[:, :, :, start:stop], dtype=np.complex64)
         expected = (nro, ncoil, npe1, stop - start)
         if raw.shape != expected:
             raise ValueError(
                 f"Refscan chunk {start}:{stop} has shape {raw.shape}; expected {expected}."
             )
         yield start, stop, np.transpose(raw, (0, 2, 3, 1))
+
+
+iter_refscan_coillast_chunks = iter_stream_coillast_chunks
+
+
+def select_calibration_stream(measurement: Any, source: str) -> Any:
+    """Select the declared covariance source without an implicit fallback."""
+    if source not in {"image", "refscan"}:
+        raise ValueError(f"Unknown coil-compression calibration source: {source}")
+    if source not in measurement:
+        raise ValueError(
+            f"Selected imaging measurement has no declared {source} calibration stream."
+        )
+    return configure_stream(measurement[source])
 
 
 def accumulate_coil_covariance(
@@ -269,6 +296,7 @@ def estimate_compression(
     pe2_chunk: int,
     readout_step: int,
     expected_physical_coils: int | None = None,
+    calibration_source: str = "refscan",
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Run chunked covariance estimation and validate one common coil basis."""
     try:
@@ -283,13 +311,13 @@ def estimate_compression(
     started = time.perf_counter()
     twix_root = mapvbvd.mapVBVD(str(twix_path), quiet=True)
     measurement_index, measurement = select_imaging_measurement(twix_root)
-    if "refscan" not in measurement:
-        raise ValueError("Selected imaging measurement has no refscan stream.")
     image = configure_stream(measurement["image"])
-    refscan = configure_stream(measurement["refscan"])
-    ncoil = int(refscan.NCha)
+    calibration = select_calibration_stream(measurement, calibration_source)
+    ncoil = int(calibration.NCha)
     if int(image.NCha) != ncoil:
-        raise ValueError(f"Image/refscan coil mismatch: {int(image.NCha)} vs {ncoil}.")
+        raise ValueError(
+            f"Image/calibration coil mismatch: {int(image.NCha)} vs {ncoil}."
+        )
     if expected_physical_coils is not None and ncoil != expected_physical_coils:
         raise ValueError(
             f"Manifest expects {expected_physical_coils} physical coils, TWIX has {ncoil}."
@@ -297,9 +325,9 @@ def estimate_compression(
     if ncc_values[-1] > ncoil:
         raise ValueError(f"Requested Ncc={ncc_values[-1]} but only {ncoil} coils exist.")
 
-    refscan_shape = tuple(int(value) for value in refscan.sqzSize)
+    calibration_shape = tuple(int(value) for value in calibration.sqzSize)
     covariance, accumulation = accumulate_coil_covariance(
-        iter_refscan_coillast_chunks(refscan, pe2_chunk=pe2_chunk),
+        iter_stream_coillast_chunks(calibration, pe2_chunk=pe2_chunk),
         ncoil=ncoil,
         readout_step=readout_step,
     )
@@ -311,8 +339,10 @@ def estimate_compression(
         np.linalg.norm(basis.conj().T @ basis - np.eye(basis.shape[1]), ord="fro")
     )
     image_probe = _read_probe(image, raw_line=min(int(v) for v in image.Lin), raw_partition=0)
-    refscan_probe = _read_probe(
-        refscan, raw_line=min(int(v) for v in refscan.Lin), raw_partition=0
+    calibration_probe = _read_probe(
+        calibration,
+        raw_line=min(int(v) for v in calibration.Lin),
+        raw_partition=min(int(v) for v in calibration.Par),
     )
     report = {
         "format_version": 1,
@@ -322,12 +352,16 @@ def estimate_compression(
         "measurement_selection_rule": "largest image-stream acquisition count",
         "reference_utility": REFERENCE_UTILITY,
         "algorithm": "coil covariance eigendecomposition",
+        "calibration_source": calibration_source,
         "physical_coil_count": ncoil,
         "reported_virtual_coil_counts": ncc_values,
         "saved_basis_shape": list(basis.shape),
-        "refscan_mapvbvd_shape_ro_coil_pe1_pe2": list(refscan_shape),
-        "refscan_canonical_shape_ro_pe1_pe2_coil": [
-            refscan_shape[0], refscan_shape[2], refscan_shape[3], refscan_shape[1]
+        "calibration_mapvbvd_shape_ro_coil_pe1_pe2": list(calibration_shape),
+        "calibration_canonical_shape_ro_pe1_pe2_coil": [
+            calibration_shape[0],
+            calibration_shape[2],
+            calibration_shape[3],
+            calibration_shape[1],
         ],
         "pe2_chunk": pe2_chunk,
         "readout_step": readout_step,
@@ -337,7 +371,9 @@ def estimate_compression(
         },
         "basis_orthogonality_frobenius_error": orthogonality_error,
         "image_probe": _probe_validation(image_probe, basis, ncc_values),
-        "refscan_probe": _probe_validation(refscan_probe, basis, ncc_values),
+        "calibration_probe": _probe_validation(
+            calibration_probe, basis, ncc_values
+        ),
         "runtime_seconds": time.perf_counter() - started,
         "heldout_acs_grappa_nrmse": "deferred to GRAPPA reconstruction",
     }
@@ -353,7 +389,7 @@ def estimate_compression(
 def main(argv: Sequence[str] | None = None) -> int:
     """Validate arguments, estimate the basis, and persist arrays plus metadata."""
     args = _build_parser().parse_args(argv)
-    twix_path, output_prefix, ncc_values, expected_coils, manifest = (
+    twix_path, output_prefix, ncc_values, expected_coils, calibration_source, manifest = (
         resolve_coil_compression_inputs(args)
     )
     if not twix_path.is_file():
@@ -373,6 +409,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pe2_chunk=args.pe2_chunk,
         readout_step=args.readout_step,
         expected_physical_coils=expected_coils,
+        calibration_source=calibration_source,
     )
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
     np.savez(npz_path, **arrays)

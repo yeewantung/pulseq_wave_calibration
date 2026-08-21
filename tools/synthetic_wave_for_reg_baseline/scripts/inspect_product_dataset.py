@@ -297,6 +297,7 @@ def _stream_summary(stream: Any) -> dict[str, Any]:
     }
     center_lines = _integer_array(getattr(stream, "centerLin", None), "centerLin")
     center_partitions = _integer_array(getattr(stream, "centerPar", None), "centerPar")
+    center_columns = _integer_array(getattr(stream, "centerCol", None), "centerCol")
     reflected_raw = getattr(stream, "IsReflected", None)
     reflected = [] if reflected_raw is None else list(reflected_raw)
 
@@ -316,6 +317,7 @@ def _stream_summary(stream: Any) -> dict[str, Any]:
         "counters": counters,
         "center_line": _unique_summary(center_lines),
         "center_partition": _unique_summary(center_partitions),
+        "center_column": _unique_summary(center_columns),
         "reflected_acquisition_count": sum(bool(value) for value in reflected),
     }
 
@@ -600,6 +602,29 @@ def compare_report_to_manifest(
         observed_readout_os,
         observed_readout_os is not None
         and math.isclose(float(observed_readout_os), expected_readout_os, rel_tol=1e-6),
+    )
+    expected_acquired_readout = expected_matrix[0] * expected_readout_os
+    if not float(expected_acquired_readout).is_integer():
+        raise ValueError(
+            "Manifest matrix and readout oversampling do not yield an integral raw readout"
+        )
+    expected_acquired_readout = int(expected_acquired_readout)
+    center_columns = image.get("center_column", {}).get("unique_values", [])
+    observed_readout = {
+        "acquired_samples": image.get("acquired_readout_samples"),
+        "samples_after_remove_os": image.get("output_readout_samples_after_remove_os"),
+        "center_columns": center_columns,
+    }
+    expected_readout = {
+        "acquired_samples": expected_acquired_readout,
+        "samples_after_remove_os": expected_matrix[0],
+        "center_columns": [expected_acquired_readout // 2],
+    }
+    add_check(
+        "complete_centered_readout",
+        expected_readout,
+        observed_readout,
+        observed_readout == expected_readout,
     )
 
     if expected_sampling["require_complete_source_grid"]:
