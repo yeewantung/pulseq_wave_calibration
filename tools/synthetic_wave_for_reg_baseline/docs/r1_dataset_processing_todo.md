@@ -223,6 +223,13 @@ separately and only after full Wave encoding.
   LLR has split leaders: block 16 at `1e-2` has the lowest NRMSE and closest
   edge ratio, block 4 at `5e-3` has the highest SSIM, and block 4 at `2e-3` has
   the highest gradient NCC.
+- [x] Add the resumable `run_regularization_targeted_sweep.sh` launcher for the
+  small grid requested after combined-metric review. It runs Wavelet `1.5e-2`;
+  block-4 LLR `3e-3`, `4e-3`, `6e-3`, and `7.5e-3`; and block-8 and block-16
+  LLR `1.5e-2`, `2e-2`, and `3e-2`. All 11 cases use the frozen crop-`0.6`
+  maps and the GPU-only reconstruction entry point.
+- [ ] Run the 11-case targeted sweep and combine its manifests with the 38
+  retained cases for a new exact-grid report and metric package.
 - [ ] Select one Wavelet and one LLR finalist, then choose the R1 regularization
   using quantitative metrics plus visual review. DICOM remains qualitative and
   cannot break a metric tie.

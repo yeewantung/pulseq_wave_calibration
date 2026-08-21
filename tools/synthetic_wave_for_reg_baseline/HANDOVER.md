@@ -7,10 +7,17 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Review the combined R1 metric figures and choose one Wavelet and one LLR
-finalist; no final parameter has been selected. The direct FFT RSS of the fully
-sampled NCC=12 no-Wave k-space is the approved quantitative reference, and
-DICOM remains qualitative only. The approved metrics-only brain mask is the
+Run the small follow-up grid requested after review of the combined R1 metrics,
+then choose one Wavelet and one LLR finalist; no final parameter has been
+selected. Use `scripts/run_regularization_targeted_sweep.sh` in tmux with
+`--confirm-approved-reference-and-mask`. It adds Wavelet `1.5e-2`; block-4 LLR
+`3e-3`, `4e-3`, `6e-3`, and `7.5e-3`; and block-8/block-16 LLR `1.5e-2`,
+`2e-2`, and `3e-2`, for 11 cases total. Its separate output root is
+`reconstructions/synthetic_wave/regularization_targeted_ecalib_crop-0p6`.
+
+The direct FFT RSS of the fully sampled NCC=12 no-Wave k-space is the approved
+quantitative reference, and DICOM remains qualitative only. The approved
+metrics-only brain mask is the
 user-confirmed robust-center BET `f=0.59` result with a one-voxel outward
 dilation, bound together with the reference in
 `evaluation/direct_fft_reference/metrics_reference_manifest.json`.
