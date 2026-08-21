@@ -114,7 +114,9 @@ matched unfiltered enhanced-DICOM pair, exports direct FFT RSS from fully
 sampled no-Wave multicoil k-space, and creates a qualitative side-by-side
 review. The review deliberately uses independent positive-voxel p99 display
 scaling and performs no registration, BET masking, intensity matching, or
-ranking. Pass `--resume` to hash-validate and reuse an already complete output.
+ranking. An unfiltered ACC, Normalize-on series can be added explicitly with
+`--acc-normalize-on-dicom`. Pass `--resume` to hash-validate and update or
+reuse an already complete output.
 
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary

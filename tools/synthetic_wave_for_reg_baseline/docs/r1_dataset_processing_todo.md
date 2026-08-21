@@ -125,10 +125,11 @@ separately and only after full Wave encoding.
 ## Later refinement and evaluation
 
 - [x] Inventory the added IDEA offline DICOM reconstructions, series 10-14.
-  Their enhanced-DICOM private reconstruction metadata consistently reports
-  `CC:SoS`. Series 11 and 12 omit `NormalizeAlgo:PreScan`, whereas series 10,
-  13, and 14 include `NormalizeAlgo:PreScan` across their frames. Treat series
-  11 and 12 as the candidate Prescan-Normalize-off, SOS-combined reconstructions.
+  Their repeated per-frame history token reports `CC:SoS`, but that token is
+  not the authoritative final coil-combination label: dcm2niix decodes Phoenix
+  `ucCoilCombineMode=1` as Sum of Squares and mode `2` as Adaptive Combine.
+  Series 11 and 12 omit `NormalizeAlgo:PreScan`, whereas series 10, 13, and 14
+  include it. Series 11 is the unfiltered SOS, Normalize-off candidate.
 - [ ] At the DICOM stage, fully qualify series 11 and 12 before enabling either
   one as a baseline: verify series UID and completeness, geometry/orientation,
   absence of other intensity filters, finite pixel data, and center-to-shell
@@ -139,9 +140,9 @@ separately and only after full Wave encoding.
   Prescan Normalize on, unfiltered ND. Both contain 256 finite 256x256 frames,
   share the acquisition, study, frame of reference, protocol, and protocol
   coil-combine mode, and are converted to canonical RAS NIfTI. Series 10, 12,
-  and 14 contain `DIS2D`/`DIS3D` distortion-filter markers; series 13 is
-  unfiltered but has a different protocol coil-combine mode from series 11.
-  Series 13 is converted and recorded separately from the matched comparison.
+  and 14 contain `DIS2D`/`DIS3D` distortion-filter markers. Series 13 is
+  unfiltered ACC with Normalize on and is included as an additional qualitative
+  comparison column. No ACC, Normalize-off MPRAGE is currently available.
   This does not enable DICOM ranking.
 - [ ] Record the selected DICOM series UID and the decisive reconstruction
   metadata in the dataset manifest before changing

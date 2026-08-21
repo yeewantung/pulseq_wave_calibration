@@ -29,6 +29,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--normalize-off-dicom", required=True, type=Path)
     parser.add_argument("--normalize-on-dicom", required=True, type=Path)
     parser.add_argument(
+        "--acc-normalize-on-dicom",
+        type=Path,
+        help="Optional unfiltered Adaptive Combine, Prescan-Normalize-on series.",
+    )
+    parser.add_argument(
         "--additional-unfiltered-dicom",
         action="append",
         default=[],
@@ -53,13 +58,21 @@ def classify_reconstruction(
     series_description: str,
     reconstruction_tokens: Sequence[str],
     *,
+    protocol_coil_combine_mode: int,
     contains_dis2d: bool,
     contains_dis3d: bool,
 ) -> dict[str, Any]:
     """Classify the exact stored output using Siemens per-frame provenance."""
     tokens = tuple(str(token) for token in reconstruction_tokens)
+    coil_combination = {
+        1: "Sum of Squares",
+        2: "Adaptive Combine",
+    }.get(protocol_coil_combine_mode, "unknown")
     return {
-        "coil_combination": "SoS" if "CC:SoS" in tokens else "unknown",
+        "coil_combination": coil_combination,
+        "per_frame_coil_combination_token": (
+            "CC:SoS" if "CC:SoS" in tokens else "not_reported"
+        ),
         "prescan_normalize": "NormalizeAlgo:PreScan" in tokens,
         "distortion_correction": (
             "filtered"
@@ -110,6 +123,7 @@ def audit_dicom(path: Path) -> dict[str, Any]:
     classification = classify_reconstruction(
         series_description,
         tokens,
+        protocol_coil_combine_mode=next(iter(protocol_coil_modes)),
         contains_dis2d=b"DIS2D" in raw,
         contains_dis3d=b"DIS3D" in raw,
     )
@@ -146,8 +160,8 @@ def validate_matched_pair(off: dict[str, Any], on: dict[str, Any]) -> None:
     ):
         if off[field] != on[field]:
             raise ValueError(f"DICOM pair differs in {field}: {off[field]} vs {on[field]}")
-    if off["coil_combination"] != "SoS":
-        raise ValueError("Both comparison DICOMs must explicitly report CC:SoS.")
+    if off["coil_combination"] != "Sum of Squares":
+        raise ValueError("Both comparison DICOMs must use Sum of Squares.")
     if off["distortion_correction"] != "unfiltered_ND":
         raise ValueError("Both comparison DICOMs must be unfiltered ND outputs.")
     if off["prescan_normalize"] is not False or on["prescan_normalize"] is not True:
@@ -157,6 +171,75 @@ def validate_matched_pair(off: dict[str, Any], on: dict[str, Any]) -> None:
         normalize_token
     }:
         raise ValueError("DICOM per-frame reconstruction tokens differ beyond NormalizeAlgo.")
+
+
+def validate_acc_normalize_on(reference: dict[str, Any], acc: dict[str, Any]) -> None:
+    """Require a geometry-matched unfiltered ACC, Normalize-on comparison case."""
+    for field in (
+        "study_instance_uid",
+        "frame_of_reference_uid",
+        "protocol_name",
+        "acquisition_datetime",
+        "matrix",
+        "distortion_correction",
+    ):
+        if reference[field] != acc[field]:
+            raise ValueError(
+                f"ACC and SOS DICOMs differ in {field}: "
+                f"{reference[field]} vs {acc[field]}"
+            )
+    if acc["coil_combination"] != "Adaptive Combine":
+        raise ValueError("ACC comparison DICOM does not use Adaptive Combine.")
+    if acc["prescan_normalize"] is not True:
+        raise ValueError("ACC comparison DICOM is not Prescan-Normalize-on.")
+    if acc["distortion_correction"] != "unfiltered_ND":
+        raise ValueError("ACC comparison DICOM is not an unfiltered ND output.")
+
+
+def _comparison_cases(
+    off: dict[str, Any],
+    on: dict[str, Any],
+    no_wave_nifti: str,
+    acc: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return the stable left-to-right presentation order."""
+    cases = [
+        {
+            "key": "dicom_sos_normalize_off",
+            "title": (
+                "DICOM: SOS + Normalize off\n"
+                f"Unfiltered ND (series {off['series_number']})"
+            ),
+            "nifti": off["conversion"]["nifti"],
+        },
+        {
+            "key": "dicom_sos_normalize_on",
+            "title": (
+                "DICOM: SOS + Normalize on\n"
+                f"Unfiltered ND (series {on['series_number']})"
+            ),
+            "nifti": on["conversion"]["nifti"],
+        },
+    ]
+    if acc is not None:
+        cases.append(
+            {
+                "key": "dicom_acc_normalize_on",
+                "title": (
+                    "DICOM: ACC + Normalize on\n"
+                    f"Unfiltered ND (series {acc['series_number']})"
+                ),
+                "nifti": acc["conversion"]["nifti"],
+            }
+        )
+    cases.append(
+        {
+            "key": "no_wave_fft_rss",
+            "title": "Direct FFT RSS\nFully sampled no-Wave k-space, NCC=12",
+            "nifti": no_wave_nifti,
+        }
+    )
+    return cases
 
 
 def _convert_dicom(
@@ -238,7 +321,9 @@ def _add_orientation_labels(axis: Any, view: str) -> None:
         )
 
 
-def _make_review(cases: list[dict[str, Any]], output_dir: Path) -> dict[str, Any]:
+def _make_review(
+    cases: list[dict[str, Any]], output_dir: Path, *, replace: bool = False
+) -> dict[str, Any]:
     """Show relative contrast after independent robust display normalization."""
     import matplotlib.pyplot as plt
     import nibabel as nib
@@ -257,7 +342,9 @@ def _make_review(cases: list[dict[str, Any]], output_dir: Path) -> dict[str, Any
         volumes.append(data / np.float32(scale))
         case_records.append({**case, "display_positive_voxel_p99": scale})
 
-    figure, axes = plt.subplots(2, 3, figsize=(13.5, 8.5), squeeze=False)
+    figure, axes = plt.subplots(
+        2, len(cases), figsize=(4.5 * len(cases), 8.5), squeeze=False
+    )
     for column, (case, volume) in enumerate(zip(case_records, volumes)):
         planes = (
             volume[:, volume.shape[1] // 2, :],
@@ -281,8 +368,10 @@ def _make_review(cases: list[dict[str, Any]], output_dir: Path) -> dict[str, Any
     )
     figure.tight_layout(rect=(0, 0.035, 1, 0.96), h_pad=2.2)
     review_dir = output_dir / "review"
-    review_dir.mkdir(parents=True, exist_ok=False)
-    figure_path = review_dir / "dicom_sos_normalization_vs_no_wave_fft.png"
+    review_dir.mkdir(parents=True, exist_ok=replace)
+    figure_path = review_dir / "dicom_coil_combination_vs_no_wave_fft.png"
+    if figure_path.exists() and not replace:
+        raise FileExistsError(figure_path)
     figure.savefig(figure_path, dpi=180)
     plt.close(figure)
     return {
@@ -314,10 +403,18 @@ def _add_unfiltered_conversions(
         audit = audit_dicom(path)
         if audit["distortion_correction"] != "unfiltered_ND":
             raise ValueError(f"Additional DICOM is distortion-filtered: {path}")
-        if audit["coil_combination"] != "SoS":
-            raise ValueError(f"Additional DICOM does not report effective CC:SoS: {path}")
+        if audit["coil_combination"] == "unknown":
+            raise ValueError(f"Additional DICOM coil combination is unknown: {path}")
         normalize = "on" if audit["prescan_normalize"] else "off"
-        label = f"sos_normalize-{normalize}_unfiltered_series-{audit['series_number']}"
+        coil_label = (
+            "sos"
+            if audit["coil_combination"] == "Sum of Squares"
+            else "adaptive-combine"
+        )
+        label = (
+            f"{coil_label}_normalize-{normalize}_unfiltered_"
+            f"series-{audit['series_number']}"
+        )
         conversion = _convert_dicom(path, label, output_dir, dcm2niix)
         records.append({**audit, "conversion": conversion})
         changed = True
@@ -347,6 +444,13 @@ def _reuse_complete(output_dir: Path, args: argparse.Namespace) -> dict[str, Any
     for label, (recorded, requested) in expected_sources.items():
         if recorded.resolve() != requested.expanduser().resolve():
             raise ValueError(f"Existing comparison uses a different {label}.")
+    refreshed_off = audit_dicom(args.normalize_off_dicom)
+    refreshed_on = audit_dicom(args.normalize_on_dicom)
+    validate_matched_pair(refreshed_off, refreshed_on)
+    refreshed_off["conversion"] = manifest["dicom"]["normalize_off"]["conversion"]
+    refreshed_on["conversion"] = manifest["dicom"]["normalize_on"]["conversion"]
+    manifest["dicom"]["normalize_off"] = refreshed_off
+    manifest["dicom"]["normalize_on"] = refreshed_on
     records = [
         manifest["dicom"]["normalize_off"]["conversion"],
         manifest["dicom"]["normalize_on"]["conversion"],
@@ -362,9 +466,50 @@ def _reuse_complete(output_dir: Path, args: argparse.Namespace) -> dict[str, Any
         path = Path(section[path_key])
         if not path.is_file() or sha256_file(path) != section[hash_key]:
             raise ValueError(f"Existing comparison output failed hash validation: {path}")
+    changed = False
+    if args.acc_normalize_on_dicom is not None:
+        acc_path = args.acc_normalize_on_dicom.expanduser().resolve()
+        acc = audit_dicom(acc_path)
+        validate_acc_normalize_on(refreshed_off, acc)
+        existing_acc = manifest["dicom"].get("acc_normalize_on")
+        if existing_acc is None:
+            conversion = _convert_dicom(
+                acc_path,
+                "adaptive-combine_normalize-on_unfiltered",
+                output_dir,
+                args.dcm2niix,
+            )
+            manifest["dicom"]["acc_normalize_on"] = {**acc, "conversion": conversion}
+            manifest["dicom"]["additional_unfiltered"] = [
+                record
+                for record in manifest["dicom"].get("additional_unfiltered", [])
+                if Path(record["path"]).resolve() != acc_path
+            ]
+            changed = True
+        elif Path(existing_acc["path"]).resolve() != acc_path:
+            raise ValueError("Existing comparison uses a different ACC Normalize-on DICOM.")
+        else:
+            conversion = existing_acc["conversion"]
+            nifti = Path(conversion["nifti"])
+            if not nifti.is_file() or sha256_file(nifti) != conversion["nifti_sha256"]:
+                raise ValueError(f"ACC DICOM NIfTI failed hash validation: {nifti}")
+        acc_record = manifest["dicom"]["acc_normalize_on"]
+        manifest["review"] = _make_review(
+            _comparison_cases(
+                refreshed_off,
+                refreshed_on,
+                manifest["no_wave_fft"]["nifti"],
+                acc_record,
+            ),
+            output_dir,
+            replace=True,
+        )
+        changed = True
     if _add_unfiltered_conversions(
         output_dir, args.additional_unfiltered_dicom, args.dcm2niix, manifest
     ):
+        changed = True
+    if changed:
         manifest["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
         write_json_atomic(manifest_path, manifest)
     print(f"Reusing validated comparison: {output_dir}")
@@ -383,6 +528,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     off = audit_dicom(off_path)
     on = audit_dicom(on_path)
     validate_matched_pair(off, on)
+    acc: dict[str, Any] | None = None
+    acc_path: Path | None = None
+    if args.acc_normalize_on_dicom is not None:
+        acc_path = args.acc_normalize_on_dicom.expanduser().resolve()
+        acc = audit_dicom(acc_path)
+        validate_acc_normalize_on(off, acc)
 
     try:
         off_conversion = _convert_dicom(
@@ -391,6 +542,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         on_conversion = _convert_dicom(
             on_path, "sos_normalize-on_unfiltered", output_dir, args.dcm2niix
         )
+        if acc is not None and acc_path is not None:
+            acc_conversion = _convert_dicom(
+                acc_path,
+                "adaptive-combine_normalize-on_unfiltered",
+                output_dir,
+                args.dcm2niix,
+            )
+            acc["conversion"] = acc_conversion
+        off["conversion"] = off_conversion
+        on["conversion"] = on_conversion
         source_report_path = args.source_report.expanduser().resolve()
         source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
         kspace = args.kspace.expanduser().resolve()
@@ -417,30 +578,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         review = _make_review(
-            [
-                {
-                    "key": "dicom_sos_normalize_off",
-                    "title": (
-                        "DICOM: SOS + Normalize off\n"
-                        f"Unfiltered ND (series {off['series_number']})"
-                    ),
-                    "nifti": off_conversion["nifti"],
-                },
-                {
-                    "key": "dicom_sos_normalize_on",
-                    "title": (
-                        "DICOM: SOS + Normalize on\n"
-                        f"Unfiltered ND (series {on['series_number']})"
-                    ),
-                    "nifti": on_conversion["nifti"],
-                },
-                {
-                    "key": "no_wave_fft_rss",
-                    "title": "Direct FFT RSS\nFully sampled no-Wave k-space, NCC=12",
-                    "nifti": str(no_wave_output),
-                },
-            ],
-            output_dir,
+            _comparison_cases(off, on, str(no_wave_output), acc), output_dir
         )
         manifest = {
             "format_version": 1,
@@ -451,11 +589,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "no-Wave FFT RSS"
             ),
             "selection_policy": (
-                "matched unfiltered ND, effective CC:SoS pair; no intensity ranking"
+                "matched unfiltered ND SOS pair plus optional ACC; no intensity ranking"
             ),
             "dicom": {
-                "normalize_off": {**off, "conversion": off_conversion},
-                "normalize_on": {**on, "conversion": on_conversion},
+                "normalize_off": off,
+                "normalize_on": on,
+                **({"acc_normalize_on": acc} if acc is not None else {}),
             },
             "no_wave_fft": {
                 "kspace": str(kspace),

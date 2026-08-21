@@ -18,10 +18,11 @@ class DicomClassificationTests(unittest.TestCase):
         result = classify_reconstruction(
             "t1_mprage_sag_p2_RR_ND",
             ["ChannelMixing:ND=true_CMM=1_CDM=1", "CC:SoS"],
+            protocol_coil_combine_mode=1,
             contains_dis2d=False,
             contains_dis3d=False,
         )
-        self.assertEqual(result["coil_combination"], "SoS")
+        self.assertEqual(result["coil_combination"], "Sum of Squares")
         self.assertFalse(result["prescan_normalize"])
         self.assertEqual(result["distortion_correction"], "unfiltered_ND")
 
@@ -29,10 +30,13 @@ class DicomClassificationTests(unittest.TestCase):
         result = classify_reconstruction(
             "t1_mprage_sag_p2_RR_ND",
             ["CC:SoS", "NormalizeAlgo:PreScan"],
+            protocol_coil_combine_mode=2,
             contains_dis2d=True,
             contains_dis3d=True,
         )
         self.assertTrue(result["prescan_normalize"])
+        self.assertEqual(result["coil_combination"], "Adaptive Combine")
+        self.assertEqual(result["per_frame_coil_combination_token"], "CC:SoS")
         self.assertEqual(result["distortion_correction"], "filtered")
 
 

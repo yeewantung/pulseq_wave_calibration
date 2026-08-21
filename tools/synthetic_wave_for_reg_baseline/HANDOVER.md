@@ -27,9 +27,11 @@ registration, BET mask, or intensity ranking. Normalize-on shows the expected
 strong central brightening; normalize-off is visually closer to direct FFT
 RSS. The two DICOM affines match exactly. The FFT affine retains a documented
 0.500 mm center-convention offset in two axes and was not silently resampled.
-Series 13 is also unfiltered ND, SOS, and Normalize-on; it was converted and
-recorded separately because its protocol coil-combine mode differs from the
-matched series 9/11 comparison pair.
+Series 13 is unfiltered ND, Adaptive Combine, and Normalize-on. It is included
+as an additional qualitative comparison column. Its repeated per-frame
+`CC:SoS` history token conflicts with Phoenix `ucCoilCombineMode=2`; dcm2niix
+correctly decodes the latter as `Adaptive Combine`. Series 9 and 11 use mode 1
+and decode as `Sum of Squares`. No ACC, Normalize-off MPRAGE is available.
 
 The NIfTI orientation fix is complete. The shared Wave exporter now writes
 canonical RAS data with affine-axis flips `[true,false,true]`, matching the
