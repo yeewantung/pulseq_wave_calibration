@@ -115,6 +115,19 @@ separately and only after full Wave encoding.
 
 ## Later refinement and evaluation
 
+- [x] Inventory the added IDEA offline DICOM reconstructions, series 10-14.
+  Their enhanced-DICOM private reconstruction metadata consistently reports
+  `CC:SoS`. Series 11 and 12 omit `NormalizeAlgo:PreScan`, whereas series 10,
+  13, and 14 include `NormalizeAlgo:PreScan` across their frames. Treat series
+  11 and 12 as the candidate Prescan-Normalize-off, SOS-combined reconstructions.
+- [ ] At the DICOM stage, fully qualify series 11 and 12 before enabling either
+  one as a baseline: verify series UID and completeness, geometry/orientation,
+  absence of other intensity filters, finite pixel data, and center-to-shell
+  intensity behavior. Absence of the private `NormalizeAlgo:PreScan` string is
+  necessary evidence but is not by itself approval for intensity ranking.
+- [ ] Record the selected DICOM series UID and the decisive reconstruction
+  metadata in the dataset manifest before changing
+  `ranking_reference.kind` from `none` or enabling DICOM intensity ranking.
 - [ ] Make regularized Wave reconstruction consume the same dataset contract
   and measure any dataset-specific maximum eigenvalue rather than copying R3.
 - [ ] Run the frozen Wavelet coarse sweep only after lambda zero passes.
