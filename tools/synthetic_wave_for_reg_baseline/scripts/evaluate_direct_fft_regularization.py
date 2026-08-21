@@ -182,9 +182,18 @@ def _plot_masks(
     plt.close(figure)
 
 
-def _method_records(records: list[dict[str, Any]], regularizer: str) -> list[dict[str, Any]]:
+def _method_records(
+    records: list[dict[str, Any]],
+    regularizer: str,
+    block_size: int | None = None,
+) -> list[dict[str, Any]]:
     return sorted(
-        (record for record in records if record["regularizer"] == regularizer),
+        (
+            record
+            for record in records
+            if record["regularizer"] == regularizer
+            and (block_size is None or record["block_size"] == block_size)
+        ),
         key=lambda record: record["lambda"],
     )
 
@@ -220,7 +229,96 @@ def _plot_metrics(records: list[dict[str, Any]], regularizer: str, path: Path) -
         axis.set_ylabel(label)
         axis.grid(alpha=0.3, which="both")
     axes[0, 0].legend(fontsize=8)
-    figure.suptitle(f"Coarse {title} metrics against direct FFT RSS")
+    figure.suptitle(f"{title} metrics against direct FFT RSS")
+    figure.savefig(path, dpi=180)
+    plt.close(figure)
+
+
+def _plot_llr_metrics(records: list[dict[str, Any]], path: Path) -> None:
+    rows = _method_records(records, "llr")
+    blocks = sorted({int(row["block_size"]) for row in rows if row["lambda"] > 0})
+    zero = next(row for row in rows if row["lambda"] == 0)
+    metrics = (
+        ("nrmse_brain", "Brain NRMSE ↓"),
+        ("ssim_3d_brain_bbox", "Brain 3D SSIM ↑"),
+        ("gradient_ncc_brain_edge", "Edge gradient NCC ↑"),
+        ("edge_preservation_ratio", "Edge magnitude ratio → 1"),
+    )
+    figure, axes = plt.subplots(2, 2, figsize=(9.5, 7), constrained_layout=True)
+    for axis, (key, label) in zip(axes.ravel(), metrics):
+        for block in blocks:
+            block_rows = [
+                row
+                for row in rows
+                if row["block_size"] == block and row["lambda"] > 0
+            ]
+            axis.semilogx(
+                [row["lambda"] for row in block_rows],
+                [row[key] for row in block_rows],
+                marker="o",
+                label=f"block {block}",
+            )
+        axis.axhline(
+            zero[key],
+            color="black",
+            linestyle="--",
+            linewidth=0.8,
+            label="matched λ=0",
+        )
+        axis.ticklabel_format(axis="y", style="plain", useOffset=False)
+        axis.set_xlabel("LLR λ")
+        axis.set_ylabel(label)
+        axis.grid(alpha=0.3, which="both")
+    axes[0, 0].legend(fontsize=8)
+    figure.suptitle("LLR block-size and lambda metrics against direct FFT RSS")
+    figure.savefig(path, dpi=180)
+    plt.close(figure)
+
+
+def _plot_llr_heatmaps(records: list[dict[str, Any]], path: Path) -> None:
+    rows = [
+        row
+        for row in records
+        if row["regularizer"] == "llr" and row["lambda"] > 0
+    ]
+    blocks = sorted({int(row["block_size"]) for row in rows})
+    lambdas = sorted({float(row["lambda"]) for row in rows})
+    lookup = {(int(row["block_size"]), float(row["lambda"])): row for row in rows}
+    expected = {(block, value) for block in blocks for value in lambdas}
+    if set(lookup) != expected:
+        raise ValueError("LLR heatmap requires a complete block-size by lambda grid")
+    metrics = (
+        ("nrmse_brain", "Brain NRMSE ↓", "viridis_r"),
+        ("ssim_3d_brain_bbox", "Brain 3D SSIM ↑", "viridis"),
+        ("gradient_ncc_brain_edge", "Edge gradient NCC ↑", "viridis"),
+        ("edge_preservation_ratio", "Edge ratio → 1", "coolwarm"),
+    )
+    figure, axes = plt.subplots(2, 2, figsize=(10, 9), constrained_layout=True)
+    for axis, (key, title, cmap) in zip(axes.ravel(), metrics):
+        matrix = np.asarray(
+            [[lookup[(block, value)][key] for block in blocks] for value in lambdas]
+        )
+        image = axis.imshow(matrix, cmap=cmap, aspect="auto")
+        axis.set_xticks(range(len(blocks)), labels=blocks)
+        axis.set_yticks(range(len(lambdas)), labels=[f"{value:g}" for value in lambdas])
+        axis.set_xlabel("LLR block size")
+        axis.set_ylabel("λ")
+        axis.set_title(title)
+        for row_index in range(len(lambdas)):
+            for column_index in range(len(blocks)):
+                rgba = image.cmap(image.norm(matrix[row_index, column_index]))
+                luminance = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
+                axis.text(
+                    column_index,
+                    row_index,
+                    f"{matrix[row_index, column_index]:.5g}",
+                    ha="center",
+                    va="center",
+                    color="black" if luminance > 0.55 else "white",
+                    fontsize=6,
+                )
+        figure.colorbar(image, ax=axis, shrink=0.8)
+    figure.suptitle("LLR block-size × lambda metrics against direct FFT RSS")
     figure.savefig(path, dpi=180)
     plt.close(figure)
 
@@ -233,9 +331,18 @@ def _plot_common_window(
     center: Sequence[int],
     vmax: float,
     path: Path,
+    block_size: int | None = None,
 ) -> None:
-    rows = _method_records(records, regularizer)
-    title = "LLR" if regularizer == "llr" else "Wavelet"
+    rows = _method_records(records, regularizer, block_size)
+    method_title = "LLR" if regularizer == "llr" else "Wavelet"
+    if regularizer == "llr" and block_size is not None:
+        matched_zero = next(
+            row
+            for row in records
+            if row["regularizer"] == "llr" and row["lambda"] == 0
+        )
+        rows = [matched_zero] + [row for row in rows if row["lambda"] > 0]
+        method_title = f"LLR block {block_size}"
     volumes = [("Direct FFT RSS", reference)] + [
         (f"λ={row['lambda_label']}", scaled_volumes[row["case_id"]]) for row in rows
     ]
@@ -246,7 +353,7 @@ def _plot_common_window(
         squeeze=False,
         constrained_layout=True,
     )
-    for column, (title, volume) in enumerate(volumes):
+    for column, (volume_title, volume) in enumerate(volumes):
         for row_index, plane in enumerate(("coronal", "axial")):
             axis = axes[row_index, column]
             axis.imshow(
@@ -256,11 +363,11 @@ def _plot_common_window(
                 vmin=0,
                 vmax=vmax,
             )
-            axis.set_title(f"{title}\n{plane}", fontsize=9)
+            axis.set_title(f"{volume_title}\n{plane}", fontsize=9)
             axis.set_axis_off()
             _directions(axis, plane)
     figure.suptitle(
-        f"{title} coarse sweep — shared direct-FFT intensity window"
+        f"{method_title} sweep — shared direct-FFT intensity window"
     )
     figure.savefig(path, dpi=180)
     plt.close(figure)
@@ -290,6 +397,35 @@ def _metric_leaders(records: list[dict[str, Any]]) -> dict[str, Any]:
             else:
                 selected = min(positive, key=lambda row: abs(row[key] - 1.0))
             leaders[regularizer][label] = {
+                "case_id": selected["case_id"],
+                "lambda": selected["lambda"],
+                "value": selected[key],
+            }
+    leaders["llr_by_block"] = {}
+    blocks = sorted(
+        {
+            int(row["block_size"])
+            for row in records
+            if row["regularizer"] == "llr" and row["lambda"] > 0
+        }
+    )
+    for block in blocks:
+        block_rows = [
+            row
+            for row in records
+            if row["regularizer"] == "llr"
+            and row["block_size"] == block
+            and row["lambda"] > 0
+        ]
+        leaders["llr_by_block"][str(block)] = {}
+        for label, (key, objective) in definitions.items():
+            if objective == "min":
+                selected = min(block_rows, key=lambda row: row[key])
+            elif objective == "max":
+                selected = max(block_rows, key=lambda row: row[key])
+            else:
+                selected = min(block_rows, key=lambda row: abs(row[key] - 1.0))
+            leaders["llr_by_block"][str(block)][label] = {
                 "case_id": selected["case_id"],
                 "lambda": selected["lambda"],
                 "value": selected[key],
@@ -396,10 +532,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             row["lambda"],
         )
     )
-    metrics_csv = output_dir / "coarse_metrics.csv"
+    metrics_csv = output_dir / "regularization_metrics.csv"
     _write_csv(records, metrics_csv)
     _plot_metrics(records, "wavelet", plots_dir / "wavelet_metrics.png")
-    _plot_metrics(records, "llr", plots_dir / "llr_block-8_metrics.png")
+    _plot_llr_metrics(records, plots_dir / "llr_block_size_lambda_metrics.png")
+    _plot_llr_heatmaps(records, plots_dir / "llr_block_size_lambda_heatmaps.png")
     _plot_common_window(
         reference,
         records,
@@ -409,21 +546,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         display_vmax,
         plots_dir / "wavelet_common_reference_window.png",
     )
-    _plot_common_window(
-        reference,
-        records,
-        scaled_volumes,
-        "llr",
-        center,
-        display_vmax,
-        plots_dir / "llr_block-8_common_reference_window.png",
-    )
+    for block_size in sorted(
+        {
+            int(row["block_size"])
+            for row in records
+            if row["regularizer"] == "llr" and row["lambda"] > 0
+        }
+    ):
+        _plot_common_window(
+            reference,
+            records,
+            scaled_volumes,
+            "llr",
+            center,
+            display_vmax,
+            plots_dir / f"llr_block-{block_size}_common_reference_window.png",
+            block_size=block_size,
+        )
 
     provenance = {
         "format_version": 1,
         "status": "complete",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
-        "purpose": "coarse R1 regularization metrics against fully sampled direct FFT RSS",
+        "purpose": "R1 regularization metrics against fully sampled direct FFT RSS",
         "selection_status": "no_parameter_selected",
         "metrics_reference_manifest": {
             "path": str(metrics_path),

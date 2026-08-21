@@ -232,17 +232,27 @@ mask-restricted LSQ scalar, writes CSV/JSON metrics, and creates method-specific
 common-window figures. It reports per-metric leaders but deliberately performs
 no composite ranking or parameter selection.
 
-Run the missing higher-lambda and multi-block refinement cases in tmux with:
+The resumable higher-lambda and multi-block launcher is:
 
 ```bash
 tools/synthetic_wave_for_reg_baseline/scripts/run_regularization_refinement.sh \
     --confirm-approved-reference-and-mask
 ```
 
-The launcher is resumable. It adds Wavelet `2e-3`, `5e-3`, `2e-2`, and `5e-2`;
+The launcher is resumable. The 28 missing cases have completed: it adds
+Wavelet `2e-3`, `5e-3`, `2e-2`, and `5e-2`;
 LLR blocks `4` and `16` use a 1-2-5 grid from `2e-5` through `1e-2`, while
 block `8` runs only values absent from its retained coarse sweep. Every case
 uses the approved crop-`0.6` maps and GPU BART `-g`.
+
+The retained coarse and new refinement manifests now pass one exact-grid gate
+as a 38-case set. The report is
+`evaluation/direct_fft_reference/geometry_validation/refined_grid_geometry_validation.json`
+under the dataset output root. The canonical combined evaluation is
+`evaluation/direct_fft_reference/regularization_refinement_metrics`; it writes
+`regularization_metrics.csv`, hash-bound JSON provenance, per-metric leaders,
+LLR block-size-by-lambda plots, and a shared direct-FFT display window for each
+method/block. It performs no composite ranking or parameter selection.
 
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a

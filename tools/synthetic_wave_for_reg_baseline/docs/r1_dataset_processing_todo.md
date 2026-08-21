@@ -193,22 +193,36 @@ separately and only after full Wave encoding.
   SSIM and figures; do not use candidate-specific histogram matching or bias
   correction. Each NIfTI export normalization is first undone from its sidecar,
   and the fitted LSQ scalar is recorded in the metric table.
-- [ ] Refine Wavelet around the `1e-3` to `1e-2` trade-off by adding `2e-3`
+- [x] Refine Wavelet around the `1e-3` to `1e-2` trade-off by adding `2e-3`
   and `5e-3`; add outward endpoints `2e-2` and `5e-2` because NRMSE, SSIM, and
   intensity NCC still improved at the tested `1e-2` boundary while edge-gradient
-  NCC peaked at `1e-3`. Reuse all completed cases.
-- [ ] Refine LLR over block sizes `4`, `8`, and `16` using the common lambda
+  NCC peaked at `1e-3`. All four missing cases completed successfully.
+- [x] Refine LLR over block sizes `4`, `8`, and `16` using the common lambda
   grid `2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`, `1e-3`, `2e-3`, `5e-3`, and
   `1e-2`. The higher points bridge rather than jump from the improving `5e-4`
-  boundary. Reuse all completed block-8 cases and run only missing cases.
+  boundary. All missing cases completed, while the retained block-8 cases were
+  reused without reconstruction.
 - [x] Add the resumable tmux launcher `run_regularization_refinement.sh` for the
   28 missing cases. It sources the Macha environment and host BART build,
   requires the approved coarse-metrics provenance, and delegates every run to
   the manifest-backed GPU-only reconstruction entry point.
-- [ ] Rank the refined candidates with fixed-mask whole-volume metrics and a
-  common reference-derived visual window. Record metric definitions, lambda,
-  iteration/convergence information, input hashes, and output hashes in CSV
-  and JSON.
+- [x] Combine the retained coarse cases and completed refinement manifests,
+  then pass the exact-grid geometry/provenance gate for all 38 cases. The
+  canonical report is
+  `geometry_validation/refined_grid_geometry_validation.json`; all candidates
+  are exact `256^3`, 1-mm RAS matches with no registration or interpolation.
+- [x] Evaluate the combined grid with fixed-mask whole-volume metrics and a
+  common reference-derived visual window. The canonical 38-row package is
+  `regularization_refinement_metrics`, with metric definitions, per-metric
+  leaders, input/output hashes, a block-size-by-lambda heatmap, and separate
+  common-window reviews for Wavelet and each LLR block size. It deliberately
+  performs no composite ranking or automatic selection.
+- [x] Confirm the refined endpoint behavior. Wavelet `2e-2` leads NRMSE, SSIM,
+  intensity NCC, and edge-ratio closeness, while gradient NCC peaks at `2e-3`;
+  `5e-2` worsens the fidelity metrics and therefore brackets the Wavelet range.
+  LLR has split leaders: block 16 at `1e-2` has the lowest NRMSE and closest
+  edge ratio, block 4 at `5e-3` has the highest SSIM, and block 4 at `2e-3` has
+  the highest gradient NCC.
 - [ ] Select one Wavelet and one LLR finalist, then choose the R1 regularization
   using quantitative metrics plus visual review. DICOM remains qualitative and
   cannot break a metric tie.

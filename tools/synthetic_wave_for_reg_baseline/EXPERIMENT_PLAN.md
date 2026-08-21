@@ -26,13 +26,11 @@ select the more transferable final parameters. Results selected against the
 temporary R3 reference must be labelled developmental and repeated after the
 new R1 dataset is available.
 
-As of 2026-08-21, reusable code support is complete through dataset
-inspection, coil compression, mutually exclusive direct-R1/GRAPPA source
-preparation, full Wave encoding, the separate post-Wave target-mask BART
-export, and measured ACS export from either direct R1 image data or a declared
-refscan. Lambda-zero BART reconstruction is now manifest-aware as well. The
-new R1 contract and measured inspection pass; large preparation is the next
-execution task.
+As of 2026-08-21, the fully sampled R1 source preparation, synthetic-Wave
+encoding, GPU lambda-zero/coarse/refined reconstructions, approved-mask metric
+support, and combined 38-case exact-grid evaluation are complete. The next
+decision is visual and quantitative finalist selection, not more general
+infrastructure work.
 
 ## Current implementation and execution status
 
@@ -49,7 +47,8 @@ Completed:
   compatible R3 GRAPPA source branch;
 - [x] manifest-backed full Wave encoding and separate post-Wave target mask;
 - [x] manifest-backed measured ACS export from direct image data or refscan;
-- [x] manifest-backed GPU lambda-zero reconstruction and tmux runner.
+- [x] manifest-backed GPU lambda-zero reconstruction and tmux runner;
+- [x] combined coarse/refined exact-grid validation and fixed-mask evaluation.
 
 Pending:
 
@@ -58,15 +57,19 @@ Pending:
   acquisition inspection;
 - [ ] decide whether the acquisition supplies separate development and
   confirmation scans;
-- [ ] run and visually qualify the real R1 preparation path through measured
+- [x] run and visually qualify the real R1 preparation path through measured
   ACS export;
 - [x] make lambda-zero BART reconstruction manifest-aware;
 - [x] make regularized BART reconstruction manifest-aware and GPU-only;
-- [ ] pass R1 lambda-zero forward-model, scaling, orientation, and GPU gates;
-- [ ] make evaluation preparation and metrics reference-neutral;
+- [x] pass the R1 lambda-zero scaling, orientation, geometry, and GPU gates;
+- [x] make evaluation preparation and metrics reference-neutral;
 - [x] run the R1 Wavelet coarse sweep with a solver-matched FISTA lambda zero;
 - [x] pass the split-complex lambda-zero gate and run the compact R1 block-8
   LLR sweep;
+- [x] run the higher-lambda Wavelet and full blocks `4`, `8`, `16` LLR
+  refinement grid;
+- [x] combine retained and new cases for exact-grid validation and direct-FFT
+  metrics without registration, interpolation, or DICOM intensity ranking;
 - [ ] freeze the final choice and apply it
   unchanged to R3 as a cross-dataset transfer check.
 

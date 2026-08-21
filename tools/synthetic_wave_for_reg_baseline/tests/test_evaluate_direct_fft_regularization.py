@@ -64,6 +64,7 @@ class MetricLeaderTests(unittest.TestCase):
                         "case_id": f"{regularizer}:{value}",
                         "regularizer": regularizer,
                         "lambda": value,
+                        "block_size": 8 if regularizer == "llr" else "",
                         "nrmse_brain": nrmse,
                         "ssim_3d_brain_bbox": ssim,
                         "ncc_brain": ssim,
@@ -76,6 +77,10 @@ class MetricLeaderTests(unittest.TestCase):
 
         self.assertEqual(leaders["wavelet"]["lowest_nrmse_brain"]["lambda"], 2e-4)
         self.assertEqual(leaders["llr"]["highest_ssim_3d_brain_bbox"]["lambda"], 2e-4)
+        self.assertEqual(
+            leaders["llr_by_block"]["8"]["highest_gradient_ncc_brain_edge"]["lambda"],
+            2e-4,
+        )
 
 
 if __name__ == "__main__":

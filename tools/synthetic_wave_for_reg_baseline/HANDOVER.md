@@ -7,55 +7,40 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Use direct FFT RSS of the fully sampled NCC=12 no-Wave k-space as the approved
-quantitative reference; DICOM is qualitative only. Review the completed
-MID00198 R1 Wavelet and compact block-8 LLR sweeps against that reference, then
-run the focused refinement. Both use the approved
-crop-`0.6` maps, measured `6.70e7` maximum eigenvalue, GPU FISTA, and a
-solver-matched FISTA lambda zero. The LLR split-complex equivalence gate passed
-at relative L2 `2.73366e-6` against native-complex FISTA lambda zero. Its
-positive lambdas are `2e-5`, `1e-4`, and `5e-4`; their relative L2 changes from
-matched LLR lambda zero are `5.94330e-5`, `2.93558e-4`, and `1.45211e-3`.
-Both common-window reviews are reference-neutral: DICOM and BET do not
-participate. No GRAPPA or SENSE source reconstruction was used.
+Review the combined R1 metric figures and choose one Wavelet and one LLR
+finalist; no final parameter has been selected. The direct FFT RSS of the fully
+sampled NCC=12 no-Wave k-space is the approved quantitative reference, and
+DICOM remains qualitative only. The approved metrics-only brain mask is the
+user-confirmed robust-center BET `f=0.59` result with a one-voxel outward
+dilation, bound together with the reference in
+`evaluation/direct_fft_reference/metrics_reference_manifest.json`.
 
-The planned LLR refinement is a full cross-product of block sizes `4`, `8`,
-and `16` with lambdas `2e-5`, `5e-5`, `1e-4`, `2e-4`, and `5e-4`, reusing the
-completed block-8 cases. A fixed-mask candidate has been generated from the
-direct FFT reference. The first `f=0.55` candidate was rejected by the user as
-too large and is preserved with `rejected_visual_review` status. The next
-`f=0.60` candidate was judged slightly too small and is preserved with the same
-status. The intermediate replacement is under
-`evaluation/direct_fft_reference/brain_mask_candidate_bet-f0p59_dilation-1voxel`:
-robust-center BET at `f=0.59` followed by one face-connected voxel of outward
-dilation. It is 3.74% larger than the `f=0.60` mask and 5.55% smaller than the
-`f=0.55` mask. Its QC shows the expanded boundary in green and native BET
-boundary in orange. The user explicitly approved this `f=0.59` boundary and
-the labeled L/R orientation on 2026-08-21. Its mask manifest now has
-`approved_for_metrics` status. Use
-`evaluation/direct_fft_reference/metrics_reference_manifest.json` as the
-stable, hash-bound entry point for both the direct FFT RSS reference and this
-metrics-only mask; do not infer a mask from the rejected candidates.
+The focused refinement reconstructions are complete. The retained coarse cases
+and 28 new manifests form a 38-case evaluation set: ten Wavelet cases from
+lambda zero through `5e-2`, one matched block-8 LLR lambda-zero control, and a
+full positive-lambda cross-product for LLR blocks `4`, `8`, and `16` at
+`2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`, `1e-3`, `2e-3`, `5e-3`, and `1e-2`.
+Every reconstruction is complete and records `bart wave -g`.
 
-The exact-grid geometry/provenance gate has passed all 10 existing coarse
-cases: six Wavelet and four block-8 LLR. Reference, mask, and candidates are
-all `256^3`, 1-mm, canonical RAS with zero affine difference. No registration
-or interpolation was performed. The report is
-`evaluation/direct_fft_reference/geometry_validation/geometry_validation.json`.
-The fixed-mask coarse evaluation against direct FFT RSS is also complete under
-`evaluation/direct_fft_reference/coarse_regularization_metrics`. It restores
-each export normalization, fits one mask-restricted LSQ scalar per candidate,
-and uses a shared reference-derived display window without registration,
-interpolation, bias correction, histogram matching, DICOM, or composite
-selection. Wavelet `1e-2` leads NRMSE/SSIM/intensity NCC but its edge-gradient
-NCC is below the `1e-3` peak; add `2e-3`, `5e-3`, and the outward endpoint
-`2e-2`. Block-8 LLR metrics still improve through `5e-4`, so the full block
-sizes `4`, `8`, `16` grid should include `1e-3` in addition to `2e-5`, `5e-5`,
-`1e-4`, `2e-4`, and `5e-4`. The resumable GPU launcher is now
-`scripts/run_regularization_refinement.sh`. It adds four Wavelet cases through
-`5e-2` and the missing LLR block-size/lambda cases through `1e-2`, for 28 new
-cases total. Run it in tmux with `--confirm-approved-reference-and-mask`; all
-cases use `bart wave -g`. No final parameter has been selected.
+The combined exact-grid gate passed all 38 cases at exact `256^3`, 1-mm,
+canonical RAS geometry with zero affine difference and no registration or
+interpolation. Its canonical report is
+`evaluation/direct_fft_reference/geometry_validation/refined_grid_geometry_validation.json`.
+The hash-bound metric package is
+`evaluation/direct_fft_reference/regularization_refinement_metrics`; it has 38
+finite rows, eight plots, a block-size-by-lambda heatmap, and separate shared-
+window reviews for Wavelet and each LLR block size. Candidate export scaling is
+undone before a single mask-restricted LSQ scalar is fitted. There is no DICOM,
+bias correction, histogram matching, composite score, or automatic selection.
+
+Wavelet `2e-2` leads NRMSE (`0.033386`), SSIM (`0.979635`), intensity NCC, and
+edge-ratio closeness (`0.997389`); its edge-gradient NCC is below the `2e-3`
+peak (`0.995591`). The `5e-2` endpoint worsens fidelity, so the Wavelet optimum
+is bracketed. LLR has no single metric winner: block 16 at `1e-2` has the
+lowest NRMSE (`0.037416`) and closest edge ratio (`1.007207`), block 4 at
+`5e-3` has the highest SSIM (`0.974607`), and block 4 at `2e-3` has the highest
+gradient NCC (`0.995653`). Use the common-window figures to resolve these
+trade-offs rather than treating any one metric leader as the selected result.
 
 The qualitative R1 receive-profile comparison is complete under
 `comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched
