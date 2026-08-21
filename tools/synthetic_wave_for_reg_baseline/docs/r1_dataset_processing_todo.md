@@ -8,10 +8,11 @@ This checklist covers the raw-data-first synthetic R3x2 Wave experiment under:
 /path/to/data/20260821_product
 ```
 
-The initial reconstruction must not use DICOM intensity as a baseline or
-ranking reference. Prescan Normalize was enabled and produces the known bright
-brain-center bias. Keep the DICOM files untouched for possible metadata or
-later qualitative review, but exclude their voxel values from selection.
+The approved quantitative baseline is direct FFT root-sum-of-squares (RSS) of
+the fully sampled no-Wave data after the frozen 64-to-12 coil compression. It
+is derived from the same raw acquisition without GRAPPA, SENSE, Wave encoding,
+or regularization. DICOM remains available for metadata and qualitative review,
+but its voxel intensities must not enter parameter selection.
 
 ## Frozen source decision
 
@@ -83,8 +84,9 @@ separately and only after full Wave encoding.
   partial-Fourier completion.
 - [x] Verify every source chunk is finite, the complete grid is nonzero, and
   restart provenance matches the TWIX identity and coil-basis hash.
-- [x] Export a raw-derived no-Wave RSS quicklook for source/orientation QC only.
-  It is not yet a regularization-ranking baseline.
+- [x] Export direct FFT RSS from the fully sampled NCC=12 no-Wave k-space.
+- [x] Approve that direct FFT RSS volume as the quantitative reference for
+  regularization metrics; no GRAPPA, SENSE, or DICOM baseline is required.
 
 ## Synthetic Wave R3x2 preparation
 
@@ -122,7 +124,7 @@ separately and only after full Wave encoding.
 - [ ] Add full-sampling and PSF=1 operator checks where they can be performed
   without conflating reconstruction and presentation processing.
 
-## Later refinement and evaluation
+## Reference decision and DICOM review
 
 - [x] Inventory the added IDEA offline DICOM reconstructions, series 10-14.
   Their repeated per-frame history token reports `CC:SoS`, but that token is
@@ -130,11 +132,8 @@ separately and only after full Wave encoding.
   `ucCoilCombineMode=1` as Sum of Squares and mode `2` as Adaptive Combine.
   Series 11 and 12 omit `NormalizeAlgo:PreScan`, whereas series 10, 13, and 14
   include it. Series 11 is the unfiltered SOS, Normalize-off candidate.
-- [ ] At the DICOM stage, fully qualify series 11 and 12 before enabling either
-  one as a baseline: verify series UID and completeness, geometry/orientation,
-  absence of other intensity filters, finite pixel data, and center-to-shell
-  intensity behavior. Absence of the private `NormalizeAlgo:PreScan` string is
-  necessary evidence but is not by itself approval for intensity ranking.
+- [x] Keep all DICOM series out of metric calculation and regularization
+  ranking. Their intensity processing no longer blocks quantitative evaluation.
 - [x] Qualify a matched pair for qualitative receive-profile comparison only:
   series 11 is SOS, Prescan Normalize off, unfiltered ND; series 9 is SOS,
   Prescan Normalize on, unfiltered ND. Both contain 256 finite 256x256 frames,
@@ -144,9 +143,12 @@ separately and only after full Wave encoding.
   unfiltered ACC with Normalize on and is included as an additional qualitative
   comparison column. No ACC, Normalize-off MPRAGE is currently available.
   This does not enable DICOM ranking.
-- [ ] Record the selected DICOM series UID and the decisive reconstruction
-  metadata in the dataset manifest before changing
-  `ranking_reference.kind` from `none` or enabling DICOM intensity ranking.
+- [x] Preserve the audited DICOM series identities and reconstruction metadata
+  for qualitative interpretation without changing the metric reference to a
+  DICOM series.
+
+## Regularization refinement and evaluation
+
 - [x] Make regularized Wave reconstruction consume the same dataset contract
   and measure any dataset-specific maximum eigenvalue rather than copying R3.
 - [x] Run the frozen GPU-FISTA Wavelet coarse sweep after lambda zero passes:
@@ -157,15 +159,36 @@ separately and only after full Wave encoding.
   path: solver-matched lambda zero plus `2e-5`, `1e-4`, and `5e-4`. The
   split/native FISTA lambda-zero gate passed at relative L2 `2.73366e-6`, and
   all cases are complete, finite, canonical RAS, and manifest-backed.
-- [ ] Visually select a coarse Wavelet range from the common-window review.
-  Do not rank against DICOM; use the FISTA lambda-zero case as the matched
-  solver baseline.
-- [ ] Visually review the block-8 LLR common-window sheet; do not select a
-  final LLR lambda until it is considered alongside the Wavelet sweep.
-- [ ] Keep BET restricted to metric support and keep all DICOM intensities out
-  of ranking until a suitable DICOM acquisition is available and qualified.
-- [ ] Define a raw-derived no-Wave comparison reference only after its coil
-  combination, scaling, and orientation contract is explicit; no GRAPPA or
-  accelerated SENSE reference is needed for this fully sampled source.
+- [ ] Register the direct FFT RSS volume as `ranking_reference` in the dataset
+  contract, including its source k-space, coil-basis hash, FFT/RSS convention,
+  canonical-RAS NIfTI, and file hash.
+- [ ] Verify that the direct FFT reference and every candidate have identical
+  shape, voxel size, affine, and RAS axis convention. Because they arise from
+  the same source grid, calculate metrics without image registration or
+  interpolation; stop if the geometry differs.
+- [ ] Create one fixed brain mask from the direct FFT reference and use BET
+  only to define metric support. Do not replace reconstruction volumes with
+  BET skull-stripped outputs or apply any bias correction.
+- [ ] Evaluate the completed coarse Wavelet and block-8 LLR cases against the
+  direct FFT reference. Keep the solver-matched lambda-zero cases as operator
+  and convergence controls, not as the quantitative ground truth.
+- [ ] For scale-dependent metrics, fit one documented scalar per candidate
+  within the fixed reference mask. Use reference-derived scaling/windowing for
+  SSIM and figures; do not use candidate-specific histogram matching or bias
+  correction.
+- [ ] Refine Wavelet lambda on a 1-2-5 logarithmic grid around the best coarse
+  interval. Reuse all completed cases and add only missing intermediate values;
+  do not expand beyond the existing `1e-6` to `1e-2` bracket unless the optimum
+  lies at an endpoint.
+- [ ] Refine block-8 LLR lambda similarly, initially reusing `2e-5`, `1e-4`,
+  and `5e-4` and adding `5e-5` and `2e-4`. Extend one step outward only if the
+  best result remains at a boundary. Keep block size fixed at 8 for this search.
+- [ ] Rank the refined candidates with fixed-mask whole-volume metrics and a
+  common reference-derived visual window. Record metric definitions, lambda,
+  iteration/convergence information, input hashes, and output hashes in CSV
+  and JSON.
+- [ ] Select one Wavelet and one LLR finalist, then choose the R1 regularization
+  using quantitative metrics plus visual review. DICOM remains qualitative and
+  cannot break a metric tie.
 - [ ] Freeze the R1-selected regularization and apply it unchanged to R3 as a
   cross-dataset transfer check.
