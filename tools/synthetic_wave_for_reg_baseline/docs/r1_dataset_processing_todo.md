@@ -159,9 +159,10 @@ separately and only after full Wave encoding.
   path: solver-matched lambda zero plus `2e-5`, `1e-4`, and `5e-4`. The
   split/native FISTA lambda-zero gate passed at relative L2 `2.73366e-6`, and
   all cases are complete, finite, canonical RAS, and manifest-backed.
-- [ ] Register the direct FFT RSS volume as `ranking_reference` in the dataset
-  contract, including its source k-space, coil-basis hash, FFT/RSS convention,
-  canonical-RAS NIfTI, and file hash.
+- [x] Register the direct FFT RSS volume and approved `f=0.59` mask in
+  `evaluation/direct_fft_reference/metrics_reference_manifest.json`. This
+  evaluation overlay records their hashes and preserves the immutable dataset
+  manifest hash already bound to completed reconstructions.
 - [ ] Verify that the direct FFT reference and every candidate have identical
   shape, voxel size, affine, and RAS axis convention. Because they arise from
   the same source grid, calculate metrics without image registration or
@@ -176,9 +177,10 @@ separately and only after full Wave encoding.
 - [x] Generate an intermediate candidate using robust-center BET threshold
   `0.59` plus the same one-voxel margin. It contains 1,818,144 voxels: 3.74%
   larger than the `0.60` candidate and 5.55% smaller than the `0.55` candidate.
-  Its manifest remains `visual_review_required`.
-- [ ] Obtain explicit user visual approval of the expanded mask boundary and
-  labeled L/R orientation before calculating any metrics.
+  Its manifest is now `approved_for_metrics`.
+- [x] Obtain explicit user visual approval of the `f=0.59` expanded mask
+  boundary and labeled L/R orientation before calculating any metrics. Approval
+  was received on 2026-08-21; only this mask may be used for the R1 metrics.
 - [ ] Evaluate the completed coarse Wavelet and block-8 LLR cases against the
   direct FFT reference. Keep the solver-matched lambda-zero cases as operator
   and convergence controls, not as the quantitative ground truth.

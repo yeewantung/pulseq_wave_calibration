@@ -216,6 +216,11 @@ The same utility accepts `--mask-dilation-voxels` when a metric mask needs a
 small, controlled outward margin. It preserves native BET outputs, writes the
 expanded mask under the canonical mask filename, overlays both boundaries in
 the QC figure, and always leaves visual approval unset.
+For MID00198 R1 evaluation, the approved direct FFT RSS reference and approved
+`f=0.59` metrics-only mask are bound by hashes in
+`evaluation/direct_fft_reference/metrics_reference_manifest.json` under the
+dataset output root. Evaluation code should consume that record rather than
+selecting among BET candidate directories.
 
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a

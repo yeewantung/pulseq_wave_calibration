@@ -30,9 +30,12 @@ status. The intermediate replacement is under
 robust-center BET at `f=0.59` followed by one face-connected voxel of outward
 dilation. It is 3.74% larger than the `f=0.60` mask and 5.55% smaller than the
 `f=0.55` mask. Its QC shows the expanded boundary in green and native BET
-boundary in orange. The new manifest remains `visual_review_required`; do not
-calculate metrics until the user explicitly approves the mask boundary and
-L/R labels.
+boundary in orange. The user explicitly approved this `f=0.59` boundary and
+the labeled L/R orientation on 2026-08-21. Its mask manifest now has
+`approved_for_metrics` status. Use
+`evaluation/direct_fft_reference/metrics_reference_manifest.json` as the
+stable, hash-bound entry point for both the direct FFT RSS reference and this
+metrics-only mask; do not infer a mask from the rejected candidates.
 
 The qualitative R1 receive-profile comparison is complete under
 `comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched
