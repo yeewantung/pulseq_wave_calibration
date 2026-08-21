@@ -391,6 +391,29 @@ code now rejects Wave NIfTIs lacking the corrected exporter sidecar contract.
 Visual approval of the corrected native/matched package is the gate before
 implementing quantitative sharpness and noise/contrast-proxy analysis.
 
+The manifested quantitative tradeoff analysis is complete. It transfers the
+approved BET mask into untouched reconstruction space using the frozen shared
+rigid transform, then keeps native-grid and matched-grid measurements separate.
+No candidate-specific registration, DICOM intensity, true-SNR/CNR claim,
+composite rank, or automatic resolution selection is used.
+
+Relative to full-resolution corrected LLR, native total edge-gradient ratios
+were `0.981`, `0.980`, and `0.964` for the lower-X, lower-Y, and balanced cases.
+The expected directional losses were visible: lower-X retained X-gradient
+`0.924`, lower-Y retained Y-gradient `0.917`, and the balanced case retained
+X/Y gradients `0.953/0.946`. The fixed smooth-brain signal/local-residual proxy
+increased from `13.71` at 1 mm to `15.22`, `15.57`, and `15.67`; this is a
+noise-plus-residual-anatomy proxy, not SNR. After linear alignment to the 1 mm
+grid, brain NRMSE versus full-resolution LLR was `0.0663`, `0.0695`, and
+`0.0719`, with mean axial SSIM `0.916`, `0.911`, and `0.896`. These results
+describe the expected gain/loss curve and do not identify a single best case.
+
+An initial background-based apparent-SNR summary was rejected because BART's
+reconstructed background is nearly zero and the resulting ratios were
+scientifically uninformative. It is retained under diagnostics. Background
+statistics remain separately labelled QC; the accepted summary uses the fixed
+smooth-brain signal/local-residual proxy.
+
 ## 10. Phase H: R1-to-R3 parameter transfer check
 
 Apply the R1-selected parameter without retuning. Because this R3 dataset was
@@ -452,10 +475,10 @@ gates, and all three production reconstructions pass. The corrected
 native-grid and matched-1-mm visual review is generated and awaits user
 approval. No accepted historical output was overwritten.
 
-After visual approval, add the retrospective resolution tradeoff analysis;
-keep true SNR/CNR claims separate from single-image noise/contrast proxies.
-Then remove hard-coded R3 geometry, dataset paths, and DICOM-only reference
-assumptions from the R1-facing orchestration.
+The retrospective resolution tradeoff analysis is complete and intentionally
+makes no automatic selection. The next implementation step is to remove
+hard-coded R3 geometry, dataset paths, and DICOM-only reference assumptions
+from the R1-facing orchestration.
 Use GRAPPA as the temporary metric reference, apply BET only during metrics,
 and keep DICOM ranking as a configuration mode to enable on the new R1
 dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
@@ -475,7 +498,8 @@ work is:
    rebuilds the target PSF, runs BART on GPU, restores the target k-space norm,
    and exports with the same orientation contract. Product preparation,
    reconstruction, and manifested native/matched visual review are complete;
-   visual approval and quantitative resolution-tradeoff analysis remain.
+   the descriptive quantitative resolution-tradeoff analysis is also complete
+   without selecting a winning resolution.
 3. **Dataset portability:** replace fixed `256 x 256 x 256`, R3 sampling-line,
    subject, path, DICOM-count, and maximum-eigenvalue assumptions with values
    derived from a dataset manifest or sequence/TWIX metadata.

@@ -23,9 +23,10 @@ manifest, crop-first target-grid Wave synthesis, and mandatory GPU
 reconstruction path. Product structural validation and both real-data source
 operator gates pass. All three corrected-LLR production cases and their
 canonical-RAS exports are complete. A manifested native/matched visual-review
-package is generated and awaits user approval. After approval, implement the
-resolution tradeoff analysis, then remove R3-only shape, path, sampling, and
-DICOM assumptions from the R1-facing orchestration.
+package and descriptive quantitative resolution-tradeoff analysis are
+complete. No automatic resolution selection was made. The next implementation
+step is to remove R3-only shape, path, sampling, and DICOM assumptions from the
+R1-facing orchestration.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, inspect and qualify the new acquisition, then switch final
@@ -308,6 +309,33 @@ producer without reconstructing and stores that canonical reference under
 `full_resolution_reference/`. The review code requires
 `NIfTICanonicalRAS=true` and affine flips `[true,false,true]` in every Wave
 export sidecar, preventing reuse of the historical file.
+
+The quantitative entry point is:
+
+```text
+scripts/run_retrospective_low_resolution_analysis.sh
+```
+
+Its canonical output is `resolution_tradeoff_analysis/`. The approved BET mask
+is transferred into untouched reconstruction space using the frozen shared
+rigid transform and is used only for metrics. Native-grid gradients use
+physical-mm spacing; matched fidelity uses linear interpolation to the 1 mm
+full-resolution LLR grid. DICOM intensities, candidate-specific registration,
+true-SNR/CNR claims, composite ranking, and automatic selection are excluded.
+
+Key lower-X/lower-Y/balanced results are: native total edge-gradient ratios
+`0.981/0.980/0.964`; smooth-region signal/local-residual proxies
+`15.22/15.57/15.67` versus `13.71` at full resolution; matched brain NRMSE
+`0.0663/0.0695/0.0719`; and mean axial SSIM `0.916/0.911/0.896`. Directional
+edge ratios behave as expected, with X `0.924` in the lower-X case, Y `0.917`
+in the lower-Y case, and X/Y `0.953/0.946` in the balanced case. These are
+descriptive tradeoffs, not a selected winner.
+
+The first background-based apparent-SNR summary was scientifically rejected
+because BART's reconstructed air background is nearly zero. It is preserved
+under `diagnostics/rejected_resolution_analysis_background_noise_proxy`.
+Background statistics remain QC only; the accepted summary uses a fixed
+smooth-brain signal/local-residual proxy and explicitly does not call it SNR.
 
 ## Accepted historical R3 outputs
 

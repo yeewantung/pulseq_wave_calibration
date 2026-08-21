@@ -110,6 +110,22 @@ matched figure linearly resamples only for alignment. Per-volume positive
 p99.5 scaling is display-only. Neither DICOM nor BET is used, and no
 quantitative ranking is performed.
 
+After visual review, generate the descriptive resolution-tradeoff analysis:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_retrospective_low_resolution_analysis.sh
+```
+
+`analyze_retrospective_low_resolution.py` maps the approved fixed BET mask into
+the untouched reconstruction grids using the frozen shared transform. It
+reports native physical-mm sharpness, a fixed smooth-brain
+signal/local-residual proxy, and matched-grid NRMSE/SSIM/NCC against both the
+same-regularizer full-resolution result and temporary GRAPPA reference.
+Background values are separate QC because BART air support is nearly zero.
+The manifest explicitly excludes DICOM intensities, true-SNR/CNR claims,
+candidate-specific registration, composite ranking, and automatic resolution
+selection.
+
 For the current R3 presentation optimization, `run_r3_presentation_optimization.sh` provides a
 resumable tmux-friendly orchestration entry point. Its default
 `all-before-review` stage runs the focused GPU reconstructions and prepares the
