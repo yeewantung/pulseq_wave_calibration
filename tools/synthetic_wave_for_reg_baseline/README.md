@@ -27,9 +27,11 @@ directory's root; paths and scan filenames remain configuration/CLI inputs.
 ## Current experiment
 
 Continue development on the 2026 R3x1 product and synthetic R3x2 Wave data,
-using no-wave GRAPPA and no-wave SENSE as paired temporary references. Neither
-is ground truth, and DICOM intensities are excluded from provisional
-regularization ranking. The `ecalib -I` pilot is retained as a negative result.
+using no-wave GRAPPA as the single temporary metric reference. DICOM
+intensities are excluded from provisional regularization ranking, and BET is
+applied only during metric calculation. No-wave SENSE remains an optional
+diagnostic, while the no-wave BART PICS branch is deferred. The `ecalib -I`
+pilot is retained as a negative result.
 
 A new R1 dataset will replace this temporary reference contract after it is
 collected and qualified. The older 2021 R1 scans remain partial-readout

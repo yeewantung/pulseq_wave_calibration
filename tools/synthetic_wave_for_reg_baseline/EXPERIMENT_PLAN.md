@@ -8,20 +8,19 @@ preserved as a historical record in
 
 The execution order is now:
 
-1. use the no-wave GRAPPA and no-wave SENSE reconstructions from the existing
-   R3x1 product scan as temporary development references for the remaining
-   reconstruction and evaluation code;
-2. develop a GPU BART PICS regularization path for the no-wave R3x1 data and
-   evaluate the existing synthetic-Wave candidates against both temporary
-   references without using either one as ground truth;
-3. acquire and qualify a new R1 dataset; and
-4. switch the final parameter-selection workflow to that R1 dataset, then
-   apply the R1-selected settings back to R3 without retuning.
+1. use the no-wave GRAPPA reconstruction from the existing R3x1 product scan
+   as the single temporary development reference;
+2. finish the reusable infrastructure needed by later stages: correct NIfTI
+   orientation at export, integrate retrospective low-resolution support, and
+   remove R3-specific geometry/configuration assumptions from the R1 path;
+3. acquire and qualify the new R1 dataset; and
+4. switch the final parameter-selection and DICOM-ranking workflow to that R1
+   dataset, then apply the R1-selected settings back to R3 without retuning.
 
 The first-stage R3 parameters are provisional and may be tuned to that
 dataset. Only the later R1 development/confirmation experiment is intended to
 select the more transferable final parameters. Results selected against the
-temporary R3 references must be labelled developmental and repeated after the
+temporary R3 reference must be labelled developmental and repeated after the
 new R1 dataset is available.
 
 ### Decision recorded 2026-08-20: temporary references
@@ -34,13 +33,14 @@ DICOM ratios were `1.347` and `0.655`, respectively. Retain the pilot and its
 manifest as a negative result, but do not use `ecalib -I` for the production
 path or continue tuning regularization against either DICOM intensity profile.
 
-Until the new R1 acquisition arrives, use no-wave GRAPPA and no-wave SENSE as
-a paired temporary reference set. Neither reconstruction is truth. Report
-metrics against both separately, report their mutual disagreement as the
-temporary-reference floor, and accept a provisional trend only when it is
-consistent against both references and with visual review. The approved BET
-mask may still define spatial support, but DICOM voxel intensities must not
-enter provisional regularization ranking.
+Until the new R1 acquisition arrives, use no-wave GRAPPA as the single
+temporary metric reference. No GRAPPA-versus-SENSE comparison or agreement
+gate is required. Keep SENSE as an existing optional diagnostic only, and
+defer the no-wave BART PICS regularization branch. Apply the approved BET mask
+only while calculating metrics; do not use it to alter reconstruction or
+display. DICOM voxel intensities must not enter provisional regularization
+ranking, but the evaluator must retain a configurable DICOM-reference mode for
+the new R1 dataset.
 
 ## 1. Scientific roles of the datasets
 
@@ -106,13 +106,12 @@ two explicitly different roles:
 
 For current development, compare:
 
-1. R3x1 no-wave GRAPPA as one temporary reference;
-2. R3x1 no-wave SENSE as the second temporary reference;
-3. GPU BART PICS no-wave candidates, including lambda zero and regularized
-   cases, as development reconstructions rather than reference truth;
-4. R3x2 synthetic-Wave BART reconstruction with the appropriate provisional
+1. R3x1 no-wave GRAPPA as the single temporary reference;
+2. R3x2 synthetic-Wave BART reconstruction with the appropriate provisional
    or R1-selected regularizer; and
-5. the selected retrospective low-resolution R3x2 cases.
+3. the selected retrospective low-resolution R3x2 cases.
+
+No-wave SENSE and no-wave BART PICS are outside the active development path.
 
 Show raw and normalized IDEA DICOMs only as qualitative presentation context
 during this temporary stage. Their receive-profile corrections make them
@@ -152,21 +151,17 @@ export FSLDIR=/path/to/software/packages/fsl/6.0.6
 ## 3. Phase A: preliminary R3x1 optimization and presentation
 
 Proceed first with the existing R3x1 product and synthetic R3x2 Wave dataset;
-do not wait for the new R1 acquisition. Use the no-wave GRAPPA/SENSE pair for
-temporary quantitative development and reserve DICOM for qualitative display.
+do not wait for the new R1 acquisition. Use no-wave GRAPPA for temporary
+quantitative development and reserve DICOM for qualitative display.
 
-1. retain the approved fixed BET mask and L/R orientation, using the mask only
-   as spatial support rather than a source of DICOM intensity targets;
-2. implement a dual-reference evaluator and rerank the completed Wavelet and
-   corrected-LLR cases against GRAPPA and SENSE separately;
-3. report GRAPPA-versus-SENSE disagreement and require a candidate trend to be
-   consistent against both references;
-4. implement the GPU BART PICS no-wave path, first establishing a lambda-zero
-   equivalence/data-consistency gate and then adding provisional regularized
-   cases;
-5. compare DICOM, no-wave alternatives, and selected synthetic R3x2 Wave
+1. retain the approved fixed BET mask and L/R orientation, applying the mask
+   only when calculating metrics;
+2. rank provisional candidates against the single GRAPPA reference;
+3. keep DICOM-based ranking disabled for this dataset but configurable so it
+   can be enabled after the new R1 dataset is qualified;
+4. compare DICOM, no-wave GRAPPA, and selected synthetic R3x2 Wave
    reconstructions visually with fixed display settings; and
-6. label every resulting choice as preliminary, R3-dataset-specific, and
+5. label every resulting choice as preliminary, R3-dataset-specific, and
    subject to replacement by the new R1 experiment.
 
 Do not overwrite the accepted historical sweep. Store the new corrected and
@@ -298,21 +293,16 @@ before running the R1-to-R3 transfer comparison.
 
 During temporary R3 development:
 
-1. canonicalize no-wave GRAPPA, no-wave SENSE, and all candidates to the same
-   RAS grid and verify orientation explicitly;
-2. use the approved BET mask only as a fixed spatial support mask;
+1. canonicalize no-wave GRAPPA and all candidates to the same RAS grid and
+   verify orientation explicitly;
+2. use the approved BET mask only during metric calculation;
 3. estimate any required geometry transform once from lambda zero and reuse it
    unchanged across the candidate sweep;
-4. apply an independent positive LSQ intensity scale for each
-   candidate/reference pairing inside the fixed mask;
+4. apply one positive LSQ intensity scale for each candidate against GRAPPA
+   inside the fixed mask;
 5. calculate masked NRMSE, RMSE, MAE, SSIM, NCC, and gradient/detail metrics
-   against GRAPPA and SENSE separately;
-6. calculate the same GRAPPA-versus-SENSE disagreement to expose the attainable
-   temporary-reference floor;
-7. rank against both references separately and consider only trends stable to
-   the reference choice; do not collapse the pair into an artificial truth
-   image; and
-8. keep DICOM intensity metrics out of regularization selection, while retaining
+   against GRAPPA; and
+6. keep DICOM intensity metrics out of regularization selection, while retaining
    raw and normalized DICOM for clearly labelled qualitative figures.
 
 After the new R1 dataset is qualified, replace this temporary reference
@@ -341,16 +331,19 @@ The existing untested repository is:
 /path/to/user_workspace/sources/published_code/wave-retro-lr-recon
 ```
 
-After the main R1 regularization path is stable:
+Complete this integration before the new R1 regularization run so the same
+case interface and manifests can be exercised on current data first:
 
 1. run and audit its current tests and validate-only workflow;
 2. merge its history into this repository under
    `tools/wave_retro_lr_recon/` rather than keeping a nested Git repository;
 3. reuse the parent repository's pinned `external/wave-mprage` dependency;
-4. expose a small tested library/API plus a dataset-independent CLI;
-5. call that CLI/API from the synthetic-Wave baseline workflow through a
+4. replace its legacy internal-NPY/Torch-CG path with the current exported
+   BART-input manifest contract and GPU `bart wave -g` reconstruction;
+5. expose a small tested library/API plus a dataset-independent CLI;
+6. call that CLI/API from the synthetic-Wave baseline workflow through a
    manifest, without copying its algorithms into the caller; and
-6. preserve requested/achieved resolution, matrix, crop bounds, FOV, scaling,
+7. preserve requested/achieved resolution, matrix, crop bounds, FOV, scaling,
    and source hashes for every case.
 
 The current tool's phase-encoding-only crop is the intended behavior. For
@@ -382,15 +375,14 @@ labelled reference-grid resamples only for matched visual/metric comparisons.
 Apply the R1-selected parameter without retuning. Because this R3 dataset was
 already used for preliminary optimization, describe this as a transfer check,
 not an untouched independent validation. Compare the normalized
-unfiltered product DICOM, no-wave GRAPPA, no-wave SENSE/PICS, regularized
-no-wave reconstruction, full-resolution R3x2 Wave, and retrospective-LR R3x2
-cases. Keep the earlier R3-specific optimum visibly separate from the
-R1-selected result.
+unfiltered product DICOM, no-wave GRAPPA, full-resolution R3x2 Wave, and
+retrospective-LR R3x2 cases. Keep the earlier R3-specific optimum visibly
+separate from the R1-selected result.
 
 ## 11. Presentation design gates
 
 For the near-term presentation, prioritize a compact R3 panel: normalized
-DICOM, no-wave GRAPPA/SENSE alternatives, selected Wavelet result, corrected
+DICOM, no-wave GRAPPA, selected Wavelet result, corrected
 LLR result if useful, masked metric curves, and restrained difference maps.
 Label all selected values as provisional R3-specific parameters.
 
@@ -430,13 +422,44 @@ Do this only after the experiments and presentation outputs are frozen.
 
 ## 13. Immediate next step
 
-Implement a manifest-driven dual-reference evaluator and apply it to the
-already completed R3x2 Wavelet and corrected-LLR sweep. Compute every ranking
-metric separately against no-wave GRAPPA and no-wave SENSE, quantify their
-mutual disagreement, and exclude DICOM intensity metrics from selection.
+Fix NIfTI orientation at the export boundary so all reconstruction methods
+write geometry-correct canonical RAS outputs without a downstream manual
+signed-axis correction. Then integrate the retrospective low-resolution code
+with the current BART-input/manifest contract and GPU BART reconstruction.
 
-After that evaluator is frozen, implement the no-wave GPU BART PICS path using
-the measured R3x1 k-space and exact sampling mask. Require a lambda-zero
-equivalence/data-consistency gate before adding provisional regularization.
-Do not begin final parameter selection or the older R1 partial-readout work
-while the new R1 acquisition is pending.
+In parallel with those two concrete gaps, remove hard-coded R3 geometry,
+dataset paths, and DICOM-only reference assumptions from the R1-facing
+orchestration. Use GRAPPA as the temporary metric reference, apply BET only
+during metrics, and keep DICOM ranking as a configuration mode to enable on
+the new R1 dataset. Defer no-wave BART PICS and the older R1 partial-readout
+work.
+
+## 14. Remaining readiness gaps for the incoming R1 dataset
+
+The regularization engine, split-complex LLR handling, resumable manifests,
+and core metric functions are already available. The remaining infrastructure
+work is:
+
+1. **NIfTI orientation at source:** unify GRAPPA, BART lambda zero,
+   regularized Wave, and retrospective-LR exporters around one tested
+   geometry contract; write canonical RAS data/affines directly; and remove
+   reliance on the R3-only manual signed-axis correction.
+2. **Retrospective low resolution:** integrate the separate repository,
+   consume current BART manifests, crop only PE dimensions, rebuild the target
+   PSF, run BART on GPU, restore the target k-space norm, and export with the
+   same orientation contract.
+3. **Dataset portability:** replace fixed `256 x 256 x 256`, R3 sampling-line,
+   subject, path, DICOM-count, and maximum-eigenvalue assumptions with values
+   derived from a dataset manifest or sequence/TWIX metadata.
+4. **Incoming-data qualification and reference construction:** provide one
+   audit entry point that records sampling completeness, readout center and
+   oversampling, matrix/FOV, coils, ACS, sequence match, DICOM series/tags,
+   and the chosen fully sampled no-wave reference construction.
+5. **Configurable evaluation reference:** support temporary GRAPPA ranking now
+   and DICOM/reference ranking later without changing metric code. BET is
+   applied only for metrics. DICOM mode must remain disabled for the current
+   R3 development run and enabled only after the new dataset is qualified.
+6. **End-to-end acceptance gates:** retain PSF=1/no-wave identity,
+   full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
+   sample preservation, lambda-zero reconstruction, scaling/norm restoration,
+   orientation, and resumability checks in one dataset-level manifest.

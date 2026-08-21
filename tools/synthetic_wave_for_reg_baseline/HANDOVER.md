@@ -7,18 +7,16 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Implement the temporary dual-reference evaluator first. Re-evaluate the
-already completed synthetic-Wave sweep against no-wave GRAPPA and no-wave
-SENSE separately, using the approved BET mask only as spatial support and
-excluding DICOM intensity metrics from regularization ranking. Report the
-GRAPPA-versus-SENSE disagreement as the temporary-reference floor.
+Use no-wave GRAPPA as the single temporary metric reference. Do not add a
+GRAPPA-versus-SENSE comparison gate, and defer the no-wave BART PICS branch.
+Apply the approved BET mask only while calculating metrics. Keep DICOM
+intensity ranking disabled for this R3 development dataset, with a
+configuration switch to enable it after the new R1 dataset is qualified.
 
-The next reconstruction development task is a manifest-driven no-wave BART
-PICS path using the measured R3x1 k-space, the exact sampling mask, and GPU
-`-g`. Establish lambda-zero equivalence/data consistency before adding
-wavelet or LLR regularization. Existing GRAPPA and unregularized SENSE remain
-temporary comparison references; the new PICS outputs are candidates, not
-truth.
+The immediate implementation work is to fix NIfTI orientation at export and
+integrate retrospective low-resolution support with the current BART manifest
+and mandatory GPU reconstruction path. Then remove R3-only shape, path,
+sampling, and DICOM assumptions from the R1-facing orchestration.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, inspect and qualify the new acquisition, then switch final
@@ -204,9 +202,10 @@ metadata; test partial-Fourier completion and crop the oversampled image FOV.
 
 ## Frozen regularization decisions
 
-Execution order is temporary dual-reference evaluation, no-wave GPU BART PICS
-development, and then qualification/refinement on the new R1 acquisition.
-Parameters selected during R3 development are provisional and R3-specific.
+Execution order is NIfTI orientation correction, retrospective low-resolution
+integration, dataset-portability work, and then qualification/refinement on
+the new R1 acquisition. Parameters selected during R3 development are
+provisional and R3-specific.
 
 Wavelet coarse sweep after the new R1 development scan is qualified:
 
@@ -226,17 +225,16 @@ intensity scaling.
 
 ## Evaluation decisions
 
-- During temporary R3 development, calculate metrics independently against
-  no-wave GRAPPA and no-wave SENSE; neither is ground truth.
-- Report GRAPPA-versus-SENSE disagreement and require ranking trends to agree
-  across both temporary references.
+- During temporary R3 development, use no-wave GRAPPA as the single metric
+  reference.
 - Keep DICOM intensity metrics out of provisional regularization selection.
-- Use the approved DICOM-derived FSL BET mask only as fixed spatial support;
-  mask metrics, not displays.
+- Preserve a configurable DICOM/reference mode for the incoming R1 dataset.
+- Apply the approved DICOM-derived FSL BET mask only during metric
+  calculation, not reconstruction or display.
 - Visually approve mask and L/R orientation.
 - Estimate one proper rigid transform from lambda zero and reuse it unchanged.
-- Primary ranking uses brain-mask structural/error/detail metrics reported
-  separately for each temporary reference.
+- Primary ranking uses GRAPPA-referenced brain-mask structural/error/detail
+  metrics during temporary development.
 - Background noise and missed anatomy remain separately reported QC.
 - The approved historical R3 orientation used permutation `[0,1,2]` and RAS
   flips `[true,false,true]`; revalidate on R1.
