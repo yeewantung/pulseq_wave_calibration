@@ -7,11 +7,11 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Run the new MID00198 R1 preparation in tmux, then inspect the unmasked
-full-Wave diagnostics before approving the separate R3x2 mask and lambda-zero
-reconstruction. DICOM is explicitly disabled as a reference because Prescan
-Normalize was enabled. No GRAPPA or SENSE source reconstruction is used for
-this fully sampled dataset.
+Review the completed MID00198 R1 Wavelet coarse sweep and choose whether a
+focused refinement is warranted. The sweep uses the approved crop-`0.6` maps,
+measured `6.70e7` maximum eigenvalue, GPU FISTA, and a solver-matched FISTA
+lambda zero. Its common-window review is reference-neutral: DICOM and BET do
+not participate. No GRAPPA or SENSE source reconstruction was used.
 
 The NIfTI orientation fix is complete. The shared Wave exporter now writes
 canonical RAS data with affine-axis flips `[true,false,true]`, matching the

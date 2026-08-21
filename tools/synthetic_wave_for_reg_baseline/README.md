@@ -86,6 +86,17 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
     --confirm-full-wave-reviewed
 ```
 
+After approving the crop-`0.6` ESPIRiT maps and lambda zero, the resumable
+GPU-FISTA Wavelet sweep is:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_wavelet_sweep.sh \
+    --confirm-crop-0p6-reviewed
+```
+
+It runs solver-matched lambda zero and the five frozen positive lambdas, then
+writes a DICOM-free, common-window review under the sweep's `review` directory.
+
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary
 optimization, it is not an untouched independent validation dataset.

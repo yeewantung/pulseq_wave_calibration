@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -23,37 +24,45 @@ from bart_cfl import (
     validate_finite_bart,
     write_bart_header,
 )
+from dataset_manifest import load_dataset_manifest, load_passed_inspection
 
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the dataset-independent regularized reconstruction interface."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--wrapper", required=True, type=Path)
-    parser.add_argument("--bart", required=True, type=Path)
-    parser.add_argument("--python", required=True, type=Path)
-    parser.add_argument("--bart-input-dir", required=True, type=Path)
-    parser.add_argument("--maps", required=True, type=Path)
-    parser.add_argument("--expected-maps-sha256", required=True)
-    parser.add_argument("--lambda-zero-base", required=True, type=Path)
+    parser.add_argument(
+        "--lambda-zero-manifest",
+        type=Path,
+        help="Derive frozen maps, data, geometry, and provenance from an accepted run.",
+    )
+    parser.add_argument("--wrapper", type=Path)
+    parser.add_argument("--bart", type=Path)
+    parser.add_argument("--python", type=Path)
+    parser.add_argument("--bart-input-dir", type=Path)
+    parser.add_argument("--maps", type=Path)
+    parser.add_argument("--expected-maps-sha256")
+    parser.add_argument("--lambda-zero-base", type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
-    parser.add_argument("--twix", required=True, type=Path)
-    parser.add_argument("--sequence", required=True, type=Path)
+    parser.add_argument("--twix", type=Path)
+    parser.add_argument("--sequence", type=Path)
     parser.add_argument("--regularizer", required=True, choices=("wavelet", "llr"))
     parser.add_argument("--lambda-value", required=True, type=float)
     parser.add_argument("--block-size", type=int, default=8)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--tolerance", type=float, default=1e-6)
-    parser.add_argument("--max-eigenvalue", type=float, default=6.70e7)
-    parser.add_argument("--backend", choices=("cpu", "gpu"), default="cpu")
-    parser.add_argument("--subject", default="20260817product")
+    parser.add_argument("--max-eigenvalue", type=float)
+    parser.add_argument("--backend", choices=("gpu",), default=None)
+    parser.add_argument("--subject")
     parser.add_argument("--resume", action="store_true")
     return parser
 
 
 def canonical_lambda(value: float) -> str:
     """Return a stable compact scientific label for paths and manifests."""
-    if not np.isfinite(value) or value <= 0.0:
-        raise ValueError("Regularization lambda must be positive and finite.")
+    if not np.isfinite(value) or value < 0.0:
+        raise ValueError("Regularization lambda must be nonnegative and finite.")
+    if value == 0.0:
+        return "0"
     mantissa, exponent = f"{value:.8e}".split("e")
     mantissa = mantissa.rstrip("0").rstrip(".")
     return f"{mantissa}e{int(exponent)}"
@@ -326,7 +335,9 @@ def _relative_bart_difference(candidate_base: Path, reference_base: Path) -> flo
     return float(np.sqrt(error_squared / reference_squared))
 
 
-def _validate_niftis(nifti_dir: Path) -> list[dict[str, Any]]:
+def _validate_niftis(
+    nifti_dir: Path, expected_shape: tuple[int, int, int] = (256, 256, 256)
+) -> list[dict[str, Any]]:
     """Validate the wrapper's matched magnitude/phase NIfTIs and sidecars."""
     import nibabel as nib
 
@@ -338,7 +349,7 @@ def _validate_niftis(nifti_dir: Path) -> list[dict[str, Any]]:
     outputs = []
     for path in paths:
         image = nib.load(str(path))
-        if image.shape != (256, 256, 256):
+        if image.shape != expected_shape:
             raise ValueError(f"Unexpected NIfTI shape {image.shape}: {path}")
         data = np.asanyarray(image.dataobj)
         if not np.isfinite(data).all():
@@ -387,7 +398,10 @@ def completed_manifest_reusable(
 
 
 def failed_run_recoverable(
-    manifest_path: Path, expected_config: dict[str, Any], expected_maps_hash: str
+    manifest_path: Path,
+    expected_config: dict[str, Any],
+    expected_maps_hash: str,
+    expected_shape: tuple[int, int, int] = (256, 256, 256),
 ) -> bool:
     """Recognize a finished BART solve whose wrapper failed only during conversion."""
     if not manifest_path.is_file():
@@ -406,7 +420,7 @@ def failed_run_recoverable(
         fields = _parse_bart_log(log_path)
         if "bart_total_seconds" not in fields:
             return False
-        validation = validate_finite_bart(image_base, (256, 256, 256, 1, 1))
+        validation = validate_finite_bart(image_base, (*expected_shape, 1, 1))
         return float(validation["norm"]) > 0.0
     except (KeyError, OSError, TypeError, ValueError):
         return False
@@ -417,8 +431,138 @@ def _resolved(path: Path) -> Path:
     return path.expanduser().resolve()
 
 
+def resolve_regularization_inputs(
+    args: argparse.Namespace,
+) -> tuple[argparse.Namespace, dict[str, Any] | None, tuple[int, int, int]]:
+    """Resolve an accepted lambda-zero run or the compatible explicit interface."""
+    explicit = (
+        args.wrapper,
+        args.bart,
+        args.python,
+        args.bart_input_dir,
+        args.maps,
+        args.expected_maps_sha256,
+        args.lambda_zero_base,
+        args.twix,
+        args.sequence,
+        args.max_eigenvalue,
+        args.backend,
+        args.subject,
+    )
+    if args.lambda_zero_manifest is not None:
+        if any(value is not None for value in explicit):
+            raise ValueError(
+                "--lambda-zero-manifest cannot be combined with explicit input, "
+                "solver-scale, backend, or subject options"
+            )
+        manifest_path = _resolved(args.lambda_zero_manifest)
+        if not manifest_path.is_file():
+            raise FileNotFoundError(manifest_path)
+        accepted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if accepted.get("status") != "lambda0_complete_awaiting_visual_review":
+            raise ValueError("Lambda-zero reconstruction is not complete.")
+        if float(accepted.get("config", {}).get("ecalib_crop", -1)) != 0.6:
+            raise ValueError("The R1 sweep requires the approved ESPIRiT crop 0.6 maps.")
+        if accepted.get("config", {}).get("gpu_wave_reconstruction") is not True:
+            raise ValueError("Accepted lambda zero was not reconstructed on the GPU.")
+
+        dataset_record = accepted.get("dataset_manifest", {})
+        dataset = load_dataset_manifest(Path(dataset_record.get("path", "")))
+        load_passed_inspection(dataset)
+        if dataset.sha256 != dataset_record.get("sha256"):
+            raise ValueError("Lambda-zero reconstruction uses a stale dataset manifest.")
+
+        bart_input_record = accepted.get("bart_input_manifest", {})
+        bart_input_manifest = Path(bart_input_record.get("path", "")).resolve()
+        if (
+            not bart_input_manifest.is_file()
+            or sha256_file(bart_input_manifest) != bart_input_record.get("sha256")
+        ):
+            raise ValueError("Lambda-zero BART input manifest is missing or changed.")
+        maps = Path(accepted["ecalib"]["output_base"]).resolve()
+        lambda_zero = Path(accepted["wave_lambda0"]["output_base"]).resolve()
+        if sha256_file(maps.with_suffix(".cfl")) != accepted["ecalib"].get(
+            "output_cfl_sha256"
+        ):
+            raise ValueError("Accepted ESPIRiT maps changed after lambda-zero review.")
+        if sha256_file(lambda_zero.with_suffix(".cfl")) != accepted[
+            "wave_lambda0"
+        ].get("output_cfl_sha256"):
+            raise ValueError("Accepted lambda-zero image changed after review.")
+
+        bart_command = shutil.which("bart")
+        if bart_command is None:
+            raise FileNotFoundError(
+                "bart is not on PATH; source /path/to/user_workspace/bart/bart_startup.sh first"
+            )
+        wrapper = (
+            Path(__file__).resolve().parents[3]
+            / "external"
+            / "wave-mprage"
+            / "recon"
+            / "bart"
+            / "run_wave_recon.sh"
+        )
+        output_root = _resolved(args.output_root)
+        if not output_root.is_relative_to(dataset.output_root):
+            raise ValueError("Regularization output root must remain below outputs.root.")
+        maximum_eigenvalue = accepted["wave_lambda0"].get("maximum_eigenvalue")
+        if maximum_eigenvalue is None:
+            raise ValueError(
+                "Accepted lambda zero did not record a measured maximum eigenvalue."
+            )
+
+        args.wrapper = wrapper
+        args.bart = Path(bart_command)
+        args.python = Path(sys.executable)
+        args.bart_input_dir = bart_input_manifest.parent
+        args.maps = maps
+        args.expected_maps_sha256 = accepted["ecalib"]["output_cfl_sha256"]
+        args.lambda_zero_base = lambda_zero
+        args.twix = dataset.input_path("twix")
+        args.sequence = dataset.input_path("wave_sequence")
+        args.max_eigenvalue = float(maximum_eigenvalue)
+        args.backend = "gpu"
+        args.subject = dataset.subject
+        matrix = tuple(int(value) for value in dataset.payload["geometry"]["matrix"])
+        provenance = {
+            "dataset_manifest": dataset.provenance(),
+            "lambda_zero_manifest": {
+                "path": str(manifest_path),
+                "sha256": sha256_file(manifest_path),
+            },
+            "bart_input_manifest": {
+                "path": str(bart_input_manifest),
+                "sha256": bart_input_record["sha256"],
+            },
+        }
+        return args, provenance, matrix
+
+    required = {
+        "--wrapper": args.wrapper,
+        "--bart": args.bart,
+        "--python": args.python,
+        "--bart-input-dir": args.bart_input_dir,
+        "--maps": args.maps,
+        "--expected-maps-sha256": args.expected_maps_sha256,
+        "--lambda-zero-base": args.lambda_zero_base,
+        "--twix": args.twix,
+        "--sequence": args.sequence,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise ValueError(
+            "Use --lambda-zero-manifest, or provide " + ", ".join(missing)
+        )
+    args.max_eigenvalue = 6.70e7 if args.max_eigenvalue is None else args.max_eigenvalue
+    args.backend = "gpu" if args.backend is None else args.backend
+    args.subject = "20260817product" if args.subject is None else args.subject
+    return args, None, (256, 256, 256)
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Validate provenance, invoke the wrapper once, and persist a complete manifest."""
+    args, source_provenance, expected_matrix = resolve_regularization_inputs(args)
     wrapper = _resolved(args.wrapper)
     bart = _resolved(args.bart)
     python = _resolved(args.python)
@@ -436,6 +580,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         args.tolerance,
         args.max_eigenvalue,
     )
+    if args.backend != "gpu":
+        raise ValueError("Every BART Wave reconstruction must use the GPU backend.")
     for path in (wrapper, bart, python, twix, sequence, bart_input / "manifest.json"):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -476,6 +622,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "tolerance": args.tolerance,
         "maximum_eigenvalue": args.max_eigenvalue,
         "backend": args.backend,
+        "matrix_rolinpar": list(expected_matrix),
+        "dataset_manifest_sha256": (
+            source_provenance["dataset_manifest"]["sha256"]
+            if source_provenance is not None
+            else None
+        ),
+        "lambda_zero_manifest_sha256": (
+            source_provenance["lambda_zero_manifest"]["sha256"]
+            if source_provenance is not None
+            else None
+        ),
+        "bart_input_manifest_sha256": (
+            source_provenance["bart_input_manifest"]["sha256"]
+            if source_provenance is not None
+            else None
+        ),
         "complex_representation": (
             "split_real_imag_iter_dim_8_recombined"
             if args.regularizer == "llr"
@@ -486,7 +648,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         print(f"Skipping; reusing validated completed run: {run_dir}")
         return json.loads(manifest_path.read_text(encoding="utf-8"))
     recover_conversion = args.resume and failed_run_recoverable(
-        manifest_path, config, expected_maps_hash
+        manifest_path, config, expected_maps_hash, expected_matrix
     )
     if run_dir.exists() and any(run_dir.iterdir()) and not recover_conversion:
         raise FileExistsError(
@@ -557,6 +719,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "maps": {"base": str(maps), "cfl_sha256": actual_maps_hash},
             "lambda_zero_reference": str(lambda_zero),
             "bart_input_dir": str(bart_input),
+            "source_provenance": source_provenance,
         }
     _write_json(manifest_path, manifest)
     log_path = run_dir / "wrapper.log"
@@ -625,13 +788,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             wrapper_wall_seconds = _run_streamed(wrapper_command, log_path, environment)
             reconstruction_wall_seconds = None
         image_base = bart_output / "image_wave"
-        validation = validate_finite_bart(image_base, (256, 256, 256, 1, 1))
+        validation = validate_finite_bart(image_base, (*expected_matrix, 1, 1))
         if float(validation["norm"]) <= 0.0:
             raise ValueError("Regularized BART output has zero norm.")
         difference = _relative_bart_difference(image_base, lambda_zero)
-        if difference <= 1e-7:
+        if args.lambda_value > 0.0 and difference <= 1e-7:
             raise ValueError("Regularized output is indistinguishable from lambda-zero.")
-        nifti_outputs = _validate_niftis(nifti_output)
+        nifti_outputs = _validate_niftis(nifti_output, expected_matrix)
         version = subprocess.run(
             [str(bart), "version"], check=True, capture_output=True, text=True
         )

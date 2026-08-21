@@ -115,7 +115,7 @@ separately and only after full Wave encoding.
   `ecalib_crop-0p6_lambda0` result directory. The run is finite, uses
   `bart wave -g`, retains the same measured maximum eigenvalue (`6.70e7`), and
   differs from crop `0.8` lambda zero by relative L2 `0.033998`.
-- [ ] Visually approve the crop `0.6` map montage and lambda-zero quicklook,
+- [x] Visually approve the crop `0.6` map montage and lambda-zero quicklook,
   then freeze those maps and lambda-zero output for every regularized candidate.
 - [ ] Check finite outputs, map support, data consistency, orientation/LR,
   scaling, central slices, and full-volume geometry before regularization.
@@ -137,9 +137,15 @@ separately and only after full Wave encoding.
 - [ ] Record the selected DICOM series UID and the decisive reconstruction
   metadata in the dataset manifest before changing
   `ranking_reference.kind` from `none` or enabling DICOM intensity ranking.
-- [ ] Make regularized Wave reconstruction consume the same dataset contract
+- [x] Make regularized Wave reconstruction consume the same dataset contract
   and measure any dataset-specific maximum eigenvalue rather than copying R3.
-- [ ] Run the frozen Wavelet coarse sweep only after lambda zero passes.
+- [x] Run the frozen GPU-FISTA Wavelet coarse sweep after lambda zero passes:
+  solver-matched lambda zero plus `1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`.
+  All cases are complete, finite, canonical RAS, and bound to the approved
+  crop-`0.6` maps and measured maximum eigenvalue.
+- [ ] Visually select a coarse Wavelet range from the common-window review.
+  Do not rank against DICOM; use the FISTA lambda-zero case as the matched
+  solver baseline.
 - [ ] Keep BET restricted to metric support and keep all DICOM intensities out
   of ranking until a suitable DICOM acquisition is available and qualified.
 - [ ] Define a raw-derived no-Wave comparison reference only after its coil

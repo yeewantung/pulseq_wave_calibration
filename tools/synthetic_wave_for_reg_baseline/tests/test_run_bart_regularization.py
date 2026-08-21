@@ -18,6 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from bart_cfl import open_bart_memmap, sha256_file, write_bart_header  # noqa: E402
 from run_bart_regularization import (  # noqa: E402
+    _build_parser,
     build_conversion_command,
     build_wave_options,
     build_wrapper_command,
@@ -25,6 +26,7 @@ from run_bart_regularization import (  # noqa: E402
     completed_manifest_reusable,
     failed_run_recoverable,
     recombine_split_complex_bart,
+    resolve_regularization_inputs,
     run,
     run_name,
 )
@@ -35,6 +37,7 @@ class NamingAndCommandTests(unittest.TestCase):
 
     def test_names_requested_smoke_cases(self) -> None:
         self.assertEqual(canonical_lambda(1e-3), "1e-3")
+        self.assertEqual(canonical_lambda(0), "0")
         self.assertEqual(canonical_lambda(1.4e-2), "1.4e-2")
         self.assertEqual(run_name("wavelet", 1e-3), "wavelet_lambda-1e-3")
         self.assertEqual(run_name("llr", 2e-3, 8), "llr_block-8_lambda-2e-3")
@@ -111,9 +114,104 @@ class NamingAndCommandTests(unittest.TestCase):
         self.assertEqual(command[:2], ["env/bin/python", "recon/bart/wave_to_nifti.py"])
         self.assertIn("--save-phase", command)
 
-    def test_rejects_nonpositive_lambda(self) -> None:
-        with self.assertRaisesRegex(ValueError, "positive and finite"):
-            canonical_lambda(0.0)
+    def test_rejects_negative_lambda(self) -> None:
+        with self.assertRaisesRegex(ValueError, "nonnegative and finite"):
+            canonical_lambda(-1e-6)
+
+
+class ManifestInputTests(unittest.TestCase):
+    def test_freezes_approved_crop_maps_and_measured_solver_scale(self) -> None:
+        from dataset_manifest import load_dataset_manifest
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            example = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "incoming_r1_dataset.example.json"
+            )
+            payload = json.loads(example.read_text(encoding="utf-8"))
+            payload["outputs"]["root"] = "outputs"
+            dataset_path = root / "dataset.json"
+            dataset_path.write_text(json.dumps(payload), encoding="utf-8")
+            dataset = load_dataset_manifest(dataset_path)
+            dataset.inspection_report.parent.mkdir(parents=True)
+            dataset.inspection_report.write_text(
+                json.dumps(
+                    {
+                        "dataset_manifest": dataset.provenance(),
+                        "contract_checks": {"all_passed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            bart_input = root / "bart_inputs"
+            bart_input.mkdir()
+            bart_manifest = bart_input / "manifest.json"
+            bart_manifest.write_text('{"status":"ready"}', encoding="utf-8")
+            maps = root / "accepted" / "coil_sens_bart"
+            lambda_zero = root / "accepted" / "image_wave"
+            maps.parent.mkdir()
+            for base, content in ((maps, b"maps"), (lambda_zero, b"lambda-zero")):
+                base.with_suffix(".hdr").write_text("# Dimensions\n1\n", encoding="utf-8")
+                base.with_suffix(".cfl").write_bytes(content)
+            lambda_manifest = root / "accepted" / "manifest.json"
+            lambda_manifest.write_text(
+                json.dumps(
+                    {
+                        "status": "lambda0_complete_awaiting_visual_review",
+                        "config": {
+                            "ecalib_crop": 0.6,
+                            "gpu_wave_reconstruction": True,
+                        },
+                        "dataset_manifest": dataset.provenance(),
+                        "bart_input_manifest": {
+                            "path": str(bart_manifest),
+                            "sha256": sha256_file(bart_manifest),
+                        },
+                        "ecalib": {
+                            "output_base": str(maps),
+                            "output_cfl_sha256": sha256_file(maps.with_suffix(".cfl")),
+                        },
+                        "wave_lambda0": {
+                            "output_base": str(lambda_zero),
+                            "output_cfl_sha256": sha256_file(
+                                lambda_zero.with_suffix(".cfl")
+                            ),
+                            "maximum_eigenvalue": 12345.0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake_bart = root / "bart"
+            fake_bart.touch()
+            args = _build_parser().parse_args(
+                [
+                    "--lambda-zero-manifest",
+                    str(lambda_manifest),
+                    "--output-root",
+                    str(dataset.output_root / "regularization"),
+                    "--regularizer",
+                    "wavelet",
+                    "--lambda-value",
+                    "1e-4",
+                ]
+            )
+
+            with mock.patch(
+                "run_bart_regularization.shutil.which", return_value=str(fake_bart)
+            ):
+                resolved, provenance, matrix = resolve_regularization_inputs(args)
+
+            self.assertEqual(resolved.backend, "gpu")
+            self.assertEqual(resolved.max_eigenvalue, 12345.0)
+            self.assertEqual(resolved.maps, maps)
+            self.assertEqual(matrix, (256, 256, 256))
+            self.assertEqual(
+                provenance["dataset_manifest"]["sha256"], dataset.sha256
+            )
 
 
 class ResumeTests(unittest.TestCase):
@@ -187,6 +285,7 @@ class ResumeTests(unittest.TestCase):
                 base.with_suffix(".hdr").write_text("test", encoding="utf-8")
                 base.with_suffix(".cfl").write_bytes(b"test")
             args = argparse.Namespace(
+                lambda_zero_manifest=None,
                 wrapper=wrapper,
                 bart=bart,
                 python=python,
@@ -203,7 +302,7 @@ class ResumeTests(unittest.TestCase):
                 iterations=100,
                 tolerance=1e-6,
                 max_eigenvalue=6.70e7,
-                backend="cpu",
+                backend="gpu",
                 subject="test",
                 resume=True,
             )

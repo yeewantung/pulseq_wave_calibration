@@ -61,10 +61,11 @@ Pending:
 - [ ] run and visually qualify the real R1 preparation path through measured
   ACS export;
 - [x] make lambda-zero BART reconstruction manifest-aware;
-- [ ] make regularized BART reconstruction manifest-aware;
+- [x] make regularized BART reconstruction manifest-aware and GPU-only;
 - [ ] pass R1 lambda-zero forward-model, scaling, orientation, and GPU gates;
 - [ ] make evaluation preparation and metrics reference-neutral;
-- [ ] run the R1 regularization sweep, freeze the final choice, and apply it
+- [x] run the R1 Wavelet coarse sweep with a solver-matched FISTA lambda zero;
+- [ ] freeze the final choice and apply it
   unchanged to R3 as a cross-dataset transfer check.
 
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
