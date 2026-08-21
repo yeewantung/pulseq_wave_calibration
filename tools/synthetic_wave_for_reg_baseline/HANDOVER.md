@@ -42,8 +42,17 @@ cases: six Wavelet and four block-8 LLR. Reference, mask, and candidates are
 all `256^3`, 1-mm, canonical RAS with zero affine difference. No registration
 or interpolation was performed. The report is
 `evaluation/direct_fft_reference/geometry_validation/geometry_validation.json`.
-The next checklist action is fixed-mask coarse evaluation against direct FFT
-RSS; retain both solver-matched lambda-zero cases as controls rather than truth.
+The fixed-mask coarse evaluation against direct FFT RSS is also complete under
+`evaluation/direct_fft_reference/coarse_regularization_metrics`. It restores
+each export normalization, fits one mask-restricted LSQ scalar per candidate,
+and uses a shared reference-derived display window without registration,
+interpolation, bias correction, histogram matching, DICOM, or composite
+selection. Wavelet `1e-2` leads NRMSE/SSIM/intensity NCC but its edge-gradient
+NCC is below the `1e-3` peak; add `2e-3`, `5e-3`, and the outward endpoint
+`2e-2`. Block-8 LLR metrics still improve through `5e-4`, so the full block
+sizes `4`, `8`, `16` grid should include `1e-3` in addition to `2e-5`, `5e-5`,
+`1e-4`, `2e-4`, and `5e-4`. The next action is to prepare the resumable GPU
+refinement launcher; no final parameter has been selected.
 
 The qualitative R1 receive-profile comparison is complete under
 `comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched

@@ -183,21 +183,25 @@ separately and only after full Wave encoding.
 - [x] Obtain explicit user visual approval of the `f=0.59` expanded mask
   boundary and labeled L/R orientation before calculating any metrics. Approval
   was received on 2026-08-21; only this mask may be used for the R1 metrics.
-- [ ] Evaluate the completed coarse Wavelet and block-8 LLR cases against the
+- [x] Evaluate the completed coarse Wavelet and block-8 LLR cases against the
   direct FFT reference. Keep the solver-matched lambda-zero cases as operator
-  and convergence controls, not as the quantitative ground truth.
-- [ ] For scale-dependent metrics, fit one documented scalar per candidate
+  and convergence controls, not as the quantitative ground truth. The
+  hash-bound package contains 10 cases, fixed-mask metrics, and common-window
+  reviews without registration, interpolation, DICOM, or automatic selection.
+- [x] For scale-dependent metrics, fit one documented scalar per candidate
   within the fixed reference mask. Use reference-derived scaling/windowing for
   SSIM and figures; do not use candidate-specific histogram matching or bias
-  correction.
-- [ ] Refine Wavelet lambda on a 1-2-5 logarithmic grid around the best coarse
-  interval. Reuse all completed cases and add only missing intermediate values;
-  do not expand beyond the existing `1e-6` to `1e-2` bracket unless the optimum
-  lies at an endpoint.
+  correction. Each NIfTI export normalization is first undone from its sidecar,
+  and the fitted LSQ scalar is recorded in the metric table.
+- [ ] Refine Wavelet around the `1e-3` to `1e-2` trade-off by adding `2e-3`
+  and `5e-3`; also add one outward endpoint at `2e-2` because NRMSE, SSIM, and
+  intensity NCC still improved at the tested `1e-2` boundary while edge-gradient
+  NCC peaked at `1e-3`. Reuse all completed cases.
 - [ ] Refine LLR over block sizes `4`, `8`, and `16` using the common lambda
-  grid `2e-5`, `5e-5`, `1e-4`, `2e-4`, and `5e-4`. Reuse the three completed
-  block-8 cases, run the missing full cross-product, and extend the lambda grid
-  one step outward only if the best result remains at a boundary.
+  grid `2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`, and `1e-3`. The added `1e-3`
+  point is required because every reported block-8 fidelity metric still
+  improved at the tested `5e-4` boundary. Reuse all completed block-8 cases and
+  run only the missing cross-product.
 - [ ] Rank the refined candidates with fixed-mask whole-volume metrics and a
   common reference-derived visual window. Record metric definitions, lambda,
   iteration/convergence information, input hashes, and output hashes in CSV

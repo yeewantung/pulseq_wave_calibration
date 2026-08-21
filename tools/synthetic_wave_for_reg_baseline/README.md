@@ -226,6 +226,11 @@ Before metrics, `validate_metrics_geometry.py` hash-validates that reference,
 its approved mask, and an explicitly required set of regularization cases. It
 requires exact RAS shape, voxel size, and affine equality, verifies GPU BART
 provenance, and writes a gate report without registration or interpolation.
+`evaluate_direct_fft_regularization.py` then evaluates those exact cases using
+the approved fixed mask. It undoes documented NIfTI export scaling, fits one
+mask-restricted LSQ scalar, writes CSV/JSON metrics, and creates method-specific
+common-window figures. It reports per-metric leaders but deliberately performs
+no composite ranking or parameter selection.
 
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a
