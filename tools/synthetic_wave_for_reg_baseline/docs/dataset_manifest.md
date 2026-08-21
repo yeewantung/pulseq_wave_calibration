@@ -207,3 +207,14 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
 The reconstruction branch sources the host BART setup and calls the
 manifest-aware lambda-zero runner. Every `bart wave` reconstruction includes
 `-g`; `ecalib -I` remains disabled in the current contract.
+
+To test a different ESPIRiT crop without changing or invalidating the accepted
+upstream preparation, use the isolated pilot:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_ecalib_crop_pilot.sh
+```
+
+It records the manifest-backed crop/output overrides and writes crop `0.6` to
+`reconstructions/synthetic_wave/ecalib_crop-0p6_lambda0`, leaving the crop
+`0.8` reconstruction untouched.

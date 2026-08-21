@@ -130,6 +130,38 @@ class ManifestResolutionTests(unittest.TestCase):
                 root / "outputs" / "reconstructions" / "synthetic_wave" / "lambda0",
             )
 
+            pilot_dir = root / "outputs" / "reconstructions" / "crop-pilot"
+            pilot_args = _build_parser().parse_args(
+                [
+                    "--dataset-manifest",
+                    str(manifest_path),
+                    "--ecalib-crop",
+                    "0.6",
+                    "--output-dir",
+                    str(pilot_dir),
+                    "--resume",
+                ]
+            )
+            with patch("run_bart_wave_lambda0.shutil.which", return_value=str(fake_bart)):
+                pilot = _resolve_run(pilot_args)
+            self.assertEqual(pilot["crop"], 0.6)
+            self.assertEqual(pilot["output_dir"], pilot_dir)
+            self.assertEqual(pilot["manifest_overrides"]["ecalib_crop"], 0.6)
+
+            outside_args = _build_parser().parse_args(
+                [
+                    "--dataset-manifest",
+                    str(manifest_path),
+                    "--output-dir",
+                    str(root / "outside"),
+                ]
+            )
+            with (
+                patch("run_bart_wave_lambda0.shutil.which", return_value=str(fake_bart)),
+                self.assertRaisesRegex(ValueError, "below outputs.root"),
+            ):
+                _resolve_run(outside_args)
+
 
 if __name__ == "__main__":
     unittest.main()

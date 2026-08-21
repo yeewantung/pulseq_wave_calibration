@@ -92,22 +92,31 @@ separately and only after full Wave encoding.
 - [ ] Wave-encode the complete 12-channel source before applying any sampling
   mask.
 - [ ] Review the full-Wave direct-IFFT magnitude and phase diagnostics.
-- [ ] Apply the frozen R3x2 Cartesian lattice plus full-PE2 ACS band after Wave
+- [x] Apply the frozen R3x2 Cartesian lattice plus full-PE2 ACS band after Wave
   encoding.
-- [ ] Verify acquired samples are bitwise identical to full Wave k-space and
+- [x] Verify acquired samples are bitwise identical to full Wave k-space and
   all omitted samples are exact complex zero.
-- [ ] Export measured ACS from the direct compressed R1 image source, without
+- [x] Export measured ACS from the direct compressed R1 image source, without
   repeated compression, and validate its exact-zero exterior.
 
 ## Reconstruction gates
 
 - [x] Finish manifest support in the lambda-zero runner before launching it.
-- [ ] Source BART through `/path/to/user_workspace/bart/bart_startup.sh` and require `-g` for
+- [x] Source BART through `/path/to/user_workspace/bart/bart_startup.sh` and require `-g` for
   every `bart wave` reconstruction.
-- [ ] Estimate one dataset-specific ESPIRiT map set from measured ACS. Do not
+- [x] Estimate the initial dataset-specific ESPIRiT map set from measured ACS.
+  Do not
   use `ecalib -I` as the production solution; the prior pilot was negative.
-- [ ] Run synthetic R3x2 Wave lambda zero and restore BART's recorded internal
+- [x] Run synthetic R3x2 Wave lambda zero and restore BART's recorded internal
   k-space normalization.
+- [x] Visually review the initial lambda-zero reconstruction made with ESPIRiT
+  crop `0.8`; it is acceptable apart from testing a smaller map crop.
+- [x] Repeat ESPIRiT calibration and lambda zero with crop `0.6` in the separate
+  `ecalib_crop-0p6_lambda0` result directory. The run is finite, uses
+  `bart wave -g`, retains the same measured maximum eigenvalue (`6.70e7`), and
+  differs from crop `0.8` lambda zero by relative L2 `0.033998`.
+- [ ] Visually approve the crop `0.6` map montage and lambda-zero quicklook,
+  then freeze those maps and lambda-zero output for every regularized candidate.
 - [ ] Check finite outputs, map support, data consistency, orientation/LR,
   scaling, central slices, and full-volume geometry before regularization.
 - [ ] Add full-sampling and PSF=1 operator checks where they can be performed

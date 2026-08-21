@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Recalibrate maps at crop 0.6 and repeat lambda zero without altering crop 0.8.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_ROOT="/path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2"
+DATASET_ROOT="${R1_SYNTHETIC_WAVE_ROOT:-$DEFAULT_ROOT}"
+DATASET_MANIFEST="${1:-$DATASET_ROOT/dataset_manifest.json}"
+OUTPUT_DIR="$DATASET_ROOT/reconstructions/synthetic_wave/ecalib_crop-0p6_lambda0"
+
+source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
+conda activate cuda133py312-macha
+source /path/to/user_workspace/bart/bart_startup.sh
+command -v bart
+
+python "$SCRIPT_DIR/run_bart_wave_lambda0.py" \
+    --dataset-manifest "$DATASET_MANIFEST" \
+    --ecalib-crop 0.6 \
+    --output-dir "$OUTPUT_DIR" \
+    --resume

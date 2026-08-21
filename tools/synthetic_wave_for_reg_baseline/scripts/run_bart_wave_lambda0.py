@@ -363,6 +363,7 @@ def _completed_reconstruction_reusable(
     *,
     dataset_sha256: str,
     bart_input_manifest_sha256: str,
+    expected_config: dict[str, Any],
 ) -> bool:
     """Accept reuse only when upstream provenance and persisted outputs still match."""
     if not manifest_path.is_file():
@@ -376,6 +377,8 @@ def _completed_reconstruction_reusable(
         if manifest.get("bart_input_manifest", {}).get(
             "sha256"
         ) != bart_input_manifest_sha256:
+            return False
+        if manifest.get("config") != expected_config:
             return False
         for record in manifest["nifti"]["outputs"]:
             if sha256_file(Path(record["nifti"])) != record["nifti_sha256"]:
@@ -395,25 +398,23 @@ def _completed_reconstruction_reusable(
 
 def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
     """Resolve either a manifest-backed run or the compatible explicit interface."""
-    explicit = (
+    manifest_incompatible_options = (
         args.bart,
         args.bart_input_dir,
         args.calibration_base,
-        args.output_dir,
         args.twix,
         args.sequence,
         args.measurement_index,
         args.subject,
-        args.ecalib_crop,
         args.ecalib_intensity_correction,
         args.cg_iterations,
         args.cg_tolerance,
     )
     if args.dataset_manifest is not None:
-        if any(value is not None for value in explicit) or args.overwrite:
+        if any(value is not None for value in manifest_incompatible_options) or args.overwrite:
             raise ValueError(
                 "--dataset-manifest cannot be combined with explicit reconstruction "
-                "options or --overwrite"
+                "options other than --ecalib-crop/--output-dir, or --overwrite"
             )
         dataset = load_dataset_manifest(args.dataset_manifest)
         inspection = load_passed_inspection(dataset)
@@ -428,17 +429,26 @@ def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
                 "Manifest-backed lambda zero requires "
                 "outputs.lambda0_reconstruction_dir"
             )
+        output_dir = (
+            dataset.output_path("lambda0_reconstruction_dir")
+            if args.output_dir is None
+            else args.output_dir.expanduser().resolve()
+        )
+        if not output_dir.is_relative_to(dataset.output_root):
+            raise ValueError("Manifest output override must remain below outputs.root")
+        manifest_crop = float(bart_settings.get("ecalib_crop", 0.8))
+        selected_crop = manifest_crop if args.ecalib_crop is None else args.ecalib_crop
         return {
             "dataset": dataset,
             "bart": Path(bart_command).resolve(),
             "bart_input": dataset.output_path("bart_export_dir") / "bart_inputs",
             "calibration_base": None,
-            "output_dir": dataset.output_path("lambda0_reconstruction_dir"),
+            "output_dir": output_dir,
             "twix": dataset.input_path("twix"),
             "sequence": dataset.input_path("wave_sequence"),
             "measurement_index": int(inspection["twix"]["selected_measurement_index"]),
             "subject": dataset.subject,
-            "crop": float(bart_settings.get("ecalib_crop", 0.8)),
+            "crop": selected_crop,
             "intensity_correction": bool(
                 bart_settings.get("ecalib_intensity_correction", False)
             ),
@@ -447,6 +457,10 @@ def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
             "matrix": tuple(int(value) for value in dataset.payload["geometry"]["matrix"]),
             "fov_mm": tuple(float(value) for value in dataset.payload["geometry"]["fov_mm"]),
             "virtual_coils": int(dataset.payload["reconstruction"]["virtual_coils"]),
+            "manifest_overrides": {
+                "ecalib_crop": selected_crop if args.ecalib_crop is not None else None,
+                "output_dir": str(output_dir) if args.output_dir is not None else None,
+            },
         }
 
     required = {
@@ -480,6 +494,7 @@ def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
         "matrix": (256, 256, 256),
         "fov_mm": (256.0, 256.0, 256.0),
         "virtual_coils": 12,
+        "manifest_overrides": None,
     }
 
 
@@ -520,6 +535,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ) != dataset.sha256:
         raise ValueError("BART inputs use a stale dataset manifest.")
     bart_input_manifest_sha256 = sha256_file(bart_input_manifest_path)
+    run_config = {
+        "matrix_rolinpar": list(matrix),
+        "fov_mm_rolinpar": list(resolved["fov_mm"]),
+        "virtual_coils": ncc,
+        "ecalib_crop": resolved["crop"],
+        "ecalib_intensity_correction": resolved["intensity_correction"],
+        "lambda0_iterations": resolved["iterations"],
+        "lambda0_tolerance": resolved["tolerance"],
+        "gpu_wave_reconstruction": True,
+        "dataset_manifest_overrides": resolved["manifest_overrides"],
+    }
     manifest_path = output_dir / "manifest.json"
     if (
         dataset is not None
@@ -528,6 +554,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             manifest_path,
             dataset_sha256=dataset.sha256,
             bart_input_manifest_sha256=bart_input_manifest_sha256,
+            expected_config=run_config,
         )
     ):
         print(f"Reusing validated lambda-zero reconstruction: {output_dir}")
@@ -612,16 +639,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "sha256": bart_input_manifest_sha256,
         },
         "dataset_manifest": dataset.provenance() if dataset is not None else None,
-        "config": {
-            "matrix_rolinpar": list(matrix),
-            "fov_mm_rolinpar": list(resolved["fov_mm"]),
-            "virtual_coils": ncc,
-            "ecalib_crop": resolved["crop"],
-            "ecalib_intensity_correction": resolved["intensity_correction"],
-            "lambda0_iterations": resolved["iterations"],
-            "lambda0_tolerance": resolved["tolerance"],
-            "gpu_wave_reconstruction": True,
-        },
+        "config": run_config,
         "ecalib": ecalib,
         "wave_lambda0": wave,
         "nifti": nifti,
