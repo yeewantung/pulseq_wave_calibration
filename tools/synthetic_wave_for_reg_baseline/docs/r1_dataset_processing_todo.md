@@ -166,12 +166,13 @@ separately and only after full Wave encoding.
   shape, voxel size, affine, and RAS axis convention. Because they arise from
   the same source grid, calculate metrics without image registration or
   interpolation; stop if the geometry differs.
-- [x] Create a candidate fixed brain mask from the direct FFT reference using
-  robust-center BET, then extend its boundary outward by one face-connected
-  voxel. Preserve both boundaries in the QC figure and use the final mask only
-  to define metric support; do not alter reconstruction intensities. The
-  candidate uses BET threshold `0.55`, contains 1,924,995 voxels after adding
-  69,681 boundary voxels, and remains marked `visual_review_required`.
+- [x] Reject the first expanded candidate made with robust-center BET threshold
+  `0.55` plus one face-connected voxel: its 1,924,995-voxel boundary was judged
+  too large. Preserve it for provenance and do not use it for metrics.
+- [x] Generate a tighter candidate from the direct FFT reference using
+  robust-center BET threshold `0.60`, followed by the same one-voxel outward
+  margin. It contains 1,752,607 voxels, preserves the native BET boundary in
+  its QC figure, and remains marked `visual_review_required`.
 - [ ] Obtain explicit user visual approval of the expanded mask boundary and
   labeled L/R orientation before calculating any metrics.
 - [ ] Evaluate the completed coarse Wavelet and block-8 LLR cases against the

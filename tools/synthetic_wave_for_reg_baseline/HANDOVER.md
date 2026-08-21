@@ -22,11 +22,13 @@ participate. No GRAPPA or SENSE source reconstruction was used.
 The planned LLR refinement is a full cross-product of block sizes `4`, `8`,
 and `16` with lambdas `2e-5`, `5e-5`, `1e-4`, `2e-4`, and `5e-4`, reusing the
 completed block-8 cases. A fixed-mask candidate has been generated from the
-direct FFT reference under
-`evaluation/direct_fft_reference/brain_mask_candidate_dilation-1voxel` using
-robust-center BET at `f=0.55` followed by one face-connected voxel of outward
+direct FFT reference. The first `f=0.55` candidate was rejected by the user as
+too large and is preserved with `rejected_visual_review` status. Its tighter
+replacement is under
+`evaluation/direct_fft_reference/brain_mask_candidate_bet-f0p60_dilation-1voxel`:
+robust-center BET at `f=0.60` followed by one face-connected voxel of outward
 dilation. Its QC shows the expanded boundary in green and native BET boundary
-in orange. The manifest remains `visual_review_required`; do not calculate
+in orange. The new manifest remains `visual_review_required`; do not calculate
 metrics until the user explicitly approves the mask boundary and L/R labels.
 
 The qualitative R1 receive-profile comparison is complete under
