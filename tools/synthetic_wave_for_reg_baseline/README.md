@@ -60,7 +60,10 @@ settings, and evaluation-reference policy. See
 `configs/incoming_r1_dataset.example.json`. The contract enforces GPU BART and
 metrics-only mask use. Its inspector integration records a hashed, fully
 resolved contract snapshot and checks declared acquisition expectations against
-TWIX/DICOM metadata. The remaining consumer-by-consumer work is tracked in
+TWIX/DICOM metadata. Coil compression and the existing R3x1 GRAPPA source path
+now consume that passed contract; GRAPPA explicitly rejects R1 rather than
+applying an incompatible interpolation operator. The remaining
+consumer-by-consumer work is tracked in
 [`docs/dataset_portability_audit.md`](docs/dataset_portability_audit.md).
 
 After R1 refinement, apply the selected parameter back to R3 without retuning
@@ -73,9 +76,11 @@ The current production path is:
 
 1. `inspect_product_dataset.py` audits a new product TWIX/DICOM dataset,
    preferably through one `--dataset-manifest` contract.
-2. `estimate_coil_compression.py` estimates the Ncc=12 compression basis.
+2. `estimate_coil_compression.py` estimates the Ncc=12 compression basis and
+   can derive its dataset state from the passed manifest.
 3. `reconstruct_no_wave_grappa_3d.py` completes the no-wave k-space with the
-   accepted joint-coil 5×5×5 GRAPPA kernel.
+   accepted joint-coil 5×5×5 GRAPPA kernel for a compatible measured R3x1
+   source; its manifest-backed matrix allocation is no longer fixed at 256³.
 4. `synthesize_wave_kspace.py` applies the theoretical sequence PSF.
 5. `export_bart_wave_inputs.py` masks and exports the synthetic Wave data.
 6. `export_bart_calibration_acs.py` exports measured no-wave ACS for one

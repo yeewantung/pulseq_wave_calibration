@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run resumable local 5×5×Kz R=3 GRAPPA on product MPRAGE data."""
+"""Run resumable local 5×5×Kz R=3 GRAPPA on compatible MPRAGE data."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -22,23 +23,55 @@ from grappa_3d_r3 import (
 from estimate_coil_compression import (
     apply_coil_compression_coillast,
     configure_stream,
-    select_product_measurement,
+    select_imaging_measurement,
 )
+from dataset_manifest import (
+    DatasetManifest,
+    DatasetManifestError,
+    load_dataset_manifest,
+    load_passed_inspection,
+    sha256_file,
+)
+
+
+@dataclass(frozen=True)
+class GrappaRunInputs:
+    """Resolved acquisition-specific inputs for the fixed R3 GRAPPA algorithm."""
+
+    twix: Path
+    coil_basis: Path
+    output_prefix: Path
+    ncc: int
+    regularization: float
+    pe2_kernel_size: int
+    matrix_rolinpar: tuple[int, int, int]
+    manifest: DatasetManifest | None
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse dataset, checkpoint, kernel, and chunk-size options."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--twix", type=Path, required=True)
-    parser.add_argument("--coil-basis", type=Path, required=True)
-    parser.add_argument("--output-prefix", type=Path, required=True)
-    parser.add_argument("--ncc", type=int, default=12)
-    parser.add_argument("--regularization", type=float, default=0.01)
+    parser.add_argument(
+        "--dataset-manifest",
+        type=Path,
+        help="Use a passed dataset contract for geometry, sampling, settings, and paths.",
+    )
+    parser.add_argument("--twix", type=Path)
+    parser.add_argument("--coil-basis", type=Path)
+    parser.add_argument("--output-prefix", type=Path)
+    parser.add_argument("--ncc", type=int)
+    parser.add_argument("--regularization", type=float)
     parser.add_argument(
         "--pe2-kernel-size",
         type=int,
-        default=3,
         help="Positive odd PE2 kernel extent; use 5 for a 5x5x5 kernel.",
+    )
+    parser.add_argument(
+        "--matrix-rolinpar",
+        nargs=3,
+        type=int,
+        metavar=("RO", "LIN", "PAR"),
+        help="Logical output matrix for the explicit-path interface.",
     )
     parser.add_argument("--acs-chunk", type=int, default=8)
     parser.add_argument("--calibration-chunk", type=int, default=4)
@@ -49,6 +82,83 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Resume validated ACS, equation, and reconstruction checkpoints.",
     )
     return parser.parse_args(argv)
+
+
+def resolve_grappa_run_inputs(args: argparse.Namespace) -> GrappaRunInputs:
+    """Resolve the manifest or the backward-compatible explicit-path interface."""
+    explicit_fields = (
+        args.twix,
+        args.coil_basis,
+        args.output_prefix,
+        args.ncc,
+        args.regularization,
+        args.pe2_kernel_size,
+        args.matrix_rolinpar,
+    )
+    if args.dataset_manifest is not None:
+        if any(value is not None for value in explicit_fields):
+            raise ValueError(
+                "--dataset-manifest cannot be combined with explicit dataset or GRAPPA options"
+            )
+        manifest = load_dataset_manifest(args.dataset_manifest)
+        inspection = load_passed_inspection(manifest)
+        sampling = list(manifest.payload["sampling"]["source_acceleration_pe1_pe2"])
+        if sampling != [3, 1]:
+            raise ValueError(
+                "This GRAPPA implementation only supports source acceleration [3, 1]; "
+                f"the manifest declares {sampling}. Fully sampled R1 data require the "
+                "separate direct source-reconstruction path."
+            )
+        measured_sampling = inspection["twix"]["selected_measurement_sampling"]
+        if (
+            measured_sampling.get("image_inferred_pe1_stride") != 3
+            or measured_sampling.get("image_pe1_residues_for_inferred_stride") != [1]
+            or measured_sampling.get("refscan_covers_full_pe2") is not True
+        ):
+            raise ValueError(
+                "Measured sampling is incompatible with this R3 GRAPPA operator: "
+                "expected PE1 stride/residue 3/[1] and refscan coverage of every PE2."
+            )
+        reconstruction = manifest.payload["reconstruction"]
+        kernel = list(reconstruction["grappa"]["kernel"])
+        if kernel[:2] != [5, 5]:
+            raise ValueError(
+                f"This GRAPPA implementation requires a 5x5 RO/PE1 kernel, got {kernel}."
+            )
+        return GrappaRunInputs(
+            twix=manifest.input_path("twix"),
+            coil_basis=manifest.output_path("coil_compression_prefix").with_suffix(".npz"),
+            output_prefix=manifest.output_path("source_reconstruction_prefix"),
+            ncc=int(reconstruction["virtual_coils"]),
+            regularization=float(reconstruction["grappa"]["regularization"]),
+            pe2_kernel_size=int(kernel[2]),
+            matrix_rolinpar=tuple(int(value) for value in manifest.payload["geometry"]["matrix"]),
+            manifest=manifest,
+        )
+
+    if (
+        args.twix is None
+        or args.coil_basis is None
+        or args.output_prefix is None
+        or args.matrix_rolinpar is None
+    ):
+        raise ValueError(
+            "Use --dataset-manifest, or provide --twix, --coil-basis, "
+            "--output-prefix, and --matrix-rolinpar"
+        )
+    matrix = tuple(args.matrix_rolinpar)
+    if any(value < 1 for value in matrix):
+        raise ValueError("--matrix-rolinpar values must be positive")
+    return GrappaRunInputs(
+        twix=args.twix.expanduser().resolve(),
+        coil_basis=args.coil_basis.expanduser().resolve(),
+        output_prefix=args.output_prefix.expanduser().resolve(),
+        ncc=12 if args.ncc is None else args.ncc,
+        regularization=0.01 if args.regularization is None else args.regularization,
+        pe2_kernel_size=3 if args.pe2_kernel_size is None else args.pe2_kernel_size,
+        matrix_rolinpar=matrix,
+        manifest=None,
+    )
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -79,6 +189,8 @@ def _open_or_create_memmap(
         if array.shape != shape or array.dtype != np.complex64:
             raise ValueError(f"Checkpoint {path} has {array.shape} {array.dtype}, expected {shape}.")
         return array
+    if path.exists():
+        raise FileExistsError(f"Refusing to overwrite existing checkpoint: {path}")
     return np.lib.format.open_memmap(path, mode="w+", dtype=np.complex64, shape=shape)
 
 
@@ -239,33 +351,61 @@ def reconstruct(
     *,
     chunk_size: int,
     pe2_kernel_size: int,
+    matrix_rolinpar: tuple[int, int, int],
     resume: bool,
 ) -> dict[str, Any]:
     """Reconstruct haloed PE2 chunks and resume only after flushed boundaries."""
     configure_stream(image)
     configure_stream(refscan)
-    shape = (256, 256, 256, basis.shape[1])
+    nro, npe1, npe2 = matrix_rolinpar
+    shape = (nro, npe1, npe2, basis.shape[1])
+    for label, stream in (("image", image), ("refscan", refscan)):
+        stream_shape = tuple(int(value) for value in stream.sqzSize)
+        if len(stream_shape) != 4:
+            raise ValueError(f"Expected {label} [RO,coil,PE1,PE2], got {stream_shape}.")
+        if stream_shape[0] != nro or stream_shape[3] != npe2:
+            raise ValueError(
+                f"{label} RO/PE2 support {stream_shape[0]}/{stream_shape[3]} "
+                f"does not match manifest matrix {nro}/{npe2}."
+            )
+        if int(stream.skipPar) != 0:
+            raise ValueError(f"{label} PE2 support does not start at partition zero.")
     _validate_resume_pair(output_path, progress_path, resume=resume)
-    output = _open_or_create_memmap(output_path, shape, resume=resume)
     start_partition = _progress_start(progress_path, resume=resume)
+    if chunk_size < 1 or not 0 <= start_partition <= npe2:
+        raise ValueError("Invalid reconstruction chunk size or resume partition.")
     image_lines = np.asarray(sorted({int(value) for value in image.Lin}))
     ref_lines = np.asarray(sorted({int(value) for value in refscan.Lin}))
-    acquired = np.zeros(256, dtype=bool)
+    if (
+        image_lines.size == 0
+        or ref_lines.size == 0
+        or image_lines.min() < 0
+        or ref_lines.min() < 0
+        or image_lines.max() >= npe1
+        or ref_lines.max() >= npe1
+    ):
+        raise ValueError("Image/refscan PE1 counters are empty or outside the logical matrix.")
+    acquired = np.zeros(npe1, dtype=bool)
     acquired[image_lines] = True
     acquired[ref_lines] = True
     ref_start = int(refscan.skipLin)
     ref_count = int(refscan.sqzSize[2])
     image_count = int(image.sqzSize[2])
+    if image_count > npe1 or ref_start < 0 or ref_start + ref_count > npe1:
+        raise ValueError("Compact image/refscan PE1 support exceeds the logical matrix.")
+    output = _open_or_create_memmap(output_path, shape, resume=resume)
     started = time.perf_counter()
     halo = pe2_kernel_size // 2
 
-    for start in range(start_partition, 256, chunk_size):
-        stop = min(start + chunk_size, 256)
+    for start in range(start_partition, npe2, chunk_size):
+        stop = min(start + chunk_size, npe2)
         halo_start = max(0, start - halo)
-        halo_stop = min(256, stop + halo)
+        halo_stop = min(npe2, stop + halo)
         image_raw = np.asarray(image[:, :, :, halo_start:halo_stop], np.complex64)
         ref_raw = np.asarray(refscan[:, :, :, halo_start:halo_stop], np.complex64)
-        block = np.zeros((256, 256, halo_stop - halo_start, basis.shape[1]), np.complex64)
+        block = np.zeros(
+            (nro, npe1, halo_stop - halo_start, basis.shape[1]), np.complex64
+        )
         for local in range(halo_stop - halo_start):
             image_plane = np.transpose(image_raw[:, :, :, local], (0, 2, 1))
             ref_plane = np.transpose(ref_raw[:, :, :, local], (0, 2, 1))
@@ -286,8 +426,8 @@ def reconstruct(
         )
         output[:, :, start:stop, :] = reconstructed
         output.flush()
-        _write_json(progress_path, {"next_partition": stop, "complete": stop == 256})
-        print(f"Reconstruction checkpoint: PE2 {stop}/256", flush=True)
+        _write_json(progress_path, {"next_partition": stop, "complete": stop == npe2})
+        print(f"Reconstruction checkpoint: PE2 {stop}/{npe2}", flush=True)
 
     finite = bool(np.isfinite(output).all())
     return {
@@ -302,19 +442,24 @@ def reconstruct(
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Orchestrate resumable ACS caching, calibration, and reconstruction."""
+    inputs = resolve_grappa_run_inputs(args)
     try:
         import mapvbvd
     except ImportError as exc:
         raise RuntimeError("pymapvbvd>=0.6.1 is required.") from exc
 
-    twix_path = args.twix.expanduser().resolve()
-    basis_path = args.coil_basis.expanduser().resolve()
-    prefix = args.output_prefix.expanduser().resolve()
+    twix_path = inputs.twix
+    basis_path = inputs.coil_basis
+    prefix = inputs.output_prefix
+    if not twix_path.is_file():
+        raise FileNotFoundError(f"TWIX file not found: {twix_path}")
+    if not basis_path.is_file():
+        raise FileNotFoundError(f"Coil-compression basis not found: {basis_path}")
     prefix.parent.mkdir(parents=True, exist_ok=True)
-    basis = _load_basis(basis_path, args.ncc)
-    pe2_offsets(args.pe2_kernel_size)
+    basis = _load_basis(basis_path, inputs.ncc)
+    pe2_offsets(inputs.pe2_kernel_size)
     root = mapvbvd.mapVBVD(str(twix_path), quiet=True)
-    measurement_index, measurement = select_product_measurement(root)
+    measurement_index, measurement = select_imaging_measurement(root)
     image = configure_stream(measurement["image"])
     refscan = configure_stream(measurement["refscan"])
 
@@ -322,9 +467,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     acs_progress = prefix.with_name(prefix.name + "_acs_progress.json")
     equations_path = prefix.with_name(prefix.name + "_normal_equations.npz")
     weights_path = prefix.with_name(prefix.name + "_weights.npz")
-    output_path = prefix.with_name(prefix.name + f"_full_ncc{args.ncc}.npy")
+    output_path = prefix.with_name(prefix.name + f"_full_ncc{inputs.ncc}.npy")
     recon_progress = prefix.with_name(prefix.name + "_recon_progress.json")
     report_path = prefix.with_name(prefix.name + "_report.json")
+    run_paths = (
+        acs_path,
+        acs_progress,
+        equations_path,
+        weights_path,
+        output_path,
+        recon_progress,
+        report_path,
+    )
+    if not args.resume:
+        existing = [path for path in run_paths if path.exists()]
+        if existing:
+            raise FileExistsError(
+                "GRAPPA run artifacts already exist; use --resume or a new output prefix: "
+                + ", ".join(str(path) for path in existing)
+            )
     started = time.perf_counter()
 
     acs = build_compressed_acs(
@@ -340,8 +501,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         equations_path,
         weights_path,
         chunk_size=args.calibration_chunk,
-        regularization=args.regularization,
-        pe2_kernel_size=args.pe2_kernel_size,
+        regularization=inputs.regularization,
+        pe2_kernel_size=inputs.pe2_kernel_size,
         resume=args.resume,
     )
     reconstruction = reconstruct(
@@ -352,14 +513,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         output_path,
         recon_progress,
         chunk_size=args.reconstruction_chunk,
-        pe2_kernel_size=args.pe2_kernel_size,
+        pe2_kernel_size=inputs.pe2_kernel_size,
+        matrix_rolinpar=inputs.matrix_rolinpar,
         resume=args.resume,
     )
     report = {
         "format_version": 1,
-        "kernel_ro_pe1_pe2": [5, 5, args.pe2_kernel_size],
-        "ncc": args.ncc,
-        "regularization": args.regularization,
+        "kernel_ro_pe1_pe2": [5, 5, inputs.pe2_kernel_size],
+        "logical_matrix_rolinpar": list(inputs.matrix_rolinpar),
+        "ncc": inputs.ncc,
+        "regularization": inputs.regularization,
         "twix": str(twix_path),
         "measurement_index": measurement_index,
         "coil_basis": str(basis_path),
@@ -369,6 +532,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "reconstruction": reconstruction,
         "wall_seconds_this_invocation": time.perf_counter() - started,
     }
+    if inputs.manifest is not None:
+        report["dataset_manifest"] = inputs.manifest.provenance()
+        report["dataset_inspection"] = {
+            "path": str(inputs.manifest.inspection_report),
+            "sha256": sha256_file(inputs.manifest.inspection_report),
+        }
     _write_json(report_path, report)
     print(f"Report: {report_path}", flush=True)
     return report
@@ -378,7 +547,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the resumable command and convert expected failures to exit code 2."""
     try:
         run(_parse_args(argv))
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+    except (
+        DatasetManifestError,
+        FileExistsError,
+        FileNotFoundError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     return 0

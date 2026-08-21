@@ -99,14 +99,21 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
             errors.append(f"inputs.dicom.{field} must be a list of non-empty strings")
 
     outputs = _mapping(payload.get("outputs"), "outputs", errors)
-    for field in ("root", "inspection_report"):
+    relative_output_fields = (
+        "inspection_report",
+        "coil_compression_prefix",
+        "source_reconstruction_prefix",
+    )
+    for field in ("root", *relative_output_fields):
         _nonempty_string(outputs.get(field), f"outputs.{field}", errors)
-    inspection_report = outputs.get("inspection_report")
-    if isinstance(inspection_report, str) and inspection_report:
-        report_path = Path(inspection_report)
-        if report_path.is_absolute() or ".." in report_path.parts:
+    for field in relative_output_fields:
+        value = outputs.get(field)
+        if isinstance(value, str) and value:
+            output_path = Path(value)
+            if not output_path.is_absolute() and ".." not in output_path.parts:
+                continue
             errors.append(
-                "outputs.inspection_report must be a relative path contained by outputs.root"
+                f"outputs.{field} must be a relative path contained by outputs.root"
             )
 
     geometry = _mapping(payload.get("geometry"), "geometry", errors)
@@ -218,7 +225,8 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
         )
 
 
-def _sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str:
+    """Hash a manifest-sized file without loading it into memory."""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -264,7 +272,11 @@ class DatasetManifest:
 
     @property
     def inspection_report(self) -> Path:
-        path = Path(str(self.payload["outputs"]["inspection_report"])).expanduser()
+        return self.output_path("inspection_report")
+
+    def output_path(self, field: str) -> Path:
+        """Resolve one validated artifact path or prefix below the output root."""
+        path = Path(str(self.payload["outputs"][field]))
         return (self.output_root / path).resolve()
 
     def resolved_contract(self) -> dict[str, Any]:
@@ -274,7 +286,12 @@ class DatasetManifest:
         resolved["inputs"]["wave_sequence"] = str(self.input_path("wave_sequence"))
         resolved["inputs"]["dicom"]["directory"] = str(self.dicom_directory)
         resolved["outputs"]["root"] = str(self.output_root)
-        resolved["outputs"]["inspection_report"] = str(self.inspection_report)
+        for field in (
+            "inspection_report",
+            "coil_compression_prefix",
+            "source_reconstruction_prefix",
+        ):
+            resolved["outputs"][field] = str(self.output_path(field))
         for container in (
             resolved["evaluation"].get("ranking_reference", {}),
             resolved["evaluation"].get("brain_mask", {}),
@@ -305,4 +322,28 @@ def load_dataset_manifest(path: str | Path) -> DatasetManifest:
     if not isinstance(payload, Mapping):
         raise DatasetManifestError("Dataset manifest root must be a JSON object")
     validate_dataset_manifest(payload)
-    return DatasetManifest(manifest_path, payload, _sha256_file(manifest_path))
+    return DatasetManifest(manifest_path, payload, sha256_file(manifest_path))
+
+
+def load_passed_inspection(manifest: DatasetManifest) -> Mapping[str, Any]:
+    """Require an inspection report produced from this exact manifest revision."""
+    report_path = manifest.inspection_report
+    if not report_path.is_file():
+        raise FileNotFoundError(
+            f"Passed dataset inspection is required before reconstruction: {report_path}"
+        )
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise DatasetManifestError(f"Invalid inspection report JSON: {report_path}") from exc
+    if not isinstance(report, Mapping):
+        raise DatasetManifestError("Dataset inspection report root must be a JSON object")
+    provenance = report.get("dataset_manifest")
+    if not isinstance(provenance, Mapping) or provenance.get("sha256") != manifest.sha256:
+        raise DatasetManifestError(
+            "Dataset inspection was not produced from the current manifest SHA-256"
+        )
+    checks = report.get("contract_checks")
+    if not isinstance(checks, Mapping) or checks.get("all_passed") is not True:
+        raise DatasetManifestError("Dataset inspection contract checks have not passed")
+    return report

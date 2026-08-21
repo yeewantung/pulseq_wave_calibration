@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from dataset_manifest import (  # noqa: E402
     DatasetManifestError,
     load_dataset_manifest,
+    load_passed_inspection,
     validate_dataset_manifest,
 )
 
@@ -34,7 +35,12 @@ def valid_payload() -> dict:
                 "excluded_image_type_tokens": ["DIS2D", "DIS3D"],
             },
         },
-        "outputs": {"root": "outputs", "inspection_report": "metadata/report.json"},
+        "outputs": {
+            "root": "outputs",
+            "inspection_report": "metadata/report.json",
+            "coil_compression_prefix": "calibration/coil_compression",
+            "source_reconstruction_prefix": "reconstructions/no_wave/source",
+        },
         "geometry": {
             "logical_axes": ["readout", "phase_encode_1", "phase_encode_2"],
             "matrix": [256, 240, 192],
@@ -117,6 +123,31 @@ class DatasetManifestTests(unittest.TestCase):
 
         with self.assertRaisesRegex(DatasetManifestError, "contained by outputs.root"):
             validate_dataset_manifest(payload)
+
+    def test_downstream_gate_requires_matching_passed_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = root / "dataset.json"
+            manifest_path.write_text(json.dumps(valid_payload()), encoding="utf-8")
+            manifest = load_dataset_manifest(manifest_path)
+            manifest.inspection_report.parent.mkdir(parents=True)
+            manifest.inspection_report.write_text(
+                json.dumps(
+                    {
+                        "dataset_manifest": {"sha256": manifest.sha256},
+                        "contract_checks": {"all_passed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = load_passed_inspection(manifest)
+
+            self.assertTrue(report["contract_checks"]["all_passed"])
+            report["dataset_manifest"]["sha256"] = "stale"
+            manifest.inspection_report.write_text(json.dumps(report), encoding="utf-8")
+            with self.assertRaisesRegex(DatasetManifestError, "current manifest"):
+                load_passed_inspection(manifest)
 
 
 if __name__ == "__main__":

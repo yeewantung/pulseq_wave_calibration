@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +19,9 @@ from estimate_coil_compression import (  # noqa: E402
     accumulate_coil_covariance,
     apply_coil_compression_coillast,
     coil_basis_from_covariance,
+    resolve_coil_compression_inputs,
 )
+from dataset_manifest import load_dataset_manifest  # noqa: E402
 
 
 class CoilCompressionTests(unittest.TestCase):
@@ -67,6 +72,47 @@ class CoilCompressionTests(unittest.TestCase):
         )
         self.assertEqual(info["nonzero_sample_rows"], 1)
         self.assertEqual(info["zero_sample_rows_removed"], 7)
+
+    def test_manifest_resolves_twix_ncc_output_and_requires_passed_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            example = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "incoming_r1_dataset.example.json"
+            )
+            payload = json.loads(example.read_text(encoding="utf-8"))
+            payload["inputs"]["twix"] = "inputs/scan.dat"
+            payload["outputs"]["root"] = "outputs"
+            manifest_path = root / "dataset.json"
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            manifest = load_dataset_manifest(manifest_path)
+            manifest.inspection_report.parent.mkdir(parents=True)
+            manifest.inspection_report.write_text(
+                json.dumps(
+                    {
+                        "dataset_manifest": {"sha256": manifest.sha256},
+                        "contract_checks": {"all_passed": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = Namespace(
+                dataset_manifest=manifest_path,
+                twix=None,
+                output_prefix=None,
+                ncc=None,
+            )
+
+            twix, output, ncc, physical_coils, resolved_manifest = (
+                resolve_coil_compression_inputs(args)
+            )
+
+            self.assertEqual(twix, root / "inputs" / "scan.dat")
+            self.assertEqual(output, root / "outputs" / "calibration" / "coil_compression")
+            self.assertEqual(ncc, [12])
+            self.assertEqual(physical_coils, 64)
+            self.assertEqual(resolved_manifest.sha256, manifest.sha256)
 
 
 if __name__ == "__main__":

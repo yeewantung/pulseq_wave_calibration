@@ -142,6 +142,8 @@ class ManifestInspectionTests(unittest.TestCase):
             payload["outputs"] = {
                 "root": "outputs",
                 "inspection_report": "metadata/report.json",
+                "coil_compression_prefix": "calibration/coil_compression",
+                "source_reconstruction_prefix": "reconstructions/no_wave/source",
             }
             (root / "dataset.json").write_text(json.dumps(payload), encoding="utf-8")
             twix, dicom, report, manifest = resolve_inspection_paths(args)

@@ -479,10 +479,12 @@ The retrospective resolution tradeoff analysis is complete and intentionally
 makes no automatic selection. The first dataset-portability layer is also
 complete: one validated manifest now carries geometry, acquired versus
 synthetic-Wave sampling, paths, reconstruction settings, and evaluation policy;
-the dataset inspector consumes it and records measured contract checks. The
-next implementation step is to propagate that contract through coil
-compression and the source-reconstruction entry point without changing their
-reconstruction mathematics.
+the dataset inspector consumes it and records measured contract checks. Coil
+compression and the accepted R3x1 GRAPPA entry point now consume the passed
+contract; GRAPPA allocations are matrix-derived and an exact measured-sampling
+gate prevents R1 misuse. The next implementation step is the direct fully
+sampled no-Wave source path needed by the incoming R1 dataset, without GRAPPA
+interpolation.
 Use GRAPPA as the temporary metric reference, apply BET only during metrics,
 and keep DICOM ranking as a configuration mode to enable on the new R1
 dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
@@ -505,9 +507,10 @@ work is:
    the descriptive quantitative resolution-tradeoff analysis is also complete
    without selecting a winning resolution.
 3. **Dataset portability — in progress:** the shared manifest, validator,
-   example, hard-code audit, and inspection integration are complete. Propagate
-   it through coil compression, source reconstruction, Wave/BART export,
-   regularized reconstruction, and evaluation to replace fixed
+   example, hard-code audit, inspection integration, coil compression, and
+   compatible R3x1 GRAPPA integration are complete. Add the direct R1 source
+   path, then propagate the contract through Wave/BART export, regularized
+   reconstruction, and evaluation to replace fixed
    `256 x 256 x 256`, R3 sampling-line, subject, path, DICOM-count, and
    maximum-eigenvalue assumptions with manifest or sequence/TWIX metadata.
 4. **Incoming-data qualification and reference construction:** provide one

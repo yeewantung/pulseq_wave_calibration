@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Estimate one virtual-coil basis from a product TWIX PAT refscan.
+"""Estimate one virtual-coil basis from a Siemens TWIX PAT refscan.
 
 This follows the covariance/eigendecomposition convention used by the verified
 Wave-MPRAGE and Wave-GRE ``coil_compression_kspace.py`` utility. The adaptation
-here is data access: the 256 x 24 x 256 product refscan is read in PE2 chunks so
-the full roughly 0.8 GiB complex array is never retained in memory.
+here is data access: the refscan is read in PE2 chunks so the full complex
+array is never retained in memory.
 """
 
 from __future__ import annotations
@@ -19,6 +19,14 @@ from typing import Any, Iterator, Sequence
 import numpy as np
 import scipy.linalg as la
 
+from dataset_manifest import (
+    DatasetManifest,
+    DatasetManifestError,
+    load_dataset_manifest,
+    load_passed_inspection,
+    sha256_file,
+)
+
 
 REFERENCE_UTILITY = (
     "external/wave-mprage/recon/utils/"
@@ -29,12 +37,16 @@ REFERENCE_UTILITY = (
 def _build_parser() -> argparse.ArgumentParser:
     """Build the dataset-independent coil-compression command interface."""
     parser = argparse.ArgumentParser(
-        description="Estimate and validate coil compression from product TWIX refscan data."
+        description="Estimate and validate coil compression from Siemens TWIX refscan data."
     )
-    parser.add_argument("--twix", required=True, type=Path, help="Product Siemens TWIX file.")
+    parser.add_argument(
+        "--dataset-manifest",
+        type=Path,
+        help="Use the validated dataset contract for TWIX, Ncc, and output paths.",
+    )
+    parser.add_argument("--twix", type=Path, help="Siemens TWIX file.")
     parser.add_argument(
         "--output-prefix",
-        required=True,
         type=Path,
         help="Output prefix; writes .npz matrix data and .json metadata.",
     )
@@ -42,7 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ncc",
         nargs="+",
         type=int,
-        default=[12, 16, 24],
+        default=None,
         help="Virtual-coil counts to report; the largest basis is saved.",
     )
     parser.add_argument(
@@ -57,7 +69,40 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def select_product_measurement(twix_root: Any) -> tuple[int, Any]:
+def resolve_coil_compression_inputs(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, list[int], int | None, DatasetManifest | None]:
+    """Resolve manifest-backed inputs while preserving the original explicit CLI."""
+    if args.dataset_manifest is not None:
+        if args.twix is not None or args.output_prefix is not None or args.ncc is not None:
+            raise ValueError(
+                "--dataset-manifest cannot be combined with --twix, --output-prefix, or --ncc"
+            )
+        manifest = load_dataset_manifest(args.dataset_manifest)
+        load_passed_inspection(manifest)
+        reconstruction = manifest.payload["reconstruction"]
+        return (
+            manifest.input_path("twix"),
+            manifest.output_path("coil_compression_prefix"),
+            [int(reconstruction["virtual_coils"])],
+            int(reconstruction["physical_coils"]),
+            manifest,
+        )
+
+    if args.twix is None or args.output_prefix is None:
+        raise ValueError(
+            "Use --dataset-manifest, or provide both --twix and --output-prefix"
+        )
+    return (
+        args.twix.expanduser().resolve(),
+        args.output_prefix.expanduser().resolve(),
+        [12, 16, 24] if args.ncc is None else list(args.ncc),
+        None,
+        None,
+    )
+
+
+def select_imaging_measurement(twix_root: Any) -> tuple[int, Any]:
     """Select the measurement with the largest populated image stream."""
     measurements = list(twix_root) if isinstance(twix_root, (list, tuple)) else [twix_root]
     candidates = []
@@ -69,6 +114,11 @@ def select_product_measurement(twix_root: Any) -> tuple[int, Any]:
         raise ValueError("No TWIX measurement contains a populated image stream.")
     _, index, measurement = max(candidates, key=lambda item: (item[0], item[1]))
     return index, measurement
+
+
+# Compatibility for existing downstream scripts while they migrate to the
+# dataset-neutral name.
+select_product_measurement = select_imaging_measurement
 
 
 def configure_stream(stream: Any) -> Any:
@@ -218,6 +268,7 @@ def estimate_compression(
     ncc_values: Sequence[int],
     pe2_chunk: int,
     readout_step: int,
+    expected_physical_coils: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Run chunked covariance estimation and validate one common coil basis."""
     try:
@@ -231,14 +282,18 @@ def estimate_compression(
 
     started = time.perf_counter()
     twix_root = mapvbvd.mapVBVD(str(twix_path), quiet=True)
-    measurement_index, measurement = select_product_measurement(twix_root)
+    measurement_index, measurement = select_imaging_measurement(twix_root)
     if "refscan" not in measurement:
-        raise ValueError("Selected product measurement has no refscan stream.")
+        raise ValueError("Selected imaging measurement has no refscan stream.")
     image = configure_stream(measurement["image"])
     refscan = configure_stream(measurement["refscan"])
     ncoil = int(refscan.NCha)
     if int(image.NCha) != ncoil:
         raise ValueError(f"Image/refscan coil mismatch: {int(image.NCha)} vs {ncoil}.")
+    if expected_physical_coils is not None and ncoil != expected_physical_coils:
+        raise ValueError(
+            f"Manifest expects {expected_physical_coils} physical coils, TWIX has {ncoil}."
+        )
     if ncc_values[-1] > ncoil:
         raise ValueError(f"Requested Ncc={ncc_values[-1]} but only {ncoil} coils exist.")
 
@@ -298,23 +353,37 @@ def estimate_compression(
 def main(argv: Sequence[str] | None = None) -> int:
     """Validate arguments, estimate the basis, and persist arrays plus metadata."""
     args = _build_parser().parse_args(argv)
-    twix_path = args.twix.expanduser().resolve()
-    output_prefix = args.output_prefix.expanduser().resolve()
+    twix_path, output_prefix, ncc_values, expected_coils, manifest = (
+        resolve_coil_compression_inputs(args)
+    )
     if not twix_path.is_file():
         raise FileNotFoundError(f"TWIX file not found: {twix_path}")
+    npz_path = output_prefix.with_suffix(".npz")
+    json_path = output_prefix.with_suffix(".json")
+    existing = [path for path in (npz_path, json_path) if path.exists()]
+    if existing:
+        raise FileExistsError(
+            "Coil-compression outputs already exist; choose a new output prefix: "
+            + ", ".join(str(path) for path in existing)
+        )
 
     report, arrays = estimate_compression(
         twix_path,
-        ncc_values=args.ncc,
+        ncc_values=ncc_values,
         pe2_chunk=args.pe2_chunk,
         readout_step=args.readout_step,
+        expected_physical_coils=expected_coils,
     )
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    npz_path = output_prefix.with_suffix(".npz")
-    json_path = output_prefix.with_suffix(".json")
     np.savez(npz_path, **arrays)
     report["matrix_file"] = str(npz_path)
     report["report_file"] = str(json_path)
+    if manifest is not None:
+        report["dataset_manifest"] = manifest.provenance()
+        report["dataset_inspection"] = {
+            "path": str(manifest.inspection_report),
+            "sha256": sha256_file(manifest.inspection_report),
+        }
     json_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     print(f"Physical coils: {report['physical_coil_count']}")
@@ -328,6 +397,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+    except (
+        DatasetManifestError,
+        FileExistsError,
+        FileNotFoundError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

@@ -33,8 +33,10 @@ separates acquired sampling from the synthetic-Wave target and records paths,
 geometry, reconstruction settings, reference mode, mandatory GPU BART, and
 metrics-only mask use. `inspect_product_dataset.py --dataset-manifest ...`
 resolves the contract, records its hash/snapshot, and checks measured
-TWIX/DICOM metadata. The next code step is manifest propagation through coil
-compression and source reconstruction; the remaining hard-coded consumers are
+TWIX/DICOM metadata. Coil compression and compatible R3x1 GRAPPA now consume
+that passed, hash-matched inspection. GRAPPA derives its allocations from the
+manifest and rejects non-R3x1 sampling. The next code step is a direct fully
+sampled no-Wave source path for the incoming R1 scan; remaining consumers are
 listed in `docs/dataset_portability_audit.md`.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional

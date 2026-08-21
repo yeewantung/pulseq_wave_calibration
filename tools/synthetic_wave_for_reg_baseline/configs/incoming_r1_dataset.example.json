@@ -19,7 +19,9 @@
   },
   "outputs": {
     "root": "/path/to/incoming_r1_synthetic_wave",
-    "inspection_report": "metadata/dataset_inspection.json"
+    "inspection_report": "metadata/dataset_inspection.json",
+    "coil_compression_prefix": "calibration/coil_compression",
+    "source_reconstruction_prefix": "reconstructions/no_wave/source"
   },
   "geometry": {
     "logical_axes": [

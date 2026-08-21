@@ -16,6 +16,13 @@ resolved below `outputs.root`. Generated
 reports store the manifest path, SHA-256, and a fully resolved snapshot so a
 later run does not depend on the current working directory.
 
+The other contained output prefixes keep calibration and reconstruction files
+discoverable:
+
+- `outputs.coil_compression_prefix` writes the basis `.npz` and report `.json`;
+- `outputs.source_reconstruction_prefix` is shared by the compatible no-Wave
+  source-reconstruction entry point.
+
 ## Scientific fields
 
 - `geometry` uses logical `(readout, phase_encode_1, phase_encode_2)` order and
@@ -51,3 +58,33 @@ The report compares measured matrix, acceleration, coil count, readout
 oversampling, source-grid completeness, optional ACS support, and DICOM image
 type against the contract. It is written even when a check fails, then the
 command exits nonzero so a tmux workflow cannot continue silently.
+
+Downstream manifest-backed commands require this report to pass and require its
+stored manifest SHA-256 to equal the current manifest. If an expectation or
+path changes, rerun inspection rather than reusing stale approval.
+
+After inspection passes, coil compression can use only the manifest plus
+runtime chunking options:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/estimate_coil_compression.py \
+    --dataset-manifest /path/to/dataset.json
+```
+
+The existing joint-coil GRAPPA entry point accepts the same contract and
+derives its matrix, Ncc, kernel, regularization, input basis, and output prefix:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/reconstruct_no_wave_grappa_3d.py \
+    --dataset-manifest /path/to/dataset.json --resume
+```
+
+That program remains intentionally restricted to measured PE1 stride/residue
+`3/[1]`, source acceleration `3x1`, and full-PE2 refscan coverage. It exits
+before reconstruction for an R1 manifest. A direct fully sampled source path is
+the next required consumer for the incoming R1 acquisition; R1 data must not be
+silently routed through the R3 interpolation operator.
+
+Coil compression refuses an existing basis/report prefix. GRAPPA likewise
+refuses existing checkpoints or results unless `--resume` is explicit, so a
+new dataset contract cannot overwrite an accepted run accidentally.
