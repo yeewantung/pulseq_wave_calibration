@@ -14,6 +14,7 @@ Start with:
 ## Layout
 
 ```text
+configs/       Portable dataset-contract examples
 scripts/       Reconstruction programs and reusable algorithm/I/O modules
 requirements/  Incremental Python dependency sets grouped by task
 docs/          Maintenance indexes, including the old-to-new filename map
@@ -52,6 +53,16 @@ fallbacks only. The final R1 Wavelet coarse sweep will use lambda values
 `1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`, plus lambda zero. LLR must use the
 verified BART real/imaginary split (`-v`) and output recombination.
 
+New acquisitions use one portable dataset manifest for input/output paths,
+logical geometry, acquired and synthetic-Wave sampling, reconstruction
+settings, and evaluation-reference policy. See
+[`docs/dataset_manifest.md`](docs/dataset_manifest.md) and copy
+`configs/incoming_r1_dataset.example.json`. The contract enforces GPU BART and
+metrics-only mask use. Its inspector integration records a hashed, fully
+resolved contract snapshot and checks declared acquisition expectations against
+TWIX/DICOM metadata. The remaining consumer-by-consumer work is tracked in
+[`docs/dataset_portability_audit.md`](docs/dataset_portability_audit.md).
+
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary
 optimization, it is not an untouched independent validation dataset.
@@ -60,7 +71,8 @@ optimization, it is not an untouched independent validation dataset.
 
 The current production path is:
 
-1. `inspect_product_dataset.py` audits a new product TWIX/DICOM dataset.
+1. `inspect_product_dataset.py` audits a new product TWIX/DICOM dataset,
+   preferably through one `--dataset-manifest` contract.
 2. `estimate_coil_compression.py` estimates the Ncc=12 compression basis.
 3. `reconstruct_no_wave_grappa_3d.py` completes the no-wave k-space with the
    accepted joint-coil 5×5×5 GRAPPA kernel.

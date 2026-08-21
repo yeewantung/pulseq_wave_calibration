@@ -21,6 +21,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from dataset_manifest import DatasetManifest, DatasetManifestError, load_dataset_manifest
+
 
 COUNTER_NAMES = (
     "Lin",
@@ -70,17 +72,53 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Create a metadata-only report for TWIX and DICOM inputs."
     )
-    parser.add_argument("--twix", required=True, type=Path, help="Siemens TWIX .dat file.")
     parser.add_argument(
-        "--dicom-dir", required=True, type=Path, help="Directory containing reference DICOMs."
+        "--dataset-manifest",
+        type=Path,
+        help="Authoritative dataset JSON; cannot be combined with explicit path options.",
     )
-    parser.add_argument("--output", required=True, type=Path, help="JSON report path.")
+    parser.add_argument("--twix", type=Path, help="Siemens TWIX .dat file.")
+    parser.add_argument(
+        "--dicom-dir", type=Path, help="Directory containing reference DICOMs."
+    )
+    parser.add_argument("--output", type=Path, help="JSON report path.")
     parser.add_argument(
         "--probe-samples",
         action="store_true",
         help="Read one image and one refscan RO-by-coil block to verify payload access.",
     )
     return parser
+
+
+def resolve_inspection_paths(
+    args: argparse.Namespace,
+) -> tuple[Path, Path, Path, DatasetManifest | None]:
+    """Resolve either one authoritative manifest or the legacy explicit paths."""
+    explicit = (args.twix, args.dicom_dir, args.output)
+    if args.dataset_manifest is not None:
+        if any(value is not None for value in explicit):
+            raise ValueError(
+                "--dataset-manifest cannot be combined with --twix, --dicom-dir, or --output"
+            )
+        manifest = load_dataset_manifest(args.dataset_manifest)
+        return (
+            manifest.input_path("twix"),
+            manifest.dicom_directory,
+            manifest.inspection_report,
+            manifest,
+        )
+    if any(value is None for value in explicit):
+        raise ValueError(
+            "Use --dataset-manifest, or provide all of --twix, --dicom-dir, and --output"
+        )
+    twix, dicom, output = explicit
+    assert twix is not None and dicom is not None and output is not None
+    return (
+        twix.expanduser().resolve(),
+        dicom.expanduser().resolve(),
+        output.expanduser().resolve(),
+        None,
+    )
 
 
 def _integer_array(values: Any, name: str) -> list[int]:
@@ -498,6 +536,120 @@ def inspect_dicom_directory(path: Path) -> dict[str, Any]:
     }
 
 
+def compare_report_to_manifest(
+    manifest: DatasetManifest,
+    twix: Mapping[str, Any],
+    dicom: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Compare measured acquisition metadata with declared dataset expectations."""
+    contract = manifest.payload
+    selected_index = int(twix["selected_measurement_index"])
+    selected = twix["measurements"][selected_index]
+    header = selected["header"]
+    image = selected["streams"]["image"]
+    sampling_report = twix["selected_measurement_sampling"]
+    expected_sampling = contract["sampling"]
+    checks: list[dict[str, Any]] = []
+
+    def add_check(name: str, expected: Any, observed: Any, passed: bool) -> None:
+        checks.append(
+            {
+                "name": name,
+                "expected": expected,
+                "observed": observed,
+                "passed": bool(passed),
+            }
+        )
+
+    expected_matrix = list(contract["geometry"]["matrix"])
+    observed_matrix = [
+        header.get("base_resolution"),
+        sampling_report.get("matrix_pe1"),
+        sampling_report.get("matrix_pe2"),
+    ]
+    add_check(
+        "logical_matrix_rolinpar",
+        expected_matrix,
+        observed_matrix,
+        observed_matrix == expected_matrix,
+    )
+
+    expected_acceleration = list(expected_sampling["source_acceleration_pe1_pe2"])
+    observed_acceleration = [
+        header.get("acceleration_pe1"),
+        header.get("acceleration_pe2"),
+    ]
+    add_check(
+        "source_acceleration_pe1_pe2",
+        expected_acceleration,
+        observed_acceleration,
+        observed_acceleration == expected_acceleration,
+    )
+    add_check(
+        "physical_coils",
+        contract["reconstruction"]["physical_coils"],
+        image.get("coil_count"),
+        image.get("coil_count") == contract["reconstruction"]["physical_coils"],
+    )
+
+    expected_readout_os = float(expected_sampling["readout_oversampling_factor"])
+    observed_readout_os = image.get("readout_oversampling_factor")
+    add_check(
+        "readout_oversampling_factor",
+        expected_readout_os,
+        observed_readout_os,
+        observed_readout_os is not None
+        and math.isclose(float(observed_readout_os), expected_readout_os, rel_tol=1e-6),
+    )
+
+    if expected_sampling["require_complete_source_grid"]:
+        full_grid_count = expected_matrix[1] * expected_matrix[2]
+        observed_count = sampling_report.get("image_unique_coordinate_count")
+        add_check(
+            "complete_source_pe_grid",
+            full_grid_count,
+            observed_count,
+            observed_count == full_grid_count,
+        )
+
+    if "expected_acs_pe1_pe2" in expected_sampling:
+        expected_acs = list(expected_sampling["expected_acs_pe1_pe2"])
+        observed_acs = [
+            len(sampling_report.get("refscan_unique_pe1_lines", [])),
+            len(sampling_report.get("refscan_unique_pe2_partitions", [])),
+        ]
+        add_check("acs_support_pe1_pe2", expected_acs, observed_acs, observed_acs == expected_acs)
+
+    dicom_contract = contract["inputs"]["dicom"]
+    required_tokens = set(dicom_contract["required_image_type_tokens"])
+    excluded_tokens = set(dicom_contract["excluded_image_type_tokens"])
+    matching_uids: list[str] = []
+    for series in dicom["series"]:
+        image_type = series.get("image_type")
+        if not isinstance(image_type, str):
+            continue
+        tokens = set(image_type.split("\\"))
+        if required_tokens <= tokens and not excluded_tokens.intersection(tokens):
+            matching_uids.append(str(series.get("series_instance_uid", "")))
+    add_check(
+        "dicom_image_type_series",
+        {
+            "at_least_one": True,
+            "required_tokens": sorted(required_tokens),
+            "excluded_tokens": sorted(excluded_tokens),
+        },
+        {"matching_series_count": len(matching_uids), "series_instance_uids": matching_uids},
+        bool(matching_uids),
+    )
+
+    failed = [check["name"] for check in checks if not check["passed"]]
+    return {
+        "all_passed": not failed,
+        "failed_checks": failed,
+        "checks": checks,
+    }
+
+
 def _print_summary(report: Mapping[str, Any]) -> None:
     """Print the key inspection findings and report location."""
     twix = report["twix"]
@@ -521,36 +673,61 @@ def _print_summary(report: Mapping[str, Any]) -> None:
         f"{sampling['image_pe1_residues_for_inferred_stride']}"
     )
     print(f"DICOM series: {report['dicom']['series_count']}; unfiltered baseline indices: {report['dicom']['unfiltered_baseline_series_indices']}")
+    if "contract_checks" in report:
+        checks = report["contract_checks"]
+        print(
+            f"Dataset contract: {'PASS' if checks['all_passed'] else 'FAIL'}"
+            + (
+                ""
+                if checks["all_passed"]
+                else f" ({', '.join(checks['failed_checks'])})"
+            )
+        )
     print(f"Report: {report['report_path']}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Inspect the requested inputs and write the reproducible JSON report."""
     args = _build_parser().parse_args(argv)
-    twix_path = args.twix.expanduser().resolve()
-    dicom_path = args.dicom_dir.expanduser().resolve()
-    output_path = args.output.expanduser().resolve()
+    twix_path, dicom_path, output_path, manifest = resolve_inspection_paths(args)
     if not twix_path.is_file():
         raise FileNotFoundError(f"TWIX file not found: {twix_path}")
     if not dicom_path.is_dir():
         raise NotADirectoryError(f"DICOM directory not found: {dicom_path}")
 
-    report = {
+    twix_report = inspect_twix(twix_path, probe_samples=args.probe_samples)
+    dicom_report = inspect_dicom_directory(dicom_path)
+    report: dict[str, Any] = {
         "format_version": 1,
         "pipeline_step": "data and mask verification",
-        "twix": inspect_twix(twix_path, probe_samples=args.probe_samples),
-        "dicom": inspect_dicom_directory(dicom_path),
+        "twix": twix_report,
+        "dicom": dicom_report,
         "report_path": str(output_path),
     }
+    if manifest is not None:
+        report["dataset_manifest"] = manifest.provenance()
+        report["resolved_dataset_contract"] = manifest.resolved_contract()
+        report["contract_checks"] = compare_report_to_manifest(
+            manifest, twix_report, dicom_report
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     _print_summary(report)
+    if manifest is not None and not report["contract_checks"]["all_passed"]:
+        failed = ", ".join(report["contract_checks"]["failed_checks"])
+        raise ValueError(f"Dataset contract checks failed: {failed}")
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (FileNotFoundError, NotADirectoryError, RuntimeError, ValueError) as exc:
+    except (
+        DatasetManifestError,
+        FileNotFoundError,
+        NotADirectoryError,
+        RuntimeError,
+        ValueError,
+    ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

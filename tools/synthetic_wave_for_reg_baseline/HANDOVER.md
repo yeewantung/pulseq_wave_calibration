@@ -28,10 +28,20 @@ complete. No automatic resolution selection was made. The next implementation
 step is to remove R3-only shape, path, sampling, and DICOM assumptions from the
 R1-facing orchestration.
 
+The first dataset-portability layer is complete. A validated JSON contract now
+separates acquired sampling from the synthetic-Wave target and records paths,
+geometry, reconstruction settings, reference mode, mandatory GPU BART, and
+metrics-only mask use. `inspect_product_dataset.py --dataset-manifest ...`
+resolves the contract, records its hash/snapshot, and checks measured
+TWIX/DICOM metadata. The next code step is manifest propagation through coil
+compression and source reconstruction; the remaining hard-coded consumers are
+listed in `docs/dataset_portability_audit.md`.
+
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
-R3 selection, inspect and qualify the new acquisition, then switch final
-regularization selection to it. The older partial-readout R1 datasets are
-fallbacks only and their completion work is deferred.
+R3 selection, fill in a concrete manifest, inspect and qualify the new
+acquisition, then switch final regularization selection to it. The example is
+`configs/incoming_r1_dataset.example.json`. The older partial-readout R1
+datasets are fallbacks only and their completion work is deferred.
 
 ## Environment on macha
 

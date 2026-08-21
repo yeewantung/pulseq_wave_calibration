@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
@@ -14,9 +17,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from inspect_product_dataset import (  # noqa: E402
     _stream_summary,
+    compare_report_to_manifest,
     parse_dcmdump_records,
+    resolve_inspection_paths,
     summarize_sampling,
 )
+from dataset_manifest import load_dataset_manifest  # noqa: E402
 
 
 class SamplingSummaryTests(unittest.TestCase):
@@ -98,6 +104,136 @@ class StreamSummaryTests(unittest.TestCase):
         self.assertEqual(result["readout_oversampling_factor"], 2.0)
         self.assertEqual(result["counters"]["Lin"]["unique_values"], [1, 4])
         self.assertEqual(result["reflected_acquisition_count"], 1)
+
+
+class ManifestInspectionTests(unittest.TestCase):
+    def _manifest(self, root: Path):
+        example_path = (
+            Path(__file__).resolve().parents[1]
+            / "configs"
+            / "incoming_r1_dataset.example.json"
+        )
+        payload = json.loads(example_path.read_text(encoding="utf-8"))
+        payload["geometry"]["matrix"] = [256, 240, 192]
+        payload["geometry"]["fov_mm"] = [256.0, 240.0, 192.0]
+        payload["sampling"]["expected_acs_pe1_pe2"] = [24, 192]
+        payload["reconstruction"]["physical_coils"] = 32
+        path = root / "dataset.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return load_dataset_manifest(path)
+
+    def test_manifest_paths_are_authoritative(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            example_path = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "incoming_r1_dataset.example.json"
+            )
+            args = Namespace(
+                dataset_manifest=root / "dataset.json",
+                twix=None,
+                dicom_dir=None,
+                output=None,
+            )
+            payload = json.loads(example_path.read_text(encoding="utf-8"))
+            payload["inputs"]["twix"] = "inputs/scan.dat"
+            payload["inputs"]["dicom"]["directory"] = "inputs/dicom"
+            payload["outputs"] = {
+                "root": "outputs",
+                "inspection_report": "metadata/report.json",
+            }
+            (root / "dataset.json").write_text(json.dumps(payload), encoding="utf-8")
+            twix, dicom, report, manifest = resolve_inspection_paths(args)
+            self.assertEqual(twix, root / "inputs" / "scan.dat")
+            self.assertEqual(dicom, root / "inputs" / "dicom")
+            self.assertEqual(report, root / "outputs" / "metadata" / "report.json")
+            self.assertIsNotNone(manifest)
+
+    def test_report_checks_matrix_sampling_coils_and_dicom_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest(Path(temporary))
+            sampling = {
+                "matrix_pe1": 240,
+                "matrix_pe2": 192,
+                "image_unique_coordinate_count": 240 * 192,
+                "refscan_unique_pe1_lines": list(range(24)),
+                "refscan_unique_pe2_partitions": list(range(192)),
+            }
+            twix = {
+                "selected_measurement_index": 0,
+                "measurements": [
+                    {
+                        "header": {
+                            "base_resolution": 256,
+                            "acceleration_pe1": 1,
+                            "acceleration_pe2": 1,
+                        },
+                        "streams": {
+                            "image": {
+                                "coil_count": 32,
+                                "readout_oversampling_factor": 2.0,
+                            }
+                        },
+                    }
+                ],
+                "selected_measurement_sampling": sampling,
+            }
+            dicom = {
+                "series": [
+                    {
+                        "image_type": "ORIGINAL\\PRIMARY\\M\\ND\\NORM",
+                        "series_instance_uid": "1.2.3",
+                    }
+                ]
+            }
+
+            result = compare_report_to_manifest(manifest, twix, dicom)
+
+            self.assertTrue(result["all_passed"])
+            self.assertEqual(result["failed_checks"], [])
+
+    def test_source_completeness_failure_is_named(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = self._manifest(Path(temporary))
+            twix = {
+                "selected_measurement_index": 0,
+                "measurements": [
+                    {
+                        "header": {
+                            "base_resolution": 256,
+                            "acceleration_pe1": 1,
+                            "acceleration_pe2": 1,
+                        },
+                        "streams": {
+                            "image": {
+                                "coil_count": 32,
+                                "readout_oversampling_factor": 2.0,
+                            }
+                        },
+                    }
+                ],
+                "selected_measurement_sampling": {
+                    "matrix_pe1": 240,
+                    "matrix_pe2": 192,
+                    "image_unique_coordinate_count": 100,
+                    "refscan_unique_pe1_lines": list(range(24)),
+                    "refscan_unique_pe2_partitions": list(range(192)),
+                },
+            }
+            dicom = {
+                "series": [
+                    {
+                        "image_type": "ORIGINAL\\PRIMARY\\M\\ND\\NORM",
+                        "series_instance_uid": "1.2.3",
+                    }
+                ]
+            }
+
+            result = compare_report_to_manifest(manifest, twix, dicom)
+
+            self.assertFalse(result["all_passed"])
+            self.assertIn("complete_source_pe_grid", result["failed_checks"])
 
 
 if __name__ == "__main__":

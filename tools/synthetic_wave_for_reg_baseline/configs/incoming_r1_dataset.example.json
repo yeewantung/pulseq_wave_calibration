@@ -1,0 +1,80 @@
+{
+  "format_version": 1,
+  "dataset_id": "incoming-r1-development",
+  "subject": "incoming-r1-development",
+  "inputs": {
+    "twix": "/path/to/meas_incoming_r1.dat",
+    "wave_sequence": "/path/to/synthetic_wave_sequence.seq",
+    "dicom": {
+      "directory": "/path/to/unfiltered_normalized_dicom",
+      "required_image_type_tokens": [
+        "ND",
+        "NORM"
+      ],
+      "excluded_image_type_tokens": [
+        "DIS2D",
+        "DIS3D"
+      ]
+    }
+  },
+  "outputs": {
+    "root": "/path/to/incoming_r1_synthetic_wave",
+    "inspection_report": "metadata/dataset_inspection.json"
+  },
+  "geometry": {
+    "logical_axes": [
+      "readout",
+      "phase_encode_1",
+      "phase_encode_2"
+    ],
+    "matrix": [
+      256,
+      256,
+      256
+    ],
+    "fov_mm": [
+      256.0,
+      256.0,
+      256.0
+    ]
+  },
+  "sampling": {
+    "source_acceleration_pe1_pe2": [
+      1,
+      1
+    ],
+    "synthetic_wave_acceleration_pe1_pe2": [
+      3,
+      2
+    ],
+    "readout_oversampling_factor": 2.0,
+    "require_complete_source_grid": true
+  },
+  "reconstruction": {
+    "physical_coils": 64,
+    "virtual_coils": 12,
+    "grappa": {
+      "kernel": [
+        5,
+        5,
+        5
+      ],
+      "regularization": 0.01
+    },
+    "bart": {
+      "use_gpu": true,
+      "maximum_eigenvalue": null
+    }
+  },
+  "evaluation": {
+    "ranking_reference": {
+      "kind": "grappa",
+      "path": "/path/to/no_wave_grappa_reference.nii.gz"
+    },
+    "dicom_intensity_ranking_enabled": false,
+    "brain_mask": {
+      "usage": "metrics_only",
+      "path": null
+    }
+  }
+}

@@ -476,9 +476,13 @@ native-grid and matched-1-mm visual review is generated and awaits user
 approval. No accepted historical output was overwritten.
 
 The retrospective resolution tradeoff analysis is complete and intentionally
-makes no automatic selection. The next implementation step is to remove
-hard-coded R3 geometry, dataset paths, and DICOM-only reference assumptions
-from the R1-facing orchestration.
+makes no automatic selection. The first dataset-portability layer is also
+complete: one validated manifest now carries geometry, acquired versus
+synthetic-Wave sampling, paths, reconstruction settings, and evaluation policy;
+the dataset inspector consumes it and records measured contract checks. The
+next implementation step is to propagate that contract through coil
+compression and the source-reconstruction entry point without changing their
+reconstruction mathematics.
 Use GRAPPA as the temporary metric reference, apply BET only during metrics,
 and keep DICOM ranking as a configuration mode to enable on the new R1
 dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
@@ -500,9 +504,12 @@ work is:
    reconstruction, and manifested native/matched visual review are complete;
    the descriptive quantitative resolution-tradeoff analysis is also complete
    without selecting a winning resolution.
-3. **Dataset portability:** replace fixed `256 x 256 x 256`, R3 sampling-line,
-   subject, path, DICOM-count, and maximum-eigenvalue assumptions with values
-   derived from a dataset manifest or sequence/TWIX metadata.
+3. **Dataset portability — in progress:** the shared manifest, validator,
+   example, hard-code audit, and inspection integration are complete. Propagate
+   it through coil compression, source reconstruction, Wave/BART export,
+   regularized reconstruction, and evaluation to replace fixed
+   `256 x 256 x 256`, R3 sampling-line, subject, path, DICOM-count, and
+   maximum-eigenvalue assumptions with manifest or sequence/TWIX metadata.
 4. **Incoming-data qualification and reference construction:** provide one
    audit entry point that records sampling completeness, readout center and
    oversampling, matrix/FOV, coils, ACS, sequence match, DICOM series/tags,
