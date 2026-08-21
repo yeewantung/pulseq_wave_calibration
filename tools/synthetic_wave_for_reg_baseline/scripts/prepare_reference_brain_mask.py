@@ -18,6 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
+from scipy.ndimage import binary_dilation
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -65,6 +66,17 @@ def _plane(data: np.ndarray, plane: str, index: int) -> np.ndarray:
     raise ValueError(plane)
 
 
+def expand_mask(mask: np.ndarray, dilation_voxels: int) -> np.ndarray:
+    """Expand a 3D mask by a reproducible face-connected voxel radius."""
+    if mask.ndim != 3:
+        raise ValueError(f"Brain mask must be 3D, got shape {mask.shape}")
+    if dilation_voxels < 0:
+        raise ValueError("Mask dilation must be non-negative")
+    if dilation_voxels == 0:
+        return mask.astype(bool, copy=True)
+    return binary_dilation(mask, iterations=dilation_voxels)
+
+
 def _annotate_directions(axis: plt.Axes, plane: str) -> None:
     left, right = (("P", "A") if plane == "sagittal" else ("L", "R"))
     bottom, top = (("P", "A") if plane == "axial" else ("I", "S"))
@@ -81,7 +93,10 @@ def _annotate_directions(axis: plt.Axes, plane: str) -> None:
 
 
 def make_mask_qc(
-    reference: np.ndarray, mask: np.ndarray, output_path: Path
+    reference: np.ndarray,
+    mask: np.ndarray,
+    output_path: Path,
+    native_bet_mask: np.ndarray | None = None,
 ) -> dict[str, Any]:
     coordinates = np.argwhere(mask)
     center = np.rint(coordinates.mean(axis=0)).astype(int)
@@ -105,12 +120,27 @@ def make_mask_qc(
                     colors="#00ff66",
                     linewidths=0.8,
                 )
+            if native_bet_mask is not None:
+                native_slice = _plane(native_bet_mask, plane, index)
+                if np.any(native_slice) and not np.all(native_slice):
+                    axes[row, column].contour(
+                        native_slice,
+                        levels=[0.5],
+                        colors="#ffb000",
+                        linewidths=0.7,
+                        linestyles="--",
+                    )
             axes[row, column].set_title(
-                f"{plane}, index {index}; BET boundary=green", fontsize=9
+                (
+                    f"{plane}, index {index}; expanded=green, native BET=orange"
+                    if native_bet_mask is not None
+                    else f"{plane}, index {index}; BET boundary=green"
+                ),
+                fontsize=9,
             )
             axes[row, column].set_axis_off()
             _annotate_directions(axes[row, column], plane)
-    figure.suptitle("Fixed BET brain-mask boundary on normalized DICOM reference", fontsize=14)
+    figure.suptitle("Candidate fixed brain-mask boundary on reference", fontsize=14)
     figure.savefig(output_path, dpi=180)
     plt.close(figure)
     return {"center_voxel_ras_grid": center.tolist(), "slice_offsets_voxels": list(offsets)}
@@ -127,6 +157,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use BET's repeated center-of-gravity estimation for full-head inputs.",
     )
+    parser.add_argument(
+        "--mask-dilation-voxels",
+        type=int,
+        default=0,
+        help=(
+            "Expand the native BET mask outward by this many face-connected voxels; "
+            "the native mask is preserved for QC (default: 0)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -136,6 +175,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     bet = args.bet.expanduser().resolve()
     if not reference_path.is_file() or not bet.is_file():
         raise FileNotFoundError("Reference NIfTI or FSL BET executable is missing")
+    if args.mask_dilation_voxels < 0:
+        raise ValueError("Mask dilation must be non-negative")
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Brain-mask output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -173,13 +214,46 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         mask_image.affine, reference_image.affine, atol=1e-5
     ):
         raise ValueError("BET mask does not share the exact reference grid")
-    mask = np.asarray(mask_image.dataobj) > 0
+    native_bet_mask = np.asarray(mask_image.dataobj) > 0
+    mask = expand_mask(native_bet_mask, args.mask_dilation_voxels)
+    native_mask_path = None
+    native_brain_path = None
+    if args.mask_dilation_voxels:
+        # Preserve BET's direct outputs and make the canonical filenames reflect
+        # the final expanded mask that downstream metric code will consume.
+        native_mask_path = output_dir / "reference_brain_mask_native_bet.nii.gz"
+        native_brain_path = output_dir / "reference_brain_native_bet.nii.gz"
+        mask_path.replace(native_mask_path)
+        brain_path.replace(native_brain_path)
+
+        mask_header = reference_image.header.copy()
+        mask_header.set_data_dtype(np.uint8)
+        nib.save(
+            nib.Nifti1Image(mask.astype(np.uint8), reference_image.affine, mask_header),
+            str(mask_path),
+        )
+        reference_for_mask = np.asarray(reference_image.dataobj, dtype=np.float32)
+        brain_header = reference_image.header.copy()
+        brain_header.set_data_dtype(np.float32)
+        nib.save(
+            nib.Nifti1Image(
+                np.where(mask, reference_for_mask, 0.0).astype(np.float32),
+                reference_image.affine,
+                brain_header,
+            ),
+            str(brain_path),
+        )
     mask_voxels = int(mask.sum())
     if not 1_000_000 < mask_voxels < int(0.8 * mask.size):
         raise ValueError(f"BET mask voxel count is implausible: {mask_voxels}")
     reference = np.asarray(reference_image.dataobj, dtype=np.float32)
     qc_path = output_dir / "reference_brain_mask_qc.png"
-    qc = make_mask_qc(reference, mask, qc_path)
+    qc = make_mask_qc(
+        reference,
+        mask,
+        qc_path,
+        native_bet_mask if args.mask_dilation_voxels else None,
+    )
 
     fsldir = environment.get("FSLDIR")
     fsl_version_path = Path(fsldir) / "etc" / "fslversion" if fsldir else None
@@ -219,6 +293,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 mask_voxels
                 * float(np.prod(reference_image.header.get_zooms()[:3]))
                 / 1000.0
+            ),
+        },
+        "mask_postprocessing": {
+            "dilation_voxels": args.mask_dilation_voxels,
+            "connectivity": "3D face-connected",
+            "native_bet_voxel_count": int(native_bet_mask.sum()),
+            "added_voxel_count": int(mask.sum() - native_bet_mask.sum()),
+            "native_bet_mask": (
+                {
+                    "path": str(native_mask_path),
+                    "sha256": sha256_file(native_mask_path),
+                }
+                if native_mask_path is not None
+                else None
+            ),
+            "native_bet_brain_extracted": (
+                {
+                    "path": str(native_brain_path),
+                    "sha256": sha256_file(native_brain_path),
+                }
+                if native_brain_path is not None
+                else None
             ),
         },
         "qc_figure": {"path": str(qc_path), "sha256": sha256_file(qc_path), **qc},

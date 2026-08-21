@@ -166,9 +166,14 @@ separately and only after full Wave encoding.
   shape, voxel size, affine, and RAS axis convention. Because they arise from
   the same source grid, calculate metrics without image registration or
   interpolation; stop if the geometry differs.
-- [ ] Create one fixed brain mask from the direct FFT reference and use BET
-  only to define metric support. Do not replace reconstruction volumes with
-  BET skull-stripped outputs or apply any bias correction.
+- [x] Create a candidate fixed brain mask from the direct FFT reference using
+  robust-center BET, then extend its boundary outward by one face-connected
+  voxel. Preserve both boundaries in the QC figure and use the final mask only
+  to define metric support; do not alter reconstruction intensities. The
+  candidate uses BET threshold `0.55`, contains 1,924,995 voxels after adding
+  69,681 boundary voxels, and remains marked `visual_review_required`.
+- [ ] Obtain explicit user visual approval of the expanded mask boundary and
+  labeled L/R orientation before calculating any metrics.
 - [ ] Evaluate the completed coarse Wavelet and block-8 LLR cases against the
   direct FFT reference. Keep the solver-matched lambda-zero cases as operator
   and convergence controls, not as the quantitative ground truth.
@@ -180,9 +185,10 @@ separately and only after full Wave encoding.
   interval. Reuse all completed cases and add only missing intermediate values;
   do not expand beyond the existing `1e-6` to `1e-2` bracket unless the optimum
   lies at an endpoint.
-- [ ] Refine block-8 LLR lambda similarly, initially reusing `2e-5`, `1e-4`,
-  and `5e-4` and adding `5e-5` and `2e-4`. Extend one step outward only if the
-  best result remains at a boundary. Keep block size fixed at 8 for this search.
+- [ ] Refine LLR over block sizes `4`, `8`, and `16` using the common lambda
+  grid `2e-5`, `5e-5`, `1e-4`, `2e-4`, and `5e-4`. Reuse the three completed
+  block-8 cases, run the missing full cross-product, and extend the lambda grid
+  one step outward only if the best result remains at a boundary.
 - [ ] Rank the refined candidates with fixed-mask whole-volume metrics and a
   common reference-derived visual window. Record metric definitions, lambda,
   iteration/convergence information, input hashes, and output hashes in CSV

@@ -212,6 +212,10 @@ equivalence of native and recombined `wave -l -v` representations.
 For the full-head normalized DICOM mask/presentation source, the runner invokes
 `prepare_reference_brain_mask.py` with BET robust center estimation and a fixed
 fractional threshold of `0.55`. The manifest records both settings.
+The same utility accepts `--mask-dilation-voxels` when a metric mask needs a
+small, controlled outward margin. It preserves native BET outputs, writes the
+expanded mask under the canonical mask filename, overlays both boundaries in
+the QC figure, and always leaves visual approval unset.
 
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a
