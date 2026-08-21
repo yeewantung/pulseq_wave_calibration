@@ -82,6 +82,19 @@ range (`2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`). The accepted pilot is reused.
 The QC and evaluation stages require explicit mask and L/R approval; there is
 no automatic approval path.
 
+The next isolated intensity-profile test is driven by
+`scripts/run_ecalib_intensity_pilot.sh`. It calibrates crop-0.5 maps with BART
+`ecalib -I`, runs only Wave lambda zero with `-g`, and then compares the result
+with both IDEA DICOM variants and the existing no-wave GRAPPA/SENSE and Wave
+outputs. Those existing reconstructions are comparison references only, not a
+true baseline, and the pilot does not select a regularization parameter. Its
+default output tree is:
+
+```text
+/path/to/data/20260817_product/
+  ecalib_intensity_c050_wave_lambda0
+```
+
 ## Repository state
 
 Repository:

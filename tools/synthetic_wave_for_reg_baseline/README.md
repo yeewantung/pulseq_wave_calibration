@@ -76,6 +76,12 @@ For the full-head normalized DICOM reference, the runner invokes
 `prepare_reference_brain_mask.py` with BET robust center estimation and a fixed
 fractional threshold of `0.55`. The manifest records both settings.
 
+`run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
+BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a
+brain-median-scaled intensity-profile comparison. It does not run or select
+regularization, and it treats no-wave GRAPPA/SENSE only as comparison
+references.
+
 For acceleration comparisons,
 `export_bart_wave_inputs_retrospective.py` reuses the validated full synthetic
 Wave volume and theoretical PSF, builds an explicit Cartesian PE1×PE2 lattice

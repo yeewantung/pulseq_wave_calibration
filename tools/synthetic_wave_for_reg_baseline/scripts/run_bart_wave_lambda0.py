@@ -39,6 +39,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--measurement-index", type=int, default=1)
     parser.add_argument("--subject", default="20260817product")
     parser.add_argument("--ecalib-crop", type=float, default=0.8)
+    parser.add_argument(
+        "--ecalib-intensity-correction",
+        action="store_true",
+        help="Pass -I to BART ecalib for adaptive-combine-like map normalization.",
+    )
     parser.add_argument("--cg-iterations", type=int, default=300)
     parser.add_argument("--cg-tolerance", type=float, default=1e-3)
     parser.add_argument("--overwrite", action="store_true")
@@ -76,20 +81,49 @@ def build_ecalib_command(
     eigenvalues_base: Path,
     *,
     crop: float,
+    intensity_correction: bool = False,
 ) -> list[str]:
     """Build hard-crop one-map ESPIRiT calibration with eigenvalue output."""
     if not 0.0 <= crop <= 1.0:
         raise ValueError("ESPIRiT crop must be between 0 and 1.")
-    return [
+    command = [
         str(bart),
         "ecalib",
         "-m",
         "1",
         "-c",
         str(crop),
-        str(calibration_base),
+    ]
+    if intensity_correction:
+        command.append("-I")
+    return command + [str(calibration_base), str(maps_base), str(eigenvalues_base)]
+
+
+def build_wave_command(
+    bart: Path,
+    maps_base: Path,
+    psf_base: Path,
+    kspace_base: Path,
+    image_base: Path,
+    *,
+    iterations: int,
+    tolerance: float,
+) -> list[str]:
+    """Build the GPU-only unregularized Wave reconstruction command."""
+    if iterations < 1 or tolerance <= 0:
+        raise ValueError("Wave iterations and tolerance must be positive.")
+    return [
+        str(bart),
+        "wave",
+        "-g",
+        "-i",
+        str(iterations),
+        "-t",
+        str(tolerance),
         str(maps_base),
-        str(eigenvalues_base),
+        str(psf_base),
+        str(kspace_base),
+        str(image_base),
     ]
 
 
@@ -289,6 +323,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             maps_base,
             eigenvalues_base,
             crop=args.ecalib_crop,
+            intensity_correction=args.ecalib_intensity_correction,
         ),
         output_dir / "ecalib.log",
     )
@@ -300,26 +335,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     ecalib["eigenvalue_cfl_sha256"] = sha256_file(
         eigenvalues_base.with_suffix(".cfl")
     )
+    ecalib["intensity_correction"] = args.ecalib_intensity_correction
     ecalib["diagnostic_montages"] = _save_map_montages(maps_base, output_dir)
 
     image_base = output_dir / "image_wave"
     wave = _run_logged(
-        [
-            str(bart),
-            "wave",
-            "-i",
-            str(args.cg_iterations),
-            "-t",
-            str(args.cg_tolerance),
-            str(maps_base),
-            str(bart_input / "psf"),
-            str(bart_input / "wave_kspace"),
-            str(image_base),
-        ],
+        build_wave_command(
+            bart,
+            maps_base,
+            bart_input / "psf",
+            bart_input / "wave_kspace",
+            image_base,
+            iterations=args.cg_iterations,
+            tolerance=args.cg_tolerance,
+        ),
         output_dir / "wave_lambda0.log",
     )
     wave.update(_extract_bart_times(Path(wave["log"])))
     wave["algorithm"] = "conjugate gradient selected by bart wave without -w or -l"
+    wave["backend"] = "gpu"
     wave["lambda"] = 0.0
     wave["output"] = validate_finite_bart(image_base, (256, 256, 256, 1, 1))
     wave["output_cfl_sha256"] = sha256_file(image_base.with_suffix(".cfl"))
