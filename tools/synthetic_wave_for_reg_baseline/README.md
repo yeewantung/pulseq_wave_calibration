@@ -26,10 +26,14 @@ directory's root; paths and scan filenames remain configuration/CLI inputs.
 
 ## Current experiment
 
-First optimize provisionally on the 2026 R3x1 product and synthetic R3x2 Wave
-data and generate presentation results. Then use the 2021-05-10 R1 scans as
-the best available baseline after validating and freezing their partial-
-Fourier readout completion. The R1 Wavelet coarse sweep will use lambda values
+Continue development on the 2026 R3x1 product and synthetic R3x2 Wave data,
+using no-wave GRAPPA and no-wave SENSE as paired temporary references. Neither
+is ground truth, and DICOM intensities are excluded from provisional
+regularization ranking. The `ecalib -I` pilot is retained as a negative result.
+
+A new R1 dataset will replace this temporary reference contract after it is
+collected and qualified. The older 2021 R1 scans remain partial-readout
+fallbacks only. The final R1 Wavelet coarse sweep will use lambda values
 `1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`, plus lambda zero. LLR must use the
 verified BART real/imaginary split (`-v`) and output recombination.
 
@@ -72,7 +76,7 @@ decision, evaluates the fixed-mask sweep, and creates the compact comparison
 package. `validate_bart_split_complex.py` records the required lambda-zero
 equivalence of native and recombined `wave -l -v` representations.
 
-For the full-head normalized DICOM reference, the runner invokes
+For the full-head normalized DICOM mask/presentation source, the runner invokes
 `prepare_reference_brain_mask.py` with BET robust center estimation and a fixed
 fractional threshold of `0.55`. The manifest records both settings.
 

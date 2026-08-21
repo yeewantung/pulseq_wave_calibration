@@ -7,30 +7,23 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Review the refined BET boundary at:
+Implement the temporary dual-reference evaluator first. Re-evaluate the
+already completed synthetic-Wave sweep against no-wave GRAPPA and no-wave
+SENSE separately, using the approved BET mask only as spatial support and
+excluding DICOM intensity metrics from regularization ranking. Report the
+GRAPPA-versus-SENSE disagreement as the temporary-reference floor.
 
-```text
-/path/to/data/20260817_product/
-  synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization/
-  evaluation/brain_mask/reference_brain_mask_qc.png
-```
+The next reconstruction development task is a manifest-driven no-wave BART
+PICS path using the measured R3x1 k-space, the exact sampling mask, and GPU
+`-g`. Establish lambda-zero equivalence/data consistency before adding
+wavelet or LLR regularization. Existing GRAPPA and unregularized SENSE remain
+temporary comparison references; the new PICS outputs are candidates, not
+truth.
 
-The user approved the last column of the signed-axis figure, corresponding to
-permutation `[0,1,2]` and RAS-grid flips `[true,false,true]`; that decision is
-recorded in `evaluation/orientation_qc/orientation_report.json`. Mask approval
-is still pending. After the refined boundary is approved, continue with:
-
-```bash
-bash tools/synthetic_wave_for_reg_baseline/scripts/run_r3_presentation_optimization.sh \
-  --stage all-after-review \
-  --confirm-reviewed-mask-and-lr
-```
-
-After the presentation stage, use the 2021-05-10 R1 data as the best available
-baseline. Validate and freeze one partial-Fourier readout-completion method,
-then perform the more rigorous R1 regularization refinement and pick a better,
-more transferable parameter set. Finally apply that set back to R3 without
-retuning as a cross-dataset transfer check.
+The user is collecting a new R1 dataset. Once it arrives, pause provisional
+R3 selection, inspect and qualify the new acquisition, then switch final
+regularization selection to it. The older partial-readout R1 datasets are
+fallbacks only and their completion work is deferred.
 
 ## Environment on macha
 
@@ -80,9 +73,10 @@ directory.
 Wavelet values (`1e-6`, `1e-5`, `1e-4`) and the focused corrected block-8 LLR
 range (`2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`). The accepted pilot is reused.
 The QC and evaluation stages require explicit mask and L/R approval; there is
-no automatic approval path.
+no automatic approval path. Both approvals were recorded and the presentation
+package completed on 2026-08-20.
 
-The next isolated intensity-profile test is driven by
+The completed isolated intensity-profile test is driven by
 `scripts/run_ecalib_intensity_pilot.sh`. It calibrates crop-0.5 maps with BART
 `ecalib -I`, runs only Wave lambda zero with `-g`, and then compares the result
 with both IDEA DICOM variants and the existing no-wave GRAPPA/SENSE and Wave
@@ -96,6 +90,13 @@ duplicating the 1.5 GB calibration CFL. The default output tree is:
 /path/to/data/20260817_product/
   ecalib_intensity_c050_wave_lambda0
 ```
+
+The user rejected `ecalib -I` as a solution to the profile mismatch. The
+brain-core-to-shell ratio changed from `0.966` for the prior Wave lambda-zero
+case to `0.895` with `-I`; no-wave GRAPPA and SENSE were both approximately
+`0.975`. Retain this tree as a manifested negative result. Do not use its maps
+for production or use either raw or normalized DICOM intensities to rank the
+provisional regularization sweep.
 
 ## Repository state
 
@@ -144,10 +145,10 @@ have the identical 404-sample, center-148 partial readout. They do not solve
 the baseline problem. Subject 6 contains prior `.nii`/`.mat` reconstructions;
 no DICOM files were found in either added folder during this inspection.
 
-No better R1 source is currently available, so the partial-readout limitation
-is accepted for the later refinement stage. The 2021-05-10 scans are the
-primary R1 dataset; freeze a completion method and designate independent
-development and confirmation scans before the R1 sweep.
+The user is collecting a new R1 dataset for final refinement. These older
+partial-readout scans are now fallbacks only. Do not implement or freeze their
+completion unless the new acquisition fails qualification and the fallback is
+explicitly reactivated.
 
 An additional candidate inspected on 2026-08-20 was:
 
@@ -167,7 +168,7 @@ R3 preliminary optimization and later parameter-transfer dataset:
 /path/to/data/20260817_product
 ```
 
-Future DICOM reference:
+Qualitative DICOM presentation source:
 
 ```text
 /path/to/data/20260817_product/mprage_product_unfiltered_normalize
@@ -175,7 +176,8 @@ Future DICOM reference:
 
 Select the 256-image `ND,NORM` series UID
 `1.3.12.2.1107.5.2.0.99923.3.2026082020033466358602277.0.0.0` and reject the
-`DIS2D/DIS3D` series.
+`DIS2D/DIS3D` series. Do not use its intensity profile for temporary
+regularization ranking.
 
 The R3 data may be tuned now for preliminary presentation results. Since it
 will no longer be an untouched holdout, the later application of R1-selected
@@ -202,11 +204,11 @@ metadata; test partial-Fourier completion and crop the oversampled image FOV.
 
 ## Frozen regularization decisions
 
-Execution order is R3 presentation optimization first, followed by R1
-partial-Fourier completion and final refinement. Parameters selected during
-the first stage are provisional and R3-specific.
+Execution order is temporary dual-reference evaluation, no-wave GPU BART PICS
+development, and then qualification/refinement on the new R1 acquisition.
+Parameters selected during R3 development are provisional and R3-specific.
 
-Wavelet coarse sweep on R1 development scan:
+Wavelet coarse sweep after the new R1 development scan is qualified:
 
 ```text
 lambda = 0, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2
@@ -224,11 +226,17 @@ intensity scaling.
 
 ## Evaluation decisions
 
-- Convert normalized unfiltered DICOM to canonical RAS.
-- Create one fixed FSL BET mask per reference; mask metrics, not displays.
+- During temporary R3 development, calculate metrics independently against
+  no-wave GRAPPA and no-wave SENSE; neither is ground truth.
+- Report GRAPPA-versus-SENSE disagreement and require ranking trends to agree
+  across both temporary references.
+- Keep DICOM intensity metrics out of provisional regularization selection.
+- Use the approved DICOM-derived FSL BET mask only as fixed spatial support;
+  mask metrics, not displays.
 - Visually approve mask and L/R orientation.
 - Estimate one proper rigid transform from lambda zero and reuse it unchanged.
-- Primary ranking uses brain-mask structural/error/detail metrics.
+- Primary ranking uses brain-mask structural/error/detail metrics reported
+  separately for each temporary reference.
 - Background noise and missed anatomy remain separately reported QC.
 - The approved historical R3 orientation used permutation `[0,1,2]` and RAS
   flips `[true,false,true]`; revalidate on R1.

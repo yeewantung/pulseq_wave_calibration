@@ -8,21 +8,52 @@ preserved as a historical record in
 
 The execution order is now:
 
-1. optimize on the existing R3x1 product dataset and generate near-term
-   presentation results;
-2. accept the 2021-05-10 R1 data as the best available baseline, validate and
-   freeze its partial-Fourier completion, then perform the more rigorous
-   regularization refinement; and
-3. apply the better R1-selected parameters back to the R3 experiment as a
-   cross-dataset transfer check.
+1. use the no-wave GRAPPA and no-wave SENSE reconstructions from the existing
+   R3x1 product scan as temporary development references for the remaining
+   reconstruction and evaluation code;
+2. develop a GPU BART PICS regularization path for the no-wave R3x1 data and
+   evaluate the existing synthetic-Wave candidates against both temporary
+   references without using either one as ground truth;
+3. acquire and qualify a new R1 dataset; and
+4. switch the final parameter-selection workflow to that R1 dataset, then
+   apply the R1-selected settings back to R3 without retuning.
 
 The first-stage R3 parameters are provisional and may be tuned to that
 dataset. Only the later R1 development/confirmation experiment is intended to
-select the more transferable final parameters.
+select the more transferable final parameters. Results selected against the
+temporary R3 references must be labelled developmental and repeated after the
+new R1 dataset is available.
+
+### Decision recorded 2026-08-20: temporary references
+
+The BART `ecalib -I` pilot did not correct the relevant receive-profile
+mismatch. Its brain-core-to-shell median ratio was `0.895`, compared with
+`0.966` for the previous Wave lambda-zero reconstruction and approximately
+`0.975` for both no-wave GRAPPA and no-wave SENSE. The normalized and raw IDEA
+DICOM ratios were `1.347` and `0.655`, respectively. Retain the pilot and its
+manifest as a negative result, but do not use `ecalib -I` for the production
+path or continue tuning regularization against either DICOM intensity profile.
+
+Until the new R1 acquisition arrives, use no-wave GRAPPA and no-wave SENSE as
+a paired temporary reference set. Neither reconstruction is truth. Report
+metrics against both separately, report their mutual disagreement as the
+temporary-reference floor, and accept a provisional trend only when it is
+consistent against both references and with visual review. The approved BET
+mask may still define spatial support, but DICOM voxel intensities must not
+enter provisional regularization ranking.
 
 ## 1. Scientific roles of the datasets
 
-### R1 data for final parameter refinement
+### New R1 data for final parameter refinement
+
+A new R1 dataset will be collected and is the intended final baseline. On
+arrival, inspect its sampling, readout completeness, DICOM processing, coil
+configuration, geometry, and sequence definitions before reusing any current
+assumptions. Assign independent development and confirmation scans when the
+acquisition provides enough data.
+
+The older R1 candidates below are retained as documented fallbacks, not the
+active final-selection dataset.
 
 The original two R1 MPRAGE scans are in:
 
@@ -47,13 +78,15 @@ partial-Fourier completion can affect
 sharpness, phase, noise texture, and the Wave forward model, which can confound
 regularization selection.
 
-No better R1 dataset is currently available. The inspected 2026-06-01
-MID00077 `pulseq_mprage_nowave_full` scan is nominally 256 x 256 x 192 but is
-actually R2x2 in PE with a central 32 x 32 calibration region, so it cannot
-replace the R1 baseline. Use the 2021-05-10 partial-readout scans after
-freezing and validating one completion method. State this limitation
-explicitly and use at least one independent R1 scan as confirmation. The
-2021-05-10 DICOM series remain the orientation and qualitative references.
+Before the planned new acquisition, no better R1 dataset was available. The
+inspected 2026-06-01 MID00077 `pulseq_mprage_nowave_full` scan is nominally
+256 x 256 x 192 but is actually R2x2 in PE with a central 32 x 32 calibration
+region, so it cannot replace the R1 baseline. Defer implementation of the
+older scans' readout completion while the new acquisition is pending. If the
+new dataset is not
+usable, reactivate the 2021-05-10 fallback only after freezing and validating
+one completion method, stating the limitation explicitly, and reserving at
+least one independent scan for confirmation.
 
 ### Preliminary optimization, presentation, and later transfer check
 
@@ -71,24 +104,29 @@ two explicitly different roles:
 2. after R1 refinement, rerun the comparison with the R1-selected parameters
    as a cross-dataset transfer check without further tuning.
 
-For each stage, compare:
+For current development, compare:
 
-1. normalized unfiltered R3x1 product DICOM;
-2. R3x1 no-wave BART GRAPPA reconstruction;
-3. R3x1 no-wave BART SENSE/PICS reconstruction, with regularization if useful;
+1. R3x1 no-wave GRAPPA as one temporary reference;
+2. R3x1 no-wave SENSE as the second temporary reference;
+3. GPU BART PICS no-wave candidates, including lambda zero and regularized
+   cases, as development reconstructions rather than reference truth;
 4. R3x2 synthetic-Wave BART reconstruction with the appropriate provisional
    or R1-selected regularizer; and
 5. the selected retrospective low-resolution R3x2 cases.
 
-The future DICOM selector must require both `ND` and `NORM` and reject
+Show raw and normalized IDEA DICOMs only as qualitative presentation context
+during this temporary stage. Their receive-profile corrections make them
+unsuitable for ranking regularization.
+
+The qualitative DICOM selector must require both `ND` and `NORM` and reject
 `DIS2D`/`DIS3D`. The accepted normalized series UID is:
 
 ```text
 1.3.12.2.1107.5.2.0.99923.3.2026082020033466358602277.0.0.0
 ```
 
-The earlier evaluation against the non-normalized DICOM is a historical pilot,
-not the future validation reference.
+The earlier evaluations against normalized and non-normalized DICOM are
+historical presentation pilots, not parameter-selection references.
 
 ## 2. Reproducible environment
 
@@ -114,29 +152,39 @@ export FSLDIR=/path/to/software/packages/fsl/6.0.6
 ## 3. Phase A: preliminary R3x1 optimization and presentation
 
 Proceed first with the existing R3x1 product and synthetic R3x2 Wave dataset;
-do not wait for R1 partial-Fourier completion. Use the updated normalized,
-unfiltered DICOM reference and the standardized whole-volume evaluation.
+do not wait for the new R1 acquisition. Use the no-wave GRAPPA/SENSE pair for
+temporary quantitative development and reserve DICOM for qualitative display.
 
-1. create and visually approve a fixed BET brain mask and L/R orientation;
-2. continue the Wavelet search toward smaller lambda, since the pilot RMSE
-   decreased as lambda decreased;
-3. correct LLR to use the intended `wave -l -v` formulation before drawing
-   conclusions about lambda or block size;
-4. select provisional R3-specific candidates using masked metrics together
-   with fixed-slice visual assessment;
-5. compare normalized DICOM, no-wave GRAPPA/SENSE alternatives, and the
-   selected synthetic R3x2 Wave reconstructions; and
-6. generate a compact presentation package with fixed display settings and
-   clearly label the tuning as preliminary and R3-dataset-specific.
+1. retain the approved fixed BET mask and L/R orientation, using the mask only
+   as spatial support rather than a source of DICOM intensity targets;
+2. implement a dual-reference evaluator and rerank the completed Wavelet and
+   corrected-LLR cases against GRAPPA and SENSE separately;
+3. report GRAPPA-versus-SENSE disagreement and require a candidate trend to be
+   consistent against both references;
+4. implement the GPU BART PICS no-wave path, first establishing a lambda-zero
+   equivalence/data-consistency gate and then adding provisional regularized
+   cases;
+5. compare DICOM, no-wave alternatives, and selected synthetic R3x2 Wave
+   reconstructions visually with fixed display settings; and
+6. label every resulting choice as preliminary, R3-dataset-specific, and
+   subject to replacement by the new R1 experiment.
 
 Do not overwrite the accepted historical sweep. Store the new corrected and
 masked-evaluation results in a separately manifested output tree.
 
-## 4. Phase B: freeze the R1 partial-Fourier completion
+## 4. Phase B: qualify the new R1 acquisition
 
-This is the hard gate before the later R1 Wave synthesis and final parameter
-refinement. The 2021-05-10 data are now the accepted best available R1
-baseline; freeze their readout completion before using them for selection.
+This is the hard gate before later R1 Wave synthesis and final parameter
+refinement. First audit the newly acquired R1 raw data and DICOMs. Confirm the
+actual PE sampling, readout support and center, oversampling, matrix/FOV,
+orientation, coil configuration, and vendor processing. Do not assume that it
+matches either the 2026 R3 scan or the older R1 scans.
+
+If the new R1 acquisition is fully sampled and has complete usable readout,
+freeze it directly as the final development/confirmation source. If it has
+partial readout, define and validate completion before any parameter selection.
+
+### Deferred fallback: older R1 partial-readout completion
 
 The R1 files have a nominal 512-sample oversampled readout grid but 404 stored
 samples. The MDH k-space center is sample 148, so the acquired samples map to
@@ -144,7 +192,8 @@ indices 108:512 of the nominal 512-point grid. This is asymmetric/readout
 partial-Fourier sampling, not a complete 202-point readout that should simply
 be accepted as the final image matrix.
 
-Implement and compare the following while preserving the MDH center:
+Only if the older R1 fallback is reactivated, implement and compare the
+following while preserving the MDH center:
 
 1. embed the 404 samples into the nominal 512-point oversampled grid;
 2. test zero-filled and homodyne/POCS partial-Fourier completion;
@@ -157,10 +206,10 @@ Implement and compare the following while preserving the MDH center:
 Do not crop the 404 raw k-space samples directly to 256. That would discard
 high-frequency support and change the intended field of view/resolution.
 
-Acceptance requires the chosen
-development and holdout scans to produce a 256 x 256 x 192 reference with
-correct anatomy and a verified L/R convention. The parameter-selection claim
-must then be qualified as conditional on the frozen readout completion.
+Fallback acceptance requires the chosen development and holdout scans to
+produce a 256 x 256 x 192 reference with correct anatomy and a verified L/R
+convention. The parameter-selection claim must then be qualified as conditional
+on the frozen readout completion.
 
 ## 5. Phase C: prepare the R1 synthetic-Wave experiment
 
@@ -247,7 +296,27 @@ before running the R1-to-R3 transfer comparison.
 
 ## 8. Phase F: standardized evaluation
 
-For each subject/scan:
+During temporary R3 development:
+
+1. canonicalize no-wave GRAPPA, no-wave SENSE, and all candidates to the same
+   RAS grid and verify orientation explicitly;
+2. use the approved BET mask only as a fixed spatial support mask;
+3. estimate any required geometry transform once from lambda zero and reuse it
+   unchanged across the candidate sweep;
+4. apply an independent positive LSQ intensity scale for each
+   candidate/reference pairing inside the fixed mask;
+5. calculate masked NRMSE, RMSE, MAE, SSIM, NCC, and gradient/detail metrics
+   against GRAPPA and SENSE separately;
+6. calculate the same GRAPPA-versus-SENSE disagreement to expose the attainable
+   temporary-reference floor;
+7. rank against both references separately and consider only trends stable to
+   the reference choice; do not collapse the pair into an artificial truth
+   image; and
+8. keep DICOM intensity metrics out of regularization selection, while retaining
+   raw and normalized DICOM for clearly labelled qualitative figures.
+
+After the new R1 dataset is qualified, replace this temporary reference
+contract with a dataset-specific final contract. For each R1 subject/scan:
 
 1. convert the normalized unfiltered DICOM to canonical RAS;
 2. create one fixed BET brain mask from the reference only;
@@ -262,7 +331,7 @@ For each subject/scan:
 
 The approved R3 pilot orientation mapping was identity axis permutation with
 RAS-grid flips `[true, false, true]`. Revalidate rather than silently assume
-that mapping for the older R1 scans.
+that mapping for the new R1 acquisition or an older fallback scan.
 
 ## 9. Phase G: integrate retrospective low-resolution reconstruction
 
@@ -329,8 +398,8 @@ Before the later R1/final batch, agree on the expanded presentation package.
 Proposed minimal outputs are:
 
 1. one pipeline/data-role diagram;
-2. a log-lambda plot for both R1 scans with brain NRMSE/SSIM and one
-   sharpness/noise tradeoff measure;
+2. a log-lambda plot for the R1 development and confirmation scans with brain
+   NRMSE/SSIM and one sharpness/noise tradeoff measure;
 3. fixed-slice Wavelet comparison panels with identical windowing;
 4. an LLR heatmap only if corrected LLR proves scientifically useful;
 5. a resolution-versus-SNR/sharpness plot for the three retrospective-LR
@@ -361,9 +430,13 @@ Do this only after the experiments and presentation outputs are frozen.
 
 ## 13. Immediate next step
 
-Resume optimization on the existing R3x1/R3x2 experiment for presentation:
-add the fixed BET mask, extend Wavelet toward smaller lambda, correct LLR with
-`-l -v`, and generate the standardized comparison figures. After those
-results are ready, implement and visually validate the 2021-05-10 asymmetric
-readout completion, including zero-fill versus homodyne/POCS comparison,
-before beginning final R1 parameter refinement.
+Implement a manifest-driven dual-reference evaluator and apply it to the
+already completed R3x2 Wavelet and corrected-LLR sweep. Compute every ranking
+metric separately against no-wave GRAPPA and no-wave SENSE, quantify their
+mutual disagreement, and exclude DICOM intensity metrics from selection.
+
+After that evaluator is frozen, implement the no-wave GPU BART PICS path using
+the measured R3x1 k-space and exact sampling mask. Require a lambda-zero
+equivalence/data-consistency gate before adding provisional regularization.
+Do not begin final parameter selection or the older R1 partial-readout work
+while the new R1 acquisition is pending.
