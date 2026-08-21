@@ -51,8 +51,11 @@ selection. Wavelet `1e-2` leads NRMSE/SSIM/intensity NCC but its edge-gradient
 NCC is below the `1e-3` peak; add `2e-3`, `5e-3`, and the outward endpoint
 `2e-2`. Block-8 LLR metrics still improve through `5e-4`, so the full block
 sizes `4`, `8`, `16` grid should include `1e-3` in addition to `2e-5`, `5e-5`,
-`1e-4`, `2e-4`, and `5e-4`. The next action is to prepare the resumable GPU
-refinement launcher; no final parameter has been selected.
+`1e-4`, `2e-4`, and `5e-4`. The resumable GPU launcher is now
+`scripts/run_regularization_refinement.sh`. It adds four Wavelet cases through
+`5e-2` and the missing LLR block-size/lambda cases through `1e-2`, for 28 new
+cases total. Run it in tmux with `--confirm-approved-reference-and-mask`; all
+cases use `bart wave -g`. No final parameter has been selected.
 
 The qualitative R1 receive-profile comparison is complete under
 `comparisons/dicom_sos_normalization_vs_no_wave_fft`. Series 11 is the matched

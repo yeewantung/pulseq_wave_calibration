@@ -194,14 +194,17 @@ separately and only after full Wave encoding.
   correction. Each NIfTI export normalization is first undone from its sidecar,
   and the fitted LSQ scalar is recorded in the metric table.
 - [ ] Refine Wavelet around the `1e-3` to `1e-2` trade-off by adding `2e-3`
-  and `5e-3`; also add one outward endpoint at `2e-2` because NRMSE, SSIM, and
+  and `5e-3`; add outward endpoints `2e-2` and `5e-2` because NRMSE, SSIM, and
   intensity NCC still improved at the tested `1e-2` boundary while edge-gradient
   NCC peaked at `1e-3`. Reuse all completed cases.
 - [ ] Refine LLR over block sizes `4`, `8`, and `16` using the common lambda
-  grid `2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`, and `1e-3`. The added `1e-3`
-  point is required because every reported block-8 fidelity metric still
-  improved at the tested `5e-4` boundary. Reuse all completed block-8 cases and
-  run only the missing cross-product.
+  grid `2e-5`, `5e-5`, `1e-4`, `2e-4`, `5e-4`, `1e-3`, `2e-3`, `5e-3`, and
+  `1e-2`. The higher points bridge rather than jump from the improving `5e-4`
+  boundary. Reuse all completed block-8 cases and run only missing cases.
+- [x] Add the resumable tmux launcher `run_regularization_refinement.sh` for the
+  28 missing cases. It sources the Macha environment and host BART build,
+  requires the approved coarse-metrics provenance, and delegates every run to
+  the manifest-backed GPU-only reconstruction entry point.
 - [ ] Rank the refined candidates with fixed-mask whole-volume metrics and a
   common reference-derived visual window. Record metric definitions, lambda,
   iteration/convergence information, input hashes, and output hashes in CSV

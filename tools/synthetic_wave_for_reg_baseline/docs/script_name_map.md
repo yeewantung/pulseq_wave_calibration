@@ -35,6 +35,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
 | `scripts/run_wavelet_sweep.sh` | Canonical workflow | Runs/resumes the compact R1 Wavelet sweep and its reference-neutral review. |
 | `scripts/run_llr_sweep.sh` | Canonical workflow | Gates split-complex lambda zero, then runs/resumes the compact block-8 LLR sweep and review. |
+| `scripts/run_regularization_refinement.sh` | Canonical workflow | Runs/resumes the missing higher-lambda Wavelet and multi-block LLR cases selected from direct-FFT coarse metrics. |
 | `scripts/review_regularization_sweep.py` | Canonical workflow | Builds a shared-window Wavelet or LLR review without DICOM or BET ranking. |
 | `scripts/validate_llr_lambda_zero.py` | Canonical workflow | Validates recombined split-complex LLR lambda zero against native-complex FISTA lambda zero. |
 | `scripts/prepare_r1_reference_comparison.py` | Qualitative reference audit | Audits and converts a matched SOS unfiltered DICOM pair, exports direct no-Wave FFT RSS, and creates a no-ranking comparison. |

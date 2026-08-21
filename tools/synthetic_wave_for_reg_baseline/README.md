@@ -232,6 +232,18 @@ mask-restricted LSQ scalar, writes CSV/JSON metrics, and creates method-specific
 common-window figures. It reports per-metric leaders but deliberately performs
 no composite ranking or parameter selection.
 
+Run the missing higher-lambda and multi-block refinement cases in tmux with:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_regularization_refinement.sh \
+    --confirm-approved-reference-and-mask
+```
+
+The launcher is resumable. It adds Wavelet `2e-3`, `5e-3`, `2e-2`, and `5e-2`;
+LLR blocks `4` and `16` use a 1-2-5 grid from `2e-5` through `1e-2`, while
+block `8` runs only values absent from its retained coarse sweep. Every case
+uses the approved crop-`0.6` maps and GPU BART `-g`.
+
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a
 brain-median-scaled intensity-profile comparison. It does not run or select
