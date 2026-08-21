@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-08-20, America/New_York
+Updated: 2026-08-21, America/New_York
 
 Read `EXPERIMENT_PLAN.md` first. It is the active scientific and implementation
 plan. The old R3x1 tracker is historical only.
@@ -18,10 +18,12 @@ canonical RAS data with affine-axis flips `[true,false,true]`, matching the
 approved manual R3 correction exactly for both magnitude and phase. Its affine
 matches the accepted GRAPPA/SENSE affine. No historical output was overwritten.
 
-The next queued implementation step is retrospective low-resolution support
-with the current BART manifest and mandatory GPU reconstruction path. After
-that, remove R3-only shape, path, sampling, and DICOM assumptions from the
-R1-facing orchestration.
+Retrospective low-resolution code support is complete with the current BART
+manifest, crop-first target-grid Wave synthesis, and mandatory GPU
+reconstruction path. Product structural validation and both real-data source
+operator gates pass. The large preparation/reconstruction is intentionally
+left for the user's tmux run. After that, remove R3-only shape, path, sampling,
+and DICOM assumptions from the R1-facing orchestration.
 
 The user is collecting a new R1 dataset. Once it arrives, pause provisional
 R3 selection, inspect and qualify the new acquisition, then switch final
@@ -207,10 +209,11 @@ metadata; test partial-Fourier completion and crop the oversampled image FOV.
 
 ## Frozen regularization decisions
 
-NIfTI orientation correction is complete. Remaining execution order is
-retrospective low-resolution integration, dataset-portability work, and then
-qualification/refinement on the new R1 acquisition. Parameters selected during
-R3 development are provisional and R3-specific.
+NIfTI orientation correction and retrospective low-resolution code integration
+are complete. Remaining execution order is the user-run retrospective batch,
+dataset-portability work, and then qualification/refinement on the new R1
+acquisition. Parameters selected during R3 development are provisional and
+R3-specific.
 
 Wavelet coarse sweep after the new R1 development scan is qualified:
 
@@ -246,16 +249,27 @@ intensity scaling.
 
 ## Retrospective low-resolution integration
 
-Source repository, not yet tested or merged:
+The original two-commit repository history is merged under:
 
 ```text
-/path/to/user_workspace/sources/published_code/wave-retro-lr-recon
+tools/wave_retro_lr_recon/
 ```
 
-Merge it later, preserving history, under `tools/wave_retro_lr_recon/`. The
-synthetic baseline should call its API/CLI through a manifest. Its current
-phase-encoding-only behavior is the intended behavior. Never crop readout.
-Use these requested physical XYZ resolutions:
+The active tool is a tested library/CLI using the current BART manifest,
+mandatory `bart wave -g`, target-k-space norm restoration, resumable case
+manifests, and the shared canonical-RAS exporter. The baseline entry points are:
+
+```text
+requirements/retrospective_low_resolution_product.json
+scripts/run_retrospective_low_resolution.sh
+```
+
+The real source PSF identity gate passed with relative complex L2
+`4.406439186e-08`; the all-coil native Wave-operator gate passed with relative
+L2 `2.150150032e-07`. Structural validation creates no output and has passed.
+No production retrospective outputs exist yet.
+
+Never crop readout. Use these requested physical XYZ resolutions:
 
 ```text
 1.5 x 1.0 x 1.0 mm
@@ -264,9 +278,12 @@ Use these requested physical XYZ resolutions:
 ```
 
 For sagittal MPRAGE, physical X and Y are the two PE directions and physical Z
-is readout. Keep physical Z/readout at 1 mm and its matrix unchanged. Crop the
-no-wave PE support before Wave encoding and rebuild the target PE-grid PSF,
-subject to a focused operator-ordering test.
+is readout. Keep physical Z/readout at 1 mm and its matrix unchanged. Round
+each PE matrix to the nearest multiple of four. The product cases therefore
+use logical `(RO, LIN, PAR)` matrices `256 x 256 x 172`, `256 x 172 x 256`,
+and `256 x 204 x 204`, achieving changed-axis resolutions `1.488372` mm and
+`1.254902` mm. Crop no-wave PE support before Wave encoding and rebuild the
+target PE-grid PSF; do not crop already Wave-encoded k-space.
 
 ## Accepted historical R3 outputs
 

@@ -37,6 +37,15 @@ Wave NIfTI export now stores magnitude and phase directly in canonical RAS
 using the product-DICOM-validated affine-axis convention. Downstream manual
 signed-axis correction is no longer required for newly exported results.
 
+Retrospective low-resolution code support is integrated under
+`tools/wave_retro_lr_recon/`. It changes phase encoding only, rounds each PE
+matrix to the nearest multiple of four, reconstructs with GPU `bart wave -g`,
+and exports through the same canonical-RAS path. The product configuration and
+tmux-friendly launcher are
+`requirements/retrospective_low_resolution_product.json` and
+`scripts/run_retrospective_low_resolution.sh`. No large retrospective outputs
+are created by validation alone.
+
 A new R1 dataset will replace this temporary reference contract after it is
 collected and qualified. The older 2021 R1 scans remain partial-readout
 fallbacks only. The final R1 Wavelet coarse sweep will use lambda values
@@ -71,6 +80,20 @@ The current production path is:
 11. `evaluate_regularization_volume.py` requires that recorded approval,
     estimates one proper rigid transform from lambda zero, applies it unchanged
     to every magnitude volume, and writes whole-volume metrics and plots.
+
+The retrospective-resolution implementation is maintained separately in
+`tools/wave_retro_lr_recon/`; its CLI consumes an explicit source/config
+contract instead of duplicating reconstruction algorithms in this baseline
+tool. For the current product dataset, run its wrapper from the repository
+root:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_retrospective_low_resolution.sh \
+    --resume
+```
+
+Use `--validate-only` for a non-writing structural check or `--prepare-only`
+to create target BART inputs without starting reconstruction.
 
 For the current R3 presentation optimization, `run_r3_presentation_optimization.sh` provides a
 resumable tmux-friendly orchestration entry point. Its default

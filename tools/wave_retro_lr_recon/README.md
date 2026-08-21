@@ -1,211 +1,128 @@
-# Wave-MPRAGE retrospective LR + undersampling
+# Retrospective low-resolution Wave-MPRAGE reconstruction
 
-Advanced batch patch for an existing [`HarmonizedMRI/wave-mprage`](https://github.com/HarmonizedMRI/wave-mprage) reconstruction output.
+This tool creates lower phase-encoding resolution Wave-MPRAGE cases from an
+explicit source manifest. It is integrated into the parent repository and uses
+the pinned `external/wave-mprage` NIfTI exporter. The imported two-commit
+history remains available in Git; the legacy internal-NPY/Torch-CG program has
+been replaced by this BART workflow.
 
-The program reuses the already generated coil-compressed k-space, low-resolution ESPIRiT maps, and FLASH PSF coefficient fits. It does **not** repeat TWIX-to-k-space conversion, coil compression, ESPIRiT calibration, or projection PSF fitting for each requested case.
+## Scientific contract
 
-## What it does
+For validated sagittal MPRAGE, logical `(RO, LIN, PAR)` maps to physical
+`(Z, Y, X)`. The tool changes LIN and/or PAR only. It never crops readout.
 
-For every requested case, the script:
+Each case performs these operations in order:
 
-1. loads `kspace_cc` once and infers its sampling mask in memory;
-2. infers the source `Ry` and `Rz` from the k-space mask and verifies them against the matching `.seq` definitions;
-3. converts desired physical resolution `[x, y, z]` in millimetres to an integer target matrix at unchanged FOV;
-4. center-crops the two phase-encoding dimensions while preserving the Python center indices;
-5. adds retrospective undersampling only on axes that were originally fully sampled;
-6. interpolates `csm_acs` directly to the target matrix and renormalizes it;
-7. rebuilds the calibrated PSF on the target `y_norm`/`z_norm` grid from reusable `a(kx)`, `b(kx)`, and `c(kx)` coefficients;
-8. runs the upstream preconditioned Wave CG-SENSE implementation;
-9. writes case outputs under `retro-LR-us/` without moving or changing the original reconstruction files.
+1. center-crop the full no-wave k-space in LIN/PAR;
+2. inverse FFT on the requested target matrix at unchanged physical FOV;
+3. preserve and center-embed the original readout in the oversampled Wave FOV;
+4. rebuild the final source PSF phase planes on the target PE grid;
+5. apply Wave encoding and transform PE back to k-space; and
+6. apply the cropped acquisition/ACS mask.
 
-Sampling masks are not saved. They are inexpensive to infer/recreate and can be storage-heavy in a large batch.
+The program deliberately does not center-crop already Wave-encoded k-space.
+The included operator test demonstrates that the two orderings are generally
+not equivalent.
 
-## Repository setup
+Before preparing any target case, two gates must pass:
+
+- extracted PSF phase planes must regenerate the source PSF within strict
+  complex-error tolerances; and
+- crop-first Wave synthesis on the native grid must reproduce the supplied
+  source Wave k-space.
+
+## Reconstruction and export
+
+Sensitivity maps are interpolated only in PE and RSS-renormalized. Calibration
+k-space is center-cropped only in PE and retained in each case's BART input
+contract. The primary backend is `bart wave`; every reconstruction command
+always includes GPU option `-g`. LLR uses BART's split-complex `-v` form and is
+recombined using the previously validated rule.
+
+After BART reconstruction, the actual retrospective Wave-k-space norm is
+restored. The pinned Wave-MPRAGE exporter writes normalized magnitude and
+phase directly in canonical RAS with target achieved voxel sizes.
+
+## Configuration
+
+Use one JSON file containing explicit source, companion, output, case, and
+reconstruction settings. See
+[`configs/retrospective_low_resolution.example.json`](configs/retrospective_low_resolution.example.json).
+Source discovery is intentionally shallow: the source BART `manifest.json` is
+authoritative for Wave k-space and PSF basenames, while maps, calibration
+k-space, no-wave k-space, sequence, and TWIX are explicit companion inputs.
+
+Requested resolution uses physical `[X, Y, Z]` millimetres. Each target PE
+matrix is rounded to its nearest multiple of four; readout remains unchanged.
+Requested and matrix-achieved resolutions are both stored. Output folders use
+the achieved resolution and acceleration, for example:
+
+| Requested XYZ resolution (mm) | Logical RO, LIN, PAR matrix | Achieved XYZ resolution (mm) |
+| --- | --- | --- |
+| 1.5 x 1.0 x 1.0 | 256 x 256 x 172 | 1.488372 x 1.0 x 1.0 |
+| 1.0 x 1.5 x 1.0 | 256 x 172 x 256 | 1.0 x 1.488372 x 1.0 |
+| 1.25 x 1.25 x 1.0 | 256 x 204 x 204 | 1.254902 x 1.254902 x 1.0 |
+
+```text
+retrospective_low_resolution/
+├── batch_manifest.json
+├── res1.49x1x1mm_R3x2/
+│   ├── case_manifest.json
+│   ├── bart_inputs/
+│   ├── bart_output/
+│   ├── bart_wave.log
+│   └── nifti/
+└── res1.25x1.25x1mm_R3x2/
+```
+
+Sampling masks are used in memory and are not copied into result trees.
+Source and companion manifest hashes, geometry, crop bounds, requested and
+achieved resolution, matrix, FOV, BART inputs, commands, norms, and canonical
+outputs are recorded in manifests. Existing non-empty output trees are refused
+unless `--resume` finds matching case metadata.
+
+## Commands
+
+Activate the Macha environment and BART build first:
 
 ```bash
-git clone <this-repository-url>
-cd wave-mprage-retro-lr-us
-./scripts/setup_upstream.sh
-uv sync
+source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
+conda activate cuda133py312-macha
+source /path/to/user_workspace/bart/bart_startup.sh
 ```
 
-When this bundle is committed as a new Git repository, the setup script adds `HarmonizedMRI/wave-mprage` as `external/wave-mprage` submodule. Outside a Git worktree it performs a normal recursive clone instead.
-
-The external submodule is expected at `external/wave-mprage`. A different checkout may be supplied with `--wave-mprage-repo`.
-
-## Source output folder
-
-The source folder remains unchanged. Typical reusable files are:
-
-```text
-out/
-├── a_fit_all_projy_72kyline_.npy
-├── b_fit_all_projz_72kzline_.npy
-├── c_fit_all_projy_72kyline_.npy
-├── c_fit_all_projz_72kzline_.npy
-├── csm_acs_.npy
-├── csm_full_.npy
-├── kspace_cc.npy                     # or the standard tagged kspace_*_cc_*.npy name
-├── wave_mprage_manifest.json         # recommended
-└── nifti/
-```
-
-The source manifest should record the matching TWIX and Pulseq paths. Accepted top-level manifest names are:
-
-```text
-wave_mprage_manifest.json
-reconstruction_manifest.json
-recon_manifest.json
-manifest.json
-```
-
-If no manifest is present, provide the two paths directly with `--seq` and `--twix`. The input interface remains centered on one understandable folder: `--wave-mprage-out-folder`.
-
-## Case file
-
-Resolution is specified in **physical XYZ order**, matching sequence FOV/matrix definitions. For the current sagittal acquisition:
-
-```text
-physical x -> logical PAR / Rz dimension
-physical y -> logical LIN / Ry dimension
-physical z -> logical readout dimension
-```
-
-Only physical x and y are retrospectively cropped. Physical z/readout resolution must remain unchanged.
-
-```json
-{
-  "cases": [
-    {"resolution_mm": [1.0, 1.0, 1.0], "acceleration": [3, 1]},
-    {"resolution_mm": [1.5, 1.0, 1.0], "acceleration": [3, 1]},
-    {"resolution_mm": [1.5, 1.0, 1.0], "acceleration": [3, 2]}
-  ]
-}
-```
-
-Acceleration is `[Ry, Rz]`. An already accelerated axis must stay unchanged. Examples:
-
-```text
-source R3x1 -> target R3x2   allowed
-source R1x1 -> target R2x2   allowed
-source R3x1 -> target R6x1   rejected
-```
-
-## Run
-
-When the source manifest records the `.dat` and `.seq` paths:
+Structural validation reads JSON, sequence metadata, NPY headers, and CFL
+headers only; it creates no output:
 
 ```bash
-uv run python recon/recon_wave_mprage_retro_lr_us_batch.py \
-  --wave-mprage-out-folder /path/to/out \
-  --cases configs/cases.example.json \
-  --save-intermediate standard \
-  --save-nifti-phase
+python tools/wave_retro_lr_recon/scripts/run_retro_lr.py \
+    --config /path/to/config.json \
+    --validate-only
 ```
 
-Without a manifest:
+Prepare BART inputs and run the source-operator gates without reconstruction:
 
 ```bash
-uv run python recon/recon_wave_mprage_retro_lr_us_batch.py \
-  --wave-mprage-out-folder /path/to/out \
-  --seq /path/to/matching.seq \
-  --twix /path/to/source.dat \
-  --cases configs/cases.example.json
+python tools/wave_retro_lr_recon/scripts/run_retro_lr.py \
+    --config /path/to/config.json \
+    --prepare-only
 ```
 
-Validate discovery, geometry, acceleration, and cases without reconstruction:
+Run or resume the complete GPU workflow:
 
 ```bash
-uv run python recon/recon_wave_mprage_retro_lr_us_batch.py \
-  --wave-mprage-out-folder /path/to/out \
-  --cases configs/cases.example.json \
-  --validate-only
-```
-
-## Output layout
-
-The script adds only `retro-LR-us/` to the original output folder:
-
-```text
-out/
-├── ... original wave-mprage files remain here ...
-├── nifti/
-└── retro-LR-us/
-    ├── batch_info.json
-    ├── nifti/
-    │   ├── res1x1x1mm_R3x1/
-    │   │   ├── sub-retro_part-mag_MPRAGE.nii.gz
-    │   │   ├── sub-retro_part-mag_MPRAGE.json
-    │   │   ├── sub-retro_part-phase_MPRAGE.nii.gz
-    │   │   └── sub-retro_part-phase_MPRAGE.json
-    │   └── res1.5x1x1mm_R3x2/
-    ├── res1x1x1mm_R3x1/
-    │   ├── image.npy
-    │   └── case_info.json
-    └── res1.5x1x1mm_R3x2/
-        ├── image.npy
-        └── case_info.json
-```
-
-Folder names use the **actual achieved physical XYZ resolution**, rounded to at most two decimals. Full-precision requested and achieved resolutions, integer matrices, crop bounds, and acceleration are retained in `case_info.json`.
-
-## Intermediate saving
-
-```text
---save-intermediate none
-    case_info.json and requested NIfTI outputs only
-
---save-intermediate standard     default
-    image.npy + case_info.json + requested NIfTI outputs
-
---save-intermediate all
-    standard outputs plus:
-    kspace_lr_undersampled.npy
-    csm_target.npy               normalized, unoversampled readout CSM
-    psf_target.npy
-```
-
-Neither source nor case sampling masks are saved at any level.
-
-## PSF coefficient reuse
-
-Preferred processed coefficient files are:
-
-```text
-psf_coefficients_processed*.npz    keys: a, b, c
-psf_coefficients_processed*.npy    shape: (3, Nx_os) or (Nx_os, 3)
-psf_integrated_calib_fit*.npy      same numeric shape
-```
-
-If none exists, the script finds the standard raw projection fits:
-
-```text
-a_fit_all_projy_*.npy
-b_fit_all_projz_*.npy
-c_fit_all_projy_*.npy
-c_fit_all_projz_*.npy
-```
-
-It reconstructs the upstream combination:
-
-```text
-a = a_projy
-b = b_projz
-c = c_projy + c_projz
-```
-
-and applies the same upstream `smooth` or `sine-line` coefficient processing. For a source reconstructed with sine-line processing, record its fit range in the manifest or pass:
-
-```text
---psf-coefficient-processing sine-line
---psf-fit-kx-min INTEGER
---psf-fit-kx-max INTEGER
+python tools/wave_retro_lr_recon/scripts/run_retro_lr.py \
+    --config /path/to/config.json \
+    --resume
 ```
 
 ## Tests
 
+From this tool directory:
+
 ```bash
-uv run --group dev pytest
+python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-The included tests cover center preservation, acceleration inference, undersampling restrictions, physical-XYZ resolution conversion, achieved-resolution folder naming, and the no-saved-mask policy.
+The historical `wave-retro-lr-us-TODO.md` records the design analysis that led
+to the current manifest/BART implementation; it is not the active run guide.

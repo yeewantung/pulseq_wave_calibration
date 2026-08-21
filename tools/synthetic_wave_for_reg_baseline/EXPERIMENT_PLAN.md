@@ -1,6 +1,6 @@
 # R3 presentation optimization, R1 refinement, and retrospective-resolution plan
 
-Updated: 2026-08-20
+Updated: 2026-08-21
 
 This is the active experiment plan. The original R3x1-centered tracker is
 preserved as a historical record in
@@ -11,9 +11,9 @@ The execution order is now:
 1. use the no-wave GRAPPA reconstruction from the existing R3x1 product scan
    as the single temporary development reference;
 2. finish the reusable infrastructure needed by later stages: retain the
-   completed NIfTI orientation correction, integrate retrospective
-   low-resolution support, and remove R3-specific geometry/configuration
-   assumptions from the R1 path;
+   completed NIfTI orientation correction and retrospective low-resolution
+   support, then remove R3-specific geometry/configuration assumptions from
+   the R1 path;
 3. acquire and qualify the new R1 dataset; and
 4. switch the final parameter-selection and DICOM-ranking workflow to that R1
    dataset, then apply the R1-selected settings back to R3 without retuning.
@@ -324,28 +324,32 @@ The approved R3 pilot orientation mapping was identity axis permutation with
 RAS-grid flips `[true, false, true]`. Revalidate rather than silently assume
 that mapping for the new R1 acquisition or an older fallback scan.
 
-## 9. Phase G: integrate retrospective low-resolution reconstruction
+## 9. Phase G: retrospective low-resolution reconstruction
 
-The existing untested repository is:
+The separate repository was imported with its two-commit history under:
 
 ```text
-/path/to/user_workspace/sources/published_code/wave-retro-lr-recon
+tools/wave_retro_lr_recon/
 ```
 
-Complete this integration before the new R1 regularization run so the same
-case interface and manifests can be exercised on current data first:
+The integration is complete. The legacy internal-NPY/Torch-CG implementation
+was replaced with a tested library and dataset-independent CLI that consumes
+the current BART-input manifest contract, uses the parent's pinned
+`external/wave-mprage` exporter, and reconstructs with GPU `bart wave -g`.
+The synthetic-Wave workflow calls it through:
 
-1. run and audit its current tests and validate-only workflow;
-2. merge its history into this repository under
-   `tools/wave_retro_lr_recon/` rather than keeping a nested Git repository;
-3. reuse the parent repository's pinned `external/wave-mprage` dependency;
-4. replace its legacy internal-NPY/Torch-CG path with the current exported
-   BART-input manifest contract and GPU `bart wave -g` reconstruction;
-5. expose a small tested library/API plus a dataset-independent CLI;
-6. call that CLI/API from the synthetic-Wave baseline workflow through a
-   manifest, without copying its algorithms into the caller; and
-7. preserve requested/achieved resolution, matrix, crop bounds, FOV, scaling,
-   and source hashes for every case.
+```text
+requirements/retrospective_low_resolution_product.json
+scripts/run_retrospective_low_resolution.sh
+```
+
+The source PSF identity gate passed on the real product PSF with relative
+complex L2 `4.406439186e-08` and maximum complex error `1.685873912e-07`.
+The all-coil native-grid Wave-operator gate passed with relative L2
+`2.150150032e-07` and maximum complex error `1.317088993e-09`. Structural
+validation of the product configuration also passed without writing output.
+Production preparation and reconstruction have not yet run; no large
+retrospective result tree has been created.
 
 The current tool's phase-encoding-only crop is the intended behavior. For
 sagittal MPRAGE, physical X maps to logical partition/PE2, physical Y maps to
@@ -362,10 +366,13 @@ At locked R3x2 Wave regularization, generate these physical-XYZ resolutions:
 
 Use unchanged FOV and integer center crops of PE1 and/or PE2 only. Keep the
 readout matrix and resolution exactly unchanged. Record the achieved PE
-resolution when the requested matrix is not integral. Crop the no-wave source
-in PE before Wave encoding and rebuild the target PE-grid PSF unless a focused
-operator test establishes an equivalent ordering; do not assume cropping an
-already Wave-encoded volume is equivalent.
+resolution when the requested matrix is not integral. Target PE matrices are
+rounded to the nearest multiple of four. For the 256 mm product FOV, the three
+logical `(RO, LIN, PAR)` matrices are `256 x 256 x 172`, `256 x 172 x 256`,
+and `256 x 204 x 204`, with achieved changed-axis resolutions `1.488372` mm
+and `1.254902` mm. Crop the no-wave source in PE before Wave encoding and
+rebuild the target PE-grid PSF; the focused operator test confirms that
+cropping already Wave-encoded data is not an equivalent ordering.
 
 Evaluate the expected SNR/CNR gain together with the loss in sharpness and
 spatial resolution. Preserve native-resolution images and create explicitly
@@ -423,16 +430,17 @@ Do this only after the experiments and presentation outputs are frozen.
 
 ## 13. Immediate next step
 
-The NIfTI orientation correction is complete. Wave magnitude and phase now
-export directly in canonical RAS and match the previously approved R3 manual
-X/Z correction exactly, with the same affine as the accepted GRAPPA and SENSE
-outputs. No accepted historical output was overwritten.
+The NIfTI orientation correction and retrospective low-resolution code
+integration are complete. The latter uses the current BART-input/manifest
+contract, crop-first target-grid Wave synthesis, mandatory GPU BART
+reconstruction, norm restoration, resumable manifests, and the same canonical
+RAS exporter. Product configuration validation and the real source-operator
+gates pass. No accepted historical output was overwritten, and the large
+retrospective preparation/reconstruction remains for the user-run tmux job.
 
-The next queued step is to integrate the retrospective low-resolution code
-with the current BART-input/manifest contract and GPU BART reconstruction.
-
-After retrospective-LR integration, remove hard-coded R3 geometry, dataset
-paths, and DICOM-only reference assumptions from the R1-facing orchestration.
+After that production run, the next implementation step is to remove
+hard-coded R3 geometry, dataset paths, and DICOM-only reference assumptions
+from the R1-facing orchestration.
 Use GRAPPA as the temporary metric reference, apply BET only during metrics,
 and keep DICOM ranking as a configuration mode to enable on the new R1
 dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
@@ -446,12 +454,12 @@ work is:
 1. **NIfTI orientation at source — complete:** the shared Wave exporter now
    writes canonical RAS data/affines directly and no longer requires the
    R3-only manual signed-axis correction. GRAPPA and SENSE already use the same
-   validated affine. Retrospective-LR will consume the shared exporter during
-   its integration.
-2. **Retrospective low resolution:** integrate the separate repository,
-   consume current BART manifests, crop only PE dimensions, rebuild the target
-   PSF, run BART on GPU, restore the target k-space norm, and export with the
-   same orientation contract.
+   validated affine. Retrospective-LR consumes this shared exporter.
+2. **Retrospective low resolution — code complete:** the imported tool consumes
+   current BART manifests, crops only PE dimensions to four-multiple matrices,
+   rebuilds the target PSF, runs BART on GPU, restores the target k-space norm,
+   and exports with the same orientation contract. Product preparation and
+   reconstruction are pending the tmux run.
 3. **Dataset portability:** replace fixed `256 x 256 x 256`, R3 sampling-line,
    subject, path, DICOM-count, and maximum-eigenvalue assumptions with values
    derived from a dataset manifest or sequence/TWIX metadata.

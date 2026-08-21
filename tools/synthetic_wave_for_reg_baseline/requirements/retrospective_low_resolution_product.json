@@ -1,0 +1,48 @@
+{
+  "source": {
+    "bart_input_dir": "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2/bart_inputs",
+    "no_wave_kspace": "/path/to/data/20260817_product/synthetic_wave_theoretical_ncc12/grappa_diagnostics/grappa_5x5x5_ncc12_full_ncc12.npy",
+    "existing_maps": "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12/bart_lambda0_ecalib_c050/coil_sens_bart",
+    "calibration_kspace": "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12/bart_inputs/kspace_calib",
+    "sequence": "/path/to/user_workspace/scan_protocols/20260817_integrated/v151/mprage_3d_wave_FOV256x256x256_res1x1x1_ETL256_R1-1_R2-3_os4_amp8_cyc10_SAG_prisma_v151.seq",
+    "twix": "/path/to/data/20260817_product/meas_MID00345_FID35555_t1_mprage_sag_p2.dat",
+    "synthesis_manifest": "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12/manifest.json",
+    "companion_manifests": [
+      "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12/bart_lambda0_ecalib_c050/manifest.json",
+      "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12/bart_inputs/kspace_calib_manifest.json"
+    ],
+    "subject": "20260817product-retro-low-resolution"
+  },
+  "output_root": "/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2_low_resolution",
+  "pe_matrix_policy": "nearest multiple of 4",
+  "cases": [
+    {
+      "resolution_mm_xyz": [1.5, 1.0, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "lower physical-X resolution"
+    },
+    {
+      "resolution_mm_xyz": [1.0, 1.5, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "lower physical-Y resolution"
+    },
+    {
+      "resolution_mm_xyz": [1.25, 1.25, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "balanced lower in-plane resolution"
+    }
+  ],
+  "reconstruction": {
+    "bart": "bart",
+    "regularizer": "llr",
+    "lambda": 0.00002,
+    "block_size": 8,
+    "iterations": 100,
+    "tolerance": 0.000001,
+    "maximum_eigenvalue": null
+  },
+  "runtime": {
+    "fft_workers": 4,
+    "readout_chunk": 8
+  }
+}

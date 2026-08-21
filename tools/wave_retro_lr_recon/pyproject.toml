@@ -1,22 +1,15 @@
 [project]
-name = "wave-mprage-retro-lr-us"
-version = "0.1.0"
-description = "Retrospective low-resolution and undersampling batch reconstruction for Wave-MPRAGE"
+name = "wave-retro-lr-recon"
+version = "0.2.0"
+description = "Manifest-driven retrospective PE low-resolution Wave-MPRAGE reconstruction"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "matplotlib>=3.8",
     "nibabel>=5.2",
     "numpy>=1.26,<3",
     "pymapvbvd>=0.6.1",
     "pypulseq>=1.4.2",
-    "scipy>=1.11",
-    "sigpy>=0.1.27",
-    "torch>=2.2",
+    "scipy>=1.11"
 ]
-
-[dependency-groups]
-dev = ["pytest>=8"]
-gpu = ["cupy-cuda12x>=13"]
 
 [tool.uv]
 package = false
