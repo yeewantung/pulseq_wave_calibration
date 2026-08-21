@@ -239,8 +239,10 @@ separately and only after full Wave encoding.
   `6e-3`. Block-8 and block-16 NRMSE/SSIM both worsen above `1e-2`, so their
   useful ranges are now bracketed; block 16 at `1e-2` retains the lowest LLR
   NRMSE (`0.037416`).
-- [ ] Select one Wavelet and one LLR finalist, then choose the R1 regularization
-  using quantitative metrics plus visual review. DICOM remains qualitative and
-  cannot break a metric tie.
-- [ ] Freeze the R1-selected regularization and apply it unchanged to R3 as a
-  cross-dataset transfer check.
+- [x] Select and freeze Wavelet `lambda=1.5e-2` as the MPRAGE regularization
+  choice after quantitative and common-window review. LLR remains a documented
+  comparison and is not selected. The hash-bound decision record is
+  `evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`.
+- [ ] Apply the frozen Wavelet `lambda=1.5e-2` configuration unchanged to R3 as
+  a cross-dataset transfer check. Do not retune against the historical R3 DICOM
+  or GRAPPA metrics.

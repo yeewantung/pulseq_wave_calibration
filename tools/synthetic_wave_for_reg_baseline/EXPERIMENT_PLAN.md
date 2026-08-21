@@ -70,8 +70,8 @@ Pending:
   refinement grid;
 - [x] combine retained and new cases for exact-grid validation and direct-FFT
   metrics without registration, interpolation, or DICOM intensity ranking;
-- [ ] freeze the final choice and apply it
-  unchanged to R3 as a cross-dataset transfer check.
+- [x] freeze Wavelet `lambda=1.5e-2` as the R1-selected MPRAGE regularization;
+- [ ] apply it unchanged to R3 as a cross-dataset transfer check.
 
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
 partial-readout R1 scans, DICOM-intensity ranking before the new R1 DICOM is

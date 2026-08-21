@@ -7,9 +7,15 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Review the current shared-window figures and choose one Wavelet and one LLR
-finalist; no final parameter has been selected. The 11-case targeted follow-up
-is complete under
+Apply the frozen R1-selected Wavelet `lambda=1.5e-2` configuration unchanged to
+the existing R3 dataset as a portability check; do not retune on R3. The
+hash-bound selection record is
+`evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`
+under the R1 dataset root. It identifies the exact reconstruction, direct-FFT
+reference, 49-case geometry report, metric package, and explicit user decision.
+LLR is retained as a comparison but is not selected.
+
+The 11-case targeted follow-up is complete under
 `reconstructions/synthetic_wave/regularization_targeted_ecalib_crop-0p6`, and
 every reconstruction records `bart wave -g`.
 

@@ -277,6 +277,14 @@ heatmap labels deliberately unrun cells in the scientifically ragged grid.
 Wavelet `1.5e-2` has the lowest NRMSE, while block-4 LLR peaks near `6e-3` and
 blocks 8/16 turn after `1e-2`.
 
+Wavelet `lambda=1.5e-2` is now the frozen MPRAGE choice. Its hash-bound decision
+record is
+`evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`
+under the R1 dataset root. It binds the selected NIfTI and reconstruction
+manifest to the approved reference, exact-grid report, and metric package. The
+next experiment applies that configuration unchanged to R3; R3 is a transfer
+check and must not be used for retuning.
+
 `run_ecalib_intensity_pilot.sh` is the isolated tmux entry point for testing
 BART `ecalib -I`. It runs one GPU Wave lambda-zero reconstruction and creates a
 brain-median-scaled intensity-profile comparison. It does not run or select
