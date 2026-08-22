@@ -265,5 +265,5 @@ separately and only after full Wave encoding.
   current tracked source, documentation, tests, and configuration.
 - [x] Rewrite all 79 reachable commits after creating a verified recovery
   bundle; the full-history audit contains zero private-path or identity matches.
-- [ ] Force-update the public branch with the rewritten history, then verify its
-  advertised tip before declaring the cleanup complete.
+- [x] Force-update the public branch with the rewritten history and verify that
+  GitHub advertises the expected sanitized tip.
