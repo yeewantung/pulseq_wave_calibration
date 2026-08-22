@@ -28,6 +28,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/grappa_3d_r3.py` | Canonical algorithm | Implements the accepted joint-coil 3D R=3 kernel geometry. |
 | `scripts/grappa_r3.py` | Retained diagnostic algorithm | Supports the useful 2D GRAPPA regression comparison and oracle tests. |
 | `scripts/wave_synthesis.py` | Canonical algorithm | Contains bounded-memory extended-readout and theoretical-PSF adapters. |
+| `scripts/validate_full_sampling_wave_operator.py` | Evaluation gate | Runs real-data all-coil `PSF=1` no-Wave identity and full-sampling Wave inverse checks without BART or presentation processing. |
 | `scripts/sampling_mask.py` | Canonical support | Reconstructs and validates the authoritative product mask from inspection metadata. |
 | `scripts/export_grappa_rss.py` | Diagnostic/export | Produces compact RSS NIfTIs from measured or GRAPPA-completed multicoil k-space. |
 | `scripts/prepare_no_wave_sense.py` | Retained diagnostic | Builds a measured-only alternative input for future GRAPPA/SENSE investigation. |

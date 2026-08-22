@@ -18,7 +18,9 @@ The active execution order is now:
 3. preserve the generalized, explicitly approved R1 native-grid and
    matched-grid visual review; and
 4. preserve the completed descriptive R1 resolution-tradeoff analysis, which
-   makes no automatic resolution selection.
+   makes no automatic resolution selection; and
+5. preserve the passed all-coil real-data `PSF=1` identity and full-sampling
+   Wave inverse gates.
 
 The earlier R3 parameters and GRAPPA-referenced evaluation remain historical
 development results. The R1-selected setting is frozen and must not be retuned
@@ -29,8 +31,9 @@ encoding, GPU lambda-zero/coarse/refined/targeted reconstructions, approved-mask
 metric support, combined 49-case exact-grid evaluation, frozen Wavelet
 selection, qualitative R3 transfer, all three R1 retrospective low-resolution
 reconstructions, the approved native/matched review, and the descriptive R1
-resolution analysis are complete. No retrospective resolution was selected
-automatically.
+resolution analysis are complete. The real-data `PSF=1` identity and
+full-sampling Wave inverse gates also pass on all 12 virtual coils. No
+retrospective resolution was selected automatically.
 
 ## Current implementation and execution status
 
@@ -57,15 +60,19 @@ Completed:
   `-g`.
 - [x] generalized and explicitly approved the R1 native/matched review;
 - [x] completed the approval-gated descriptive R1 resolution analysis without
-  a true-SNR claim, composite rank, or automatic selection.
+  a true-SNR claim, composite rank, or automatic selection;
+- [x] passed the real-data `PSF=1` identity and full-sampling Wave inverse
+  gates on all 12 virtual coils without reconstruction or presentation
+  processing.
 
-Pending:
+Checklist status (the sole unchecked item is explicitly deferred):
 
 - [x] identify the fully sampled R1 TWIX and candidate Wave sequence;
 - [x] create its concrete no-DICOM-reference manifest and pass measured
   acquisition inspection;
-- [ ] designate an independent confirmation scan if one is acquired; the
-  current R1 parameter selection is not independently confirmed;
+- [ ] designate an independent confirmation scan if one is acquired; this is
+  deferred at the user's request and the current R1 parameter selection is not
+  independently confirmed;
 - [x] run and visually qualify the real R1 preparation path through measured
   ACS export;
 - [x] make lambda-zero BART reconstruction manifest-aware;
@@ -296,14 +303,23 @@ The completed R1 development scan followed this preparation contract:
 7. apply the R3x2 sampling mask only after Wave encoding;
 8. run lambda zero and verify the forward model, scaling, and orientation.
 
-Required synthetic checks:
+Required synthetic checks are complete:
 
-- PSF=1 reproduces the no-wave path.
-- Full-sampling Wave forward/reconstruction is internally consistent.
+- `PSF=1` reproduces the no-Wave path on all 12 real-data virtual coils; the
+  maximum relative complex L2 error is `2.7991e-7`.
+- Full-sampling Wave forward/inversion is internally consistent on all 12
+  real-data virtual coils; the maximum relative complex L2 error is
+  `3.0099e-7` and maximum exterior energy fraction is `4.7121e-14`.
 - The R3x2 mask is applied only after Wave encoding.
 - Acquired samples are unchanged and missing samples are exact zero.
 - Any future confirmation scan must use the same conventions but independently
   estimated maps and coil-compression basis.
+
+The hash-bound operator record is
+`evaluation/full_sampling_wave_operator_validation/operator_validation_manifest.json`
+below the private dataset output root. The standard preparation wrapper runs
+this gate after full Wave synthesis and before visual review, masking, or BART
+export.
 
 ## 6. Phase D: freeze the scaling contract — complete
 
@@ -528,6 +544,9 @@ independent validation. No R3 selection metrics were calculated.
 
 ## 11. Presentation design gates
 
+Presentation work is deferred at the user's request. The design below remains
+the frozen proposal rather than an active execution checklist.
+
 Retain the compact R3 panel as historical development/transfer context:
 qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,
 corrected LLR if useful, and restrained difference maps. Do not present R3
@@ -586,8 +605,10 @@ and `0.06552`; and mean axial SSIM is `0.9265`, `0.9280`, and `0.9150`.
 Directional losses occur on the expected changed axes. These are descriptive
 tradeoffs, not a selected winner.
 
-The next scientific action is user interpretation or presentation of these
-tradeoffs. Do not infer a preferred retrospective resolution automatically.
+Presentation and an independent confirmation scan are deferred at the user's
+request. No active scientific or implementation checklist item remains. The
+next optional action is a non-destructive final repository/output audit before
+any cleanup; do not infer a preferred retrospective resolution automatically.
 
 ## 14. Remaining work and deferred branches
 
@@ -595,9 +616,9 @@ tradeoffs. Do not infer a preferred retrospective resolution automatically.
    hash-bound explicit approval are recorded.
 2. **R1 retrospective descriptive analysis — complete:** native and matched
    metrics are manifested, with no automatic resolution selection.
-3. **Independent confirmation scan — unresolved:** no separate confirmation
-   scan has yet been designated. Do not call the selected parameter
-   independently confirmed.
+3. **Independent confirmation scan — deferred:** at the user's request, no
+   separate confirmation scan is being pursued now. Do not call the selected
+   parameter independently confirmed.
 4. **DICOM ranking — disabled:** the direct FFT RSS is the active R1 reference.
    Retain DICOM for metadata and qualitative context only unless a future
    dataset is explicitly qualified for intensity ranking.
@@ -606,4 +627,7 @@ tradeoffs. Do not infer a preferred retrospective resolution automatically.
 6. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
    full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
    sample preservation, lambda-zero scaling, norm restoration, orientation,
-   GPU `-g`, provenance, and resumability checks.
+   GPU `-g`, provenance, and resumability checks. The two source-operator gates
+   are now productionized and passed on every R1 virtual coil.
+7. **Presentation package — deferred:** retain the frozen proposal in Section
+   11, but do not generate it unless the user resumes that work.

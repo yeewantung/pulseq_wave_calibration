@@ -164,22 +164,31 @@ The current production path is:
    GRAPPA kernel only for a compatible measured R3x1 source. Both derive matrix
    allocation from the manifest and produce the same downstream array layout.
 4. `synthesize_wave_kspace.py` applies the theoretical sequence PSF.
-5. `export_bart_wave_inputs.py` masks and exports the synthetic Wave data.
-6. `export_bart_calibration_acs.py` exports measured no-wave ACS for one
+5. `validate_full_sampling_wave_operator.py` gates the real source with a
+   `PSF=1` no-Wave identity and an all-coil full-sampling Wave inverse check.
+6. `export_bart_wave_inputs.py` masks and exports the synthetic Wave data.
+7. `export_bart_calibration_acs.py` exports measured no-wave ACS for one
    reusable BART ESPIRiT calibration. Its manifest route explicitly selects
    direct fully sampled image data or a measured refscan.
-7. `run_bart_wave_lambda0.py` runs the unregularized acceptance reconstruction.
-8. `run_bart_regularization.py` calls the pinned upstream wrapper for one
+8. `run_bart_wave_lambda0.py` runs the unregularized acceptance reconstruction.
+9. `run_bart_regularization.py` calls the pinned upstream wrapper for one
    hashed, resumable wavelet or LLR case.
-9. `prepare_regularization_evaluation.py` consolidates complete NIfTI pairs,
+10. `prepare_regularization_evaluation.py` consolidates complete NIfTI pairs,
    selects one exact DICOM series by UID and unfiltered `ND` metadata, and
    records hashes and conversion provenance.
-10. `review_regularization_orientation.py` canonicalizes both inputs to RAS,
+11. `review_regularization_orientation.py` canonicalizes both inputs to RAS,
     audits all signed axis mappings, and produces explicitly labeled L/R QC
     figures without accepting a correction or running registration.
-11. `evaluate_regularization_volume.py` requires that recorded approval,
+12. `evaluate_regularization_volume.py` requires that recorded approval,
     estimates one proper rigid transform from lambda zero, applies it unchanged
     to every magnitude volume, and writes whole-volume metrics and plots.
+
+The manifest-backed preparation wrapper runs the operator validator immediately
+after full Wave synthesis. It verifies all virtual coils, uses no BART
+reconstruction or presentation processing, and writes
+`evaluation/full_sampling_wave_operator_validation/operator_validation_manifest.json`
+below the dataset output root. It must pass before the visual-review and target
+mask gates.
 
 The retrospective-resolution implementation is maintained separately in
 `tools/wave_retro_lr_recon/`; its CLI consumes an explicit source/config

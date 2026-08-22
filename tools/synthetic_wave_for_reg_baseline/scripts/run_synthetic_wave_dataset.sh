@@ -39,6 +39,8 @@ case "$MODE" in
             --dataset-manifest "$DATASET_MANIFEST" --resume
         python "$SCRIPT_DIR/synthesize_wave_kspace.py" \
             --dataset-manifest "$DATASET_MANIFEST" --resume
+        python "$SCRIPT_DIR/validate_full_sampling_wave_operator.py" \
+            --dataset-manifest "$DATASET_MANIFEST" --resume
         echo "Preparation complete. Review the full-Wave diagnostics before reconstruction."
         ;;
     reconstruct)

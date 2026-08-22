@@ -124,10 +124,15 @@ separately and only after full Wave encoding.
   differs from crop `0.8` lambda zero by relative L2 `0.033998`.
 - [x] Visually approve the crop `0.6` map montage and lambda-zero quicklook,
   then freeze those maps and lambda-zero output for every regularized candidate.
-- [ ] Check finite outputs, map support, data consistency, orientation/LR,
-  scaling, central slices, and full-volume geometry before regularization.
-- [ ] Add full-sampling and PSF=1 operator checks where they can be performed
-  without conflating reconstruction and presentation processing.
+- [x] Check finite outputs, map support, data consistency, orientation/LR,
+  scaling, central slices, and full-volume geometry before regularization. The
+  crop-`0.6` map/lambda-zero review, exact-grid gate, normalization records,
+  and later 49-case finite evaluation collectively retain these checks.
+- [x] Add full-sampling and `PSF=1` operator checks without reconstruction or
+  presentation processing. All 12 R1 virtual coils passed: maximum relative
+  complex L2 was `2.7991e-7` for `PSF=1` no-Wave identity and `3.0099e-7` for
+  full-sampling Wave inversion, both below `5e-6`. The canonical manifest is
+  `evaluation/full_sampling_wave_operator_validation/operator_validation_manifest.json`.
 
 ## Reference decision and DICOM review
 

@@ -147,6 +147,21 @@ extended readout, trajectory settings, diagnostics, and output paths from the
 manifest. It accepts an existing output only when `--resume` finds a complete
 matching synthesis with intact source-report and PSF provenance.
 
+Before visual review or target masking, run the real-data operator gates:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/validate_full_sampling_wave_operator.py \
+    --dataset-manifest /path/to/dataset.json --resume
+```
+
+The validator requires all virtual coils to pass both a source-grid `PSF=1`
+no-Wave identity check and inversion of the unmasked full-Wave data with the
+unit-magnitude theoretical PSF. It uses neither BART reconstruction nor
+presentation processing and writes a hash-bound manifest below
+`evaluation/full_sampling_wave_operator_validation` in the dataset output
+root. The standard `run_synthetic_wave_dataset.sh prepare` wrapper runs this
+gate automatically after synthesis.
+
 Inspect the magnitude and phase montages under the configured
 `outputs.wave_synthesis_dir`. Only after approving them, export the
 manifest-defined synthetic target sampling:

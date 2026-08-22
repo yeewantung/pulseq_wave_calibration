@@ -8,11 +8,21 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-The R1 native/matched review was explicitly approved and the approval-gated
-descriptive analysis is complete. Review or present its tradeoffs; do not infer
-an automatic preferred resolution. The next unresolved scientific item is an
-independent confirmation scan if one is acquired. Final repository/output
-cleanup remains deferred until presentation outputs are frozen.
+The R1 native/matched review was explicitly approved, the approval-gated
+descriptive analysis is complete, and the real-data source-operator gates pass
+on all 12 virtual coils. Presentation and an independent confirmation scan are
+deferred at the user's request. No active scientific or implementation
+checklist item remains. The next optional action is a non-destructive final
+repository/output audit before deciding whether any cleanup is warranted; do
+not infer an automatic preferred resolution.
+
+The hash-bound operator gate is
+`evaluation/full_sampling_wave_operator_validation/operator_validation_manifest.json`
+below the private R1 dataset output root. Maximum relative complex L2 error is
+`2.7991e-7` for `PSF=1` no-Wave identity and `3.0099e-7` for full-sampling Wave
+inversion; maximum recovered exterior energy fraction is `4.7121e-14`. The
+gate covers every virtual coil and uses neither BART reconstruction nor
+presentation processing.
 
 The review and analysis interfaces now accept path-agnostic JSON configuration
 while preserving the historical product launch behavior. The R1 outputs are
@@ -134,7 +144,10 @@ support from validated, compressed, fully sampled image k-space without
 interpolation or repeated compression; the compatible refscan route remains
 available. The R1 acquisition passed manifest-backed metadata inspection and
 sample probing, and the lambda-zero runner is manifest-aware.
-Remaining consumers are listed in `docs/dataset_portability_audit.md`.
+The portability audit in `docs/dataset_portability_audit.md` is reconciled:
+the active R1 preparation, reconstruction, and direct-reference evaluation
+route has no remaining manifest-consumer gap. Historical DICOM and partial-
+readout branches remain separate and out of scope.
 
 The active R1 dataset is referenced locally as `$R1_PRODUCT_ROOT`. Metadata inspection
 selects MID00198 `t1_mprage_sag_p2.dat` as the actual fully sampled source:
@@ -336,10 +349,11 @@ metadata; test partial-Fourier completion and crop the oversampled image FOV.
 NIfTI orientation correction and retrospective low-resolution code integration
 are complete. Fully sampled R1 preparation, parameter refinement, the frozen
 Wavelet decision, qualitative-only R3 transfer, and the R1 retrospective
-reconstructions are also complete. The next gate is R1 retrospective
-native/matched visual review, followed only after approval by descriptive
-resolution-tradeoff metrics. Parameters from the earlier R3 development sweep
-remain historical and R3-specific.
+reconstructions are also complete. The R1 retrospective native/matched visual
+review and approval-gated descriptive resolution-tradeoff analysis are
+complete. The source-operator checks now pass on all virtual coils; no further
+active gate remains. Parameters from the earlier R3 development sweep remain
+historical and R3-specific.
 
 The initial R1 Wavelet coarse grid was:
 

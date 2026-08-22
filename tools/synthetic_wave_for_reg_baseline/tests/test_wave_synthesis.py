@@ -14,6 +14,7 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from wave_synthesis import (  # noqa: E402
+    apply_wave_adjoint,
     apply_wave_forward,
     build_theoretical_psf,
     center_embed_readout,
@@ -69,6 +70,17 @@ class TheoreticalPsfTests(unittest.TestCase):
         local = apply_wave_forward(image, np.ones_like(image))
         expected = centered_fftn(image, axes=(0, 1, 2))
         np.testing.assert_allclose(local, expected, rtol=2e-6, atol=2e-6)
+
+    def test_unit_magnitude_psf_forward_adjoint_round_trip(self) -> None:
+        rng = np.random.default_rng(42)
+        image = (
+            rng.standard_normal((16, 7, 6)) + 1j * rng.standard_normal((16, 7, 6))
+        ).astype(np.complex64)
+        phase = rng.uniform(-np.pi, np.pi, image.shape)
+        psf = np.exp(1j * phase).astype(np.complex64)
+        wave_kspace = apply_wave_forward(image, psf)
+        recovered = apply_wave_adjoint(wave_kspace, psf)
+        np.testing.assert_allclose(recovered, image, rtol=3e-6, atol=3e-6)
 
 
 if __name__ == "__main__":

@@ -182,6 +182,31 @@ def apply_wave_forward(
     return centered_fftn(hybrid, axes=(1, 2), workers=workers)
 
 
+def apply_wave_adjoint(
+    wave_kspace: np.ndarray,
+    psf: np.ndarray,
+    *,
+    workers: int = 1,
+) -> np.ndarray:
+    """Apply the adjoint ``F_PE^-1 -> PSF* -> F_RO^-1`` Wave operator.
+
+    For the unit-magnitude theoretical PSF used by this workflow, the adjoint
+    is also the exact full-sampling inverse apart from floating-point error.
+    """
+    wave_kspace = np.asarray(wave_kspace, dtype=np.complex64)
+    psf = np.asarray(psf, dtype=np.complex64)
+    if wave_kspace.shape != psf.shape or wave_kspace.ndim != 3:
+        raise ValueError(
+            "Wave k-space and PSF must share a 3D shape; "
+            f"got {wave_kspace.shape} and {psf.shape}."
+        )
+    hybrid = centered_fftn(
+        wave_kspace, axes=(1, 2), inverse=True, workers=workers
+    )
+    hybrid *= np.conjugate(psf)
+    return centered_fftn(hybrid, axes=(0,), inverse=True, workers=workers)
+
+
 def sha256_file(path: str | Path, chunk_bytes: int = 8 * 1024 * 1024) -> str:
     """Return a streaming SHA-256 digest for provenance."""
     digest = hashlib.sha256()
