@@ -263,5 +263,7 @@ separately and only after full Wave encoding.
   `.example.json` plus ignored `.local.json` configuration.
 - [x] Remove private absolute paths and server startup locations from the
   current tracked source, documentation, tests, and configuration.
-- [ ] Rewrite all reachable commits to remove historical private-path strings,
-  audit every rewritten commit, and force-update the public branch.
+- [x] Rewrite all 79 reachable commits after creating a verified recovery
+  bundle; the full-history audit contains zero private-path or identity matches.
+- [ ] Force-update the public branch with the rewritten history, then verify its
+  advertised tip before declaring the cleanup complete.

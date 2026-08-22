@@ -200,7 +200,7 @@ $REPOSITORY_ROOT
 The accepted R3x2 evaluation is commit:
 
 ```text
-28f3f12 Add R3x2 regularization sweep evaluation
+1026ee9 Add R3x2 regularization sweep evaluation
 ```
 
 This cleanup/plan update may be uncommitted. Check `git status --short` before
