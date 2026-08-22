@@ -15,6 +15,11 @@ is derived from the same raw acquisition without GRAPPA, SENSE, Wave encoding,
 or regularization. DICOM remains available for metadata and qualitative review,
 but its voxel intensities must not enter parameter selection.
 
+The active next gate is retrospective low-resolution visual review. Generalize
+the historical product-specific review for the R1 Wavelet study, generate
+native physical-coordinate and explicitly matched-grid figures, and obtain
+user approval before calculating descriptive resolution-tradeoff metrics.
+
 ## Frozen source decision
 
 - [x] Use the fully sampled no-Wave source:
@@ -264,9 +269,26 @@ separately and only after full Wave encoding.
   GPU `-g`; estimate maximum eigenvalue separately for each target matrix.
 - [x] Pass non-writing structural validation for `256x256x172`,
   `256x172x256`, and `256x204x204` logical matrices.
-- [ ] Run the three R1 cases in tmux and retain their completed manifests.
+- [x] Run the three R1 cases in tmux and retain their completed manifests. The
+  batch and all case manifests report `complete`; all cases used frozen
+  Wavelet `lambda=1.5e-2`, FISTA 100 iterations, tolerance `1e-6`,
+  case-specific maximum-eigenvalue estimation, and BART GPU `-g`. Their
+  logical `(RO, LIN, PAR)` matrices are `256x256x172`, `256x172x256`, and
+  `256x204x204`; the canonical-RAS physical XYZ NIfTI shapes are
+  `172x256x256`, `256x172x256`, and `204x204x256`.
+- [ ] Generalize the historical product GRAPPA/corrected-LLR review interface
+  for the R1 direct-FFT reference, full-resolution frozen Wavelet result, and
+  three low-resolution Wavelet results. Keep real paths in ignored local
+  configuration or launcher files and preserve historical compatibility.
 - [ ] Generate and visually approve native-grid and matched-grid R1 review
-  figures before calculating descriptive resolution-tradeoff metrics.
+  figures before calculating descriptive resolution-tradeoff metrics. Native
+  panels must preserve each matrix and use physical RAS coordinates; matched
+  panels must label display-only interpolation explicitly. Use neither BET nor
+  DICOM for the visual review.
+- [ ] After visual approval, generalize and run descriptive R1
+  resolution-tradeoff analysis. Use the approved `f=0.59` plus one-voxel BET
+  mask only for metrics, avoid true-SNR/CNR claims, and perform no composite
+  ranking or automatic resolution selection.
 
 ## Repository privacy and reproducibility
 

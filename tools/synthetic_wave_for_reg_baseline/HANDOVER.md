@@ -2,20 +2,44 @@
 
 Updated: 2026-08-21, America/New_York
 
-Read `EXPERIMENT_PLAN.md` first. It is the active scientific and implementation
-plan. The old R3x1 tracker is historical only.
+Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
+then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
+record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Run the three retrospective low-resolution cases on the fully sampled R1
-source with frozen Wavelet `lambda=1.5e-2`. Use the ignored machine-local
-`scripts/run_r1_retrospective_low_resolution.local.sh --resume` launcher in
-tmux. The tracked example launcher and configuration contain placeholders;
-real paths remain only in ignored `.local.sh` and `.local.json` files. The
-configuration has passed structural validation without writing output and
-resolves logical matrices `256x256x172`, `256x172x256`, and `256x204x204`.
-Each case estimates its own maximum eigenvalue while preserving the selected
-regularizer, lambda, FISTA iterations/tolerance, and mandatory GPU `-g`.
+Adapt the physical-coordinate retrospective low-resolution review to the
+completed R1 Wavelet study, then generate native-grid and matched-grid figures
+for explicit user approval. The R1 review should compare the direct FFT RSS
+reference, the full-resolution frozen Wavelet result, and all three
+low-resolution Wavelet cases. Keep native data untouched; resample only the
+clearly labelled matched-grid display. Use physical RAS coordinates and
+display-only scaling. Do not calculate resolution-tradeoff metrics until the
+user approves the figures.
+
+Do not run `scripts/run_retrospective_low_resolution_review.sh` unchanged for
+this task. That entry point and its current scientific labels are specific to
+the historical product GRAPPA/corrected-LLR study. Generalize the review code
+through a path-agnostic tracked interface plus an ignored machine-local
+configuration or launcher. In particular, remove hard-coded GRAPPA, LLR, and
+regularization labels from the reusable code. Preserve the existing historical
+product behavior.
+
+The three R1 retrospective reconstructions completed successfully on
+2026-08-21 local time. The batch and all case manifests report `complete`;
+every reconstruction used frozen Wavelet `lambda=1.5e-2`, FISTA with 100
+iterations and tolerance `1e-6`, a case-specific estimated maximum eigenvalue,
+and BART GPU `-g`. Canonical-RAS magnitude/phase exports are finite. The
+logical `(RO, LIN, PAR)` matrices are `256x256x172`, `256x172x256`, and
+`256x204x204`; their physical XYZ NIfTI shapes are `172x256x256`,
+`256x172x256`, and `204x204x256`. Achieved changed-axis resolutions are
+`1.488372` mm and `1.254902` mm. The ignored local configuration identifies
+the private output root; do not copy its absolute paths into tracked files.
+The tracked entry point is `scripts/run_r1_retrospective_low_resolution.sh`;
+copyable path-agnostic templates are
+`scripts/run_r1_retrospective_low_resolution.example.sh` and
+`requirements/retrospective_low_resolution_r1.example.json`. The populated
+`.local.*` counterparts are intentionally ignored.
 
 The R3 transfer review is complete and explicitly approved. Its manifest
 records that the frozen regularized result is visibly smoother, no metrics
@@ -100,14 +124,14 @@ derives its allocation, trajectory settings, diagnostics, and provenance from
 the contract. Its separate exporter applies the declared retrospective target
 lattice and full-PE2 ACS band only after Wave encoding, validates every masked
 sample, and leaves the accepted synthesis untouched. Measured ACS export is
-now manifest-aware as well. The incoming R1 route copies the declared ACS
+now manifest-aware as well. The active R1 route copies the declared ACS
 support from validated, compressed, fully sampled image k-space without
 interpolation or repeated compression; the compatible refscan route remains
-available. The new R1 acquisition is ready, its manifest-backed metadata
-inspection and sample probe pass, and the lambda-zero runner is manifest-aware.
+available. The R1 acquisition passed manifest-backed metadata inspection and
+sample probing, and the lambda-zero runner is manifest-aware.
 Remaining consumers are listed in `docs/dataset_portability_audit.md`.
 
-The new R1 dataset is referenced locally as `$R1_PRODUCT_ROOT`. Metadata inspection
+The active R1 dataset is referenced locally as `$R1_PRODUCT_ROOT`. Metadata inspection
 selects MID00198 `t1_mprage_sag_p2.dat` as the actual fully sampled source:
 256 cubed logical matrix, 64 coils, complete duplicate-free PE support, and no
 refscan. MID00196 `pulseq151fix_mprage.dat` is measured R3x1 and must not enter
@@ -137,9 +161,12 @@ FSL BET:
 Always use GPU (`-g`) for every BART reconstruction. Do not silently fall back
 to CPU; stop and document any command-specific incompatibility.
 
-The fixed reference mask uses FSL BET's robust center estimation with a
-fractional threshold of `0.55`. The earlier non-robust `0.25` mask included face
-and neck and is retained only under `diagnostics/rejected_bet_loose_mask_f025`.
+The approved metrics-only reference mask uses FSL BET's robust center
+estimation with fractional threshold `0.59`, followed by a one-voxel outward
+dilation. The user visually approved this boundary and its L/R orientation.
+The `0.55` expanded candidate was too large, the `0.60` expanded candidate was
+slightly too small, and both are retained only as rejected diagnostics. Do not
+use BET for reconstruction or display.
 
 ## R3 presentation-optimization continuation state
 
@@ -200,15 +227,18 @@ Repository:
 $REPOSITORY_ROOT
 ```
 
-The accepted R3x2 evaluation is commit:
+The repository was clean and synchronized with `origin/main` immediately
+before this handover refresh. The preceding R1 retrospective launcher commit
+is:
 
 ```text
-1026ee9 Add R3x2 regularization sweep evaluation
+c3225b1 Add R1 retrospective Wavelet launcher
 ```
 
-This cleanup/plan update may be uncommitted. Check `git status --short` before
-working. The historical tracker was moved to `docs/archive/`, and the active
-plan is `EXPERIMENT_PLAN.md`.
+Use the newer documentation commit containing this handover after the refresh
+is committed. Check `git status --short --branch` before working. The
+historical tracker is under `docs/archive/`, and the active plan is
+`EXPERIMENT_PLAN.md`.
 
 ## Dataset roles and baseline status
 
@@ -239,10 +269,10 @@ have the identical 404-sample, center-148 partial readout. They do not solve
 the baseline problem. Subject 6 contains prior `.nii`/`.mat` reconstructions;
 no DICOM files were found in either added folder during this inspection.
 
-The user is collecting a new R1 dataset for final refinement. These older
-partial-readout scans are now fallbacks only. Do not implement or freeze their
-completion unless the new acquisition fails qualification and the fallback is
-explicitly reactivated.
+The fully sampled R1 dataset has been collected, qualified, reconstructed, and
+used to freeze the MPRAGE Wavelet selection. These older partial-readout scans
+are fallbacks only. Do not implement or freeze their completion unless the
+fallback is explicitly reactivated.
 
 An additional candidate inspected on 2026-08-20 was:
 
@@ -273,14 +303,14 @@ Select the 256-image `ND,NORM` series UID
 `DIS2D/DIS3D` series. Do not use its intensity profile for temporary
 regularization ranking.
 
-The R3 data may be tuned now for preliminary presentation results. Since it
-will no longer be an untouched holdout, the later application of R1-selected
-parameters must be called a cross-dataset transfer check rather than an
-independent validation.
+The historical R3 development data were tuned for preliminary presentation
+results and are not an untouched holdout. The later application of the frozen
+R1-selected parameter is therefore a qualitative cross-dataset transfer check,
+not independent validation; that transfer is complete and must not be retuned.
 
-## R1 readout finding
+## Historical fallback R1 readout finding
 
-For all four inspected R1 TWIX files:
+For all four older fallback R1 TWIX files:
 
 ```text
 nominal oversampled Fourier columns: 512
@@ -299,12 +329,14 @@ metadata; test partial-Fourier completion and crop the oversampled image FOV.
 ## Frozen regularization decisions
 
 NIfTI orientation correction and retrospective low-resolution code integration
-are complete. Remaining execution order is the user-run retrospective batch,
-dataset-portability work, and then qualification/refinement on the new R1
-acquisition. Parameters selected during R3 development are provisional and
-R3-specific.
+are complete. Fully sampled R1 preparation, parameter refinement, the frozen
+Wavelet decision, qualitative-only R3 transfer, and the R1 retrospective
+reconstructions are also complete. The next gate is R1 retrospective
+native/matched visual review, followed only after approval by descriptive
+resolution-tradeoff metrics. Parameters from the earlier R3 development sweep
+remain historical and R3-specific.
 
-Wavelet coarse sweep after the new R1 development scan is qualified:
+The initial R1 Wavelet coarse grid was:
 
 ```text
 lambda = 0, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2
@@ -320,21 +352,30 @@ and does not expose PICS `-w`/`-S`. Record that norm and restore output scale in
 the wrapper when needed. `-e` is maximum-eigenvalue/step-size information, not
 intensity scaling.
 
+The final R1 refinement and targeted evaluation selected and froze Wavelet
+`lambda=1.5e-2` for MPRAGE. LLR remains a documented comparison and is not
+selected. Do not retune lambda during the retrospective low-resolution study
+or the R3 qualitative transfer.
+
 ## Evaluation decisions
 
-- During temporary R3 development, use no-wave GRAPPA as the single metric
-  reference.
-- Keep DICOM intensity metrics out of provisional regularization selection.
-- Preserve a configurable DICOM/reference mode for the incoming R1 dataset.
-- Apply the approved DICOM-derived FSL BET mask only during metric
-  calculation, not reconstruction or display.
-- Visually approve mask and L/R orientation.
-- Estimate one proper rigid transform from lambda zero and reuse it unchanged.
-- Primary ranking uses GRAPPA-referenced brain-mask structural/error/detail
-  metrics during temporary development.
-- Background noise and missed anatomy remain separately reported QC.
-- The approved historical R3 orientation used permutation `[0,1,2]` and RAS
-  flips `[true,false,true]`; revalidate on R1.
+- The approved R1 quantitative reference is direct FFT RSS of the fully
+  sampled, compressed no-Wave k-space. GRAPPA, SENSE, and DICOM are not R1
+  ranking references.
+- DICOM remains metadata/qualitative context only; Prescan Normalize and coil
+  combination can change its intensity profile.
+- Apply only the approved BET `f=0.59` plus one-voxel mask during metric
+  calculation, never during reconstruction or display.
+- The direct FFT reference and full-resolution candidates passed exact-grid
+  geometry, so their selection metrics use no registration or interpolation.
+- For retrospective low-resolution review, preserve native grids and use
+  physical coordinates; matched-grid resampling is explicitly display-only.
+- After visual approval, calculate descriptive resolution tradeoffs without a
+  composite score or automatic resolution selection. BET remains metrics-only.
+- Background noise and missed anatomy remain separately reported QC; do not
+  claim true SNR/CNR from nearly zero BART air support.
+- Canonical Wave NIfTI exports require RAS orientation and recorded affine-axis
+  flips `[true,false,true]`.
 
 ## Retrospective low-resolution integration
 
@@ -423,6 +464,16 @@ under `diagnostics/rejected_resolution_analysis_background_noise_proxy`.
 Background statistics remain QC only; the accepted summary uses a fixed
 smooth-brain signal/local-residual proxy and explicitly does not call it SNR.
 
+The fully sampled R1 retrospective batch uses the same target matrices but the
+frozen Wavelet `lambda=1.5e-2` configuration instead of the historical
+corrected LLR setting. All three R1 cases and their canonical-RAS exports are
+complete. The historical review and analysis launchers must be generalized
+before applying them to R1 because their current inputs, labels, and scientific
+scope are product GRAPPA/corrected-LLR-specific. Preserve backward
+compatibility, keep private paths in ignored local files, and require user
+approval of the R1 native/matched review before running R1 descriptive
+metrics.
+
 ## Accepted historical R3 outputs
 
 Accepted R3x1 5x5x5-derived synthetic Wave tree:
@@ -468,8 +519,14 @@ python -m unittest discover \
   -s tools/synthetic_wave_for_reg_baseline/tests \
   -p 'test_*.py'
 
-git status --short
+python -m unittest discover \
+  -s tools/wave_retro_lr_recon/tests \
+  -p 'test_*.py'
+
+git status --short --branch
 ```
 
-The last complete run before this documentation/cleanup pass had 68 passing
-tests.
+Run both the synthetic-Wave baseline suite and the retrospective-resolution
+suite before handing off code changes. Record the observed test counts in the
+commit or handoff message rather than preserving a count here that can become
+stale.

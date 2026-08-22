@@ -8,30 +8,29 @@ preserved as a historical record in
 The dataset-specific execution checklist is
 `docs/r1_dataset_processing_todo.md`.
 
-The execution order is now:
+The active execution order is now:
 
-1. use the no-wave GRAPPA reconstruction from the existing R3x1 product scan
-   as the single temporary development reference;
-2. finish the reusable infrastructure needed by later stages: retain the
-   completed NIfTI orientation correction and retrospective low-resolution
-   support, then remove R3-specific geometry/configuration assumptions from
-   the R1 path;
-3. qualify the newly acquired R1 dataset; and
-4. switch the final parameter-selection and DICOM-ranking workflow to that R1
-   dataset, then apply the R1-selected settings back to R3 without retuning.
+1. preserve the completed fully sampled R1 preparation, direct-FFT-reference
+   parameter evaluation, frozen Wavelet `lambda=1.5e-2` decision, and approved
+   qualitative-only R3 transfer;
+2. preserve the completed three-case R1 retrospective low-resolution
+   reconstruction batch;
+3. generalize the historical product-specific visual-review interface for the
+   R1 Wavelet study and obtain explicit approval of native-grid and matched-grid
+   figures; and
+4. only after that approval, generalize and run descriptive R1
+   resolution-tradeoff metrics without automatic resolution selection.
 
-The first-stage R3 parameters are provisional and may be tuned to that
-dataset. Only the later R1 development/confirmation experiment is intended to
-select the more transferable final parameters. Results selected against the
-temporary R3 reference must be labelled developmental and repeated after the
-new R1 dataset is available.
+The earlier R3 parameters and GRAPPA-referenced evaluation remain historical
+development results. The R1-selected setting is frozen and must not be retuned
+on R3 or independently for the retrospective low-resolution cases.
 
 As of 2026-08-21, the fully sampled R1 source preparation, synthetic-Wave
 encoding, GPU lambda-zero/coarse/refined/targeted reconstructions, approved-mask
 metric support, combined 49-case exact-grid evaluation, frozen Wavelet
-selection, and qualitative R3 transfer are complete. The next reconstruction
-is the three-case R1 retrospective low-resolution study using that frozen
-Wavelet setting.
+selection, qualitative R3 transfer, and all three R1 retrospective
+low-resolution reconstructions are complete. The next action is visual review,
+not another reconstruction.
 
 ## Current implementation and execution status
 
@@ -52,15 +51,18 @@ Completed:
 - [x] combined coarse/refined exact-grid validation and fixed-mask evaluation;
 - [x] frozen R1 Wavelet selection and qualitative-only R3 transfer approval;
 - [x] structurally validated R1 retrospective low-resolution configuration and
-  private/public launcher split.
+  private/public launcher split;
+- [x] completed all three R1 retrospective low-resolution Wavelet
+  reconstructions with case-specific maximum-eigenvalue estimation and GPU
+  `-g`.
 
 Pending:
 
 - [x] identify the fully sampled R1 TWIX and candidate Wave sequence;
 - [x] create its concrete no-DICOM-reference manifest and pass measured
   acquisition inspection;
-- [ ] decide whether the acquisition supplies separate development and
-  confirmation scans;
+- [ ] designate an independent confirmation scan if one is acquired; the
+  current R1 parameter selection is not independently confirmed;
 - [x] run and visually qualify the real R1 preparation path through measured
   ACS export;
 - [x] make lambda-zero BART reconstruction manifest-aware;
@@ -77,12 +79,17 @@ Pending:
 - [x] freeze Wavelet `lambda=1.5e-2` as the R1-selected MPRAGE regularization;
 - [x] apply it unchanged to R3 as a qualitative cross-dataset transfer check;
   do not calculate selection metrics or retune on R3.
-- [ ] run the three retrospective low-resolution R1 cases with frozen Wavelet
-  `lambda=1.5e-2` and case-specific maximum-eigenvalue estimation.
+- [x] run the three retrospective low-resolution R1 cases with frozen Wavelet
+  `lambda=1.5e-2` and case-specific maximum-eigenvalue estimation;
+- [ ] generalize the native/matched physical-coordinate review for the R1
+  direct-FFT, full-resolution Wavelet, and low-resolution Wavelet inputs;
+- [ ] generate the R1 review package and obtain explicit visual approval;
+- [ ] after approval, generalize and run descriptive R1 resolution-tradeoff
+  analysis without an automatic winner.
 
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
-partial-readout R1 scans, DICOM-intensity ranking before the new R1 DICOM is
-qualified, and use of BET outside metric calculation.
+partial-readout R1 scans, DICOM-intensity ranking for the current R1 dataset,
+and use of BET outside metric calculation.
 
 The selected fully sampled source is MID00198 in the 2026-08-21 product
 folder. It has a complete 256 cubed logical grid, 64 coils, and no refscan;
@@ -91,7 +98,7 @@ k-space assembly. MID00196 is measured R3x1 and is explicitly excluded from
 the direct R1 route. Prescan Normalize was enabled for the available DICOM, so
 the initial R1 experiment has no DICOM or other intensity-ranking baseline.
 
-### Decision recorded 2026-08-20: temporary references
+### Historical R3 reference decision and final R1 reference
 
 The BART `ecalib -I` pilot did not correct the relevant receive-profile
 mismatch. Its brain-core-to-shell median ratio was `0.895`, compared with
@@ -101,23 +108,27 @@ DICOM ratios were `1.347` and `0.655`, respectively. Retain the pilot and its
 manifest as a negative result, but do not use `ecalib -I` for the production
 path or continue tuning regularization against either DICOM intensity profile.
 
-The completed preliminary R3 work uses no-wave GRAPPA as its single temporary
-metric reference. No GRAPPA-versus-SENSE comparison or agreement gate is
-required. Keep SENSE as an existing optional diagnostic only, and defer the
-no-wave BART PICS regularization branch. Apply the approved BET mask only while
-calculating metrics; do not use it to alter reconstruction or display. DICOM
-voxel intensities must not enter provisional R3 ranking, but the evaluator
-must retain a configurable DICOM-reference mode for the new R1 dataset.
+The completed preliminary R3 work used no-wave GRAPPA as its single temporary
+metric reference. No GRAPPA-versus-SENSE comparison or agreement gate was
+required. SENSE remains an optional historical diagnostic, and the no-wave
+BART PICS branch remains deferred.
+
+For the qualified fully sampled R1 experiment, direct FFT RSS of the compressed
+no-Wave k-space is the approved quantitative reference. GRAPPA, SENSE, and
+DICOM are not R1 ranking references. Apply the approved BET `f=0.59` plus
+one-voxel mask only while calculating metrics; do not use it to alter
+reconstruction or display. DICOM-reference support may remain configurable for
+a future qualified dataset, but it is disabled for this experiment.
 
 ## 1. Scientific roles of the datasets
 
-### New R1 data for final parameter refinement
+### Fully sampled R1 data used for final parameter refinement
 
-A new R1 dataset has been collected and is the intended final baseline. Before
-reconstruction, inspect its sampling, readout completeness, DICOM processing,
-coil configuration, geometry, and sequence definitions rather than reusing
-current assumptions. Assign independent development and confirmation scans
-when the acquisition provides enough data.
+The R1 dataset was collected, inspected, and accepted as the final baseline.
+Its sampling, readout completeness, DICOM processing, coil configuration,
+geometry, and sequence definition were measured rather than inherited from R3.
+The acquisition did not establish a separate confirmation scan, so do not
+describe the parameter selection as independently confirmed.
 
 The older R1 candidates below are retained as documented fallbacks, not the
 active final-selection dataset.
@@ -146,14 +157,14 @@ partial-Fourier completion can affect
 sharpness, phase, noise texture, and the Wave forward model, which can confound
 regularization selection.
 
-Before the planned new acquisition, no better R1 dataset was available. The
+Before the now-completed fully sampled acquisition, no better R1 dataset was
+available. The
 inspected 2026-06-01 MID00077 `pulseq_mprage_nowave_full` scan is nominally
 256 x 256 x 192 but is actually R2x2 in PE with a central 32 x 32 calibration
 region, so it cannot replace the R1 baseline. Defer implementation of the
-older scans' readout completion while the new acquisition is pending. If the
-new dataset is not
-usable, reactivate the 2021-05-10 fallback only after freezing and validating
-one completion method, stating the limitation explicitly, and reserving at
+older scans' readout completion. Reactivate the 2021-05-10 fallback only after
+freezing and validating one completion method, stating the limitation
+explicitly, and reserving at
 least one independent scan for confirmation.
 
 ### Preliminary optimization, presentation, and later transfer check
@@ -164,15 +175,14 @@ Use the R3x1 product dataset referenced locally as:
 $R3_PRODUCT_ROOT
 ```
 
-This accelerated dataset is not a true parameter-selection baseline. It has
+This accelerated dataset is not a true parameter-selection baseline. It had
 two explicitly different roles:
 
-1. use it now for provisional R3-specific optimization and presentation
-   results; and
-2. after R1 refinement, rerun the comparison with the R1-selected parameters
-   as a cross-dataset transfer check without further tuning.
+1. provisional R3-specific optimization and presentation results; and
+2. a cross-dataset transfer check with the R1-selected parameter and no
+   further tuning. Both roles are complete.
 
-For current development, compare:
+The historical development comparison used:
 
 1. R3x1 no-wave GRAPPA as the single temporary reference;
 2. R3x2 synthetic-Wave BART reconstruction with the appropriate provisional
@@ -216,11 +226,11 @@ For FSL BET:
 . "${FSLDIR}/etc/fslconf/fsl.sh"
 ```
 
-## 3. Phase A: preliminary R3x1 optimization and presentation
+## 3. Phase A: preliminary R3x1 optimization and presentation — complete
 
-Proceed first with the existing R3x1 product and synthetic R3x2 Wave dataset;
-do not wait for the new R1 acquisition. Use no-wave GRAPPA for temporary
-quantitative development and reserve DICOM for qualitative display.
+This completed phase used the existing R3x1 product and synthetic R3x2 Wave
+dataset. It used no-wave GRAPPA for temporary quantitative development and
+reserved DICOM for qualitative display.
 
 1. retain the approved fixed BET mask and L/R orientation, applying the mask
    only when calculating metrics;
@@ -235,17 +245,13 @@ quantitative development and reserve DICOM for qualitative display.
 Do not overwrite the accepted historical sweep. Store the new corrected and
 masked-evaluation results in a separately manifested output tree.
 
-## 4. Phase B: qualify the new R1 acquisition
+## 4. Phase B: qualify the R1 acquisition — complete
 
-This is the hard gate before later R1 Wave synthesis and final parameter
-refinement. First audit the newly acquired R1 raw data and DICOMs. Confirm the
-actual PE sampling, readout support and center, oversampling, matrix/FOV,
-orientation, coil configuration, and vendor processing. Do not assume that it
-matches either the 2026 R3 scan or the older R1 scans.
-
-If the new R1 acquisition is fully sampled and has complete usable readout,
-freeze it directly as the final development/confirmation source. If it has
-partial readout, define and validate completion before any parameter selection.
+This hard gate passed before R1 Wave synthesis and final parameter refinement.
+Measured inspection confirmed a fully sampled `256^3` logical grid, complete
+usable readout, 64 coils, and no refscan. The image stream supplied the frozen
+64-to-12 coil-compression basis and direct no-Wave source. No separate
+confirmation scan has yet been designated.
 
 ### Deferred fallback: older R1 partial-readout completion
 
@@ -274,9 +280,9 @@ produce a 256 x 256 x 192 reference with correct anatomy and a verified L/R
 convention. The parameter-selection claim must then be qualified as conditional
 on the frozen readout completion.
 
-## 5. Phase C: prepare the R1 synthetic-Wave experiment
+## 5. Phase C: prepare the R1 synthetic-Wave experiment — complete
 
-For each selected development/holdout R1 scan:
+The completed R1 development scan followed this preparation contract:
 
 1. load the full raw multi-coil volume using the accepted readout method;
 2. estimate and record the coil-compression basis and retained energy;
@@ -293,10 +299,10 @@ Required synthetic checks:
 - Full-sampling Wave forward/reconstruction is internally consistent.
 - The R3x2 mask is applied only after Wave encoding.
 - Acquired samples are unchanged and missing samples are exact zero.
-- Development and holdout scans use the same conventions but independent maps
-  and coil-compression bases.
+- Any future confirmation scan must use the same conventions but independently
+  estimated maps and coil-compression basis.
 
-## 6. Phase D: freeze the scaling contract
+## 6. Phase D: freeze the scaling contract — complete
 
 The custom `bart wave` command unconditionally divides k-space by its global
 L2 norm. It has no PICS-style `-w` or `-S` option. Therefore:
@@ -315,19 +321,19 @@ For no-wave `bart pics` validation runs, use and record its automatic/default
 data scale and `-S` output rescaling. Do not assume that a numerical lambda is
 directly interchangeable between `pics` and the custom `wave` command.
 
-## 7. Phase E: final regularization refinement on R1
+## 7. Phase E: final regularization refinement on R1 — complete
 
 ### Wavelet coarse sweep
 
-Run the development scan first with:
+The development scan began with:
 
 ```text
 lambda = 0, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2
 ```
 
-Use GPU FISTA with otherwise frozen settings. Include lambda zero in all plots
-even though it is not a regularized case. Refine only around a genuine optimum
-after the coarse metrics and images have been reviewed.
+GPU FISTA used otherwise frozen settings, and lambda zero remained in the plots
+as a control even though it is not regularized. Coarse review led to the
+completed refined and targeted grids documented in the R1 checklist.
 
 ### LLR correctness gate
 
@@ -349,8 +355,8 @@ Before any new LLR sweep:
 The R1 block-8 correctness gate passed on 2026-08-21: recombined split-complex
 lambda zero differed from native-complex FISTA lambda zero by relative L2
 `2.73366e-6`, below the fixed `1e-5` limit. The presentation-oriented coarse
-cases `2e-5`, `1e-4`, and `5e-4` are complete. Block-size refinement remains
-deferred.
+cases `2e-5`, `1e-4`, and `5e-4`, and the later block-size refinement over
+blocks 4, 8, and 16, are complete.
 
 Do not use the old LLR sweep to select parameters. A brain mask may make small
 differences easier to measure, but it does not correct the singleton-dimension
@@ -358,14 +364,15 @@ configuration.
 
 ### Selection rule
 
-After the baseline dataset is chosen, designate one scan for development and
-an independent scan for confirmation. Select a narrow candidate range on the
-development scan and confirm it without retuning. Lock the method and parameter
-before running the R1-to-R3 transfer comparison.
+The intended design was one development scan plus independent confirmation.
+Only the development scan has been designated, so the frozen Wavelet setting
+must not be described as independently confirmed. The method and parameter
+were nevertheless locked before the completed qualitative R1-to-R3 transfer,
+and no retuning occurred on R3.
 
 ## 8. Phase F: standardized evaluation
 
-During temporary R3 development:
+The completed historical R3 development evaluation:
 
 1. canonicalize no-wave GRAPPA and all candidates to the same RAS grid and
    verify orientation explicitly;
@@ -379,23 +386,27 @@ During temporary R3 development:
 6. keep DICOM intensity metrics out of regularization selection, while retaining
    raw and normalized DICOM for clearly labelled qualitative figures.
 
-After the new R1 dataset is qualified, replace this temporary reference
-contract with a dataset-specific final contract. For each R1 subject/scan:
+The qualified R1 dataset replaced that temporary contract as follows:
 
-1. convert the normalized unfiltered DICOM to canonical RAS;
-2. create one fixed BET brain mask from the reference only;
-3. visually approve the BET boundary and L/R orientation;
-4. estimate one proper rigid registration from lambda zero;
-5. apply the exact same transform to all cases;
-6. calculate brain-mask NRMSE, RMSE, MAE, SSIM, NCC, and gradient/detail
-   metrics;
-7. retain background-noise and missed-anatomy measures as separately labelled
-   QC, not the primary parameter-selection score; and
-8. save CSV, JSON provenance, and plots.
+1. use direct FFT RSS of the fully sampled compressed no-Wave k-space as the
+   quantitative reference; exclude DICOM, GRAPPA, and SENSE intensities;
+2. use only the visually approved BET `f=0.59` plus one-voxel mask, and only
+   for metrics;
+3. require exact canonical-RAS geometry for the full-resolution reference and
+   candidates; the 49-case gate passed without registration or interpolation;
+4. undo recorded candidate export scaling before fitting one positive LSQ
+   scalar inside the fixed mask;
+5. calculate brain-mask NRMSE, RMSE, MAE, SSIM, NCC, and gradient/detail
+   metrics without histogram matching or bias correction;
+6. retain background and missed-anatomy measures as separately labelled QC;
+7. save CSV, JSON provenance, common-window figures, and input/output hashes;
+   and
+8. perform no composite scoring or automatic selection.
 
-The approved R3 pilot orientation mapping was identity axis permutation with
-RAS-grid flips `[true, false, true]`. Revalidate rather than silently assume
-that mapping for the new R1 acquisition or an older fallback scan.
+The shared Wave exporter now produces canonical RAS with affine-axis flips
+`[true, false, true]`; R1 full-resolution geometry was explicitly validated.
+Retrospective low-resolution native grids differ by design, so compare native
+images in physical coordinates and label any matched-grid interpolation.
 
 ## 9. Phase G: retrospective low-resolution reconstruction
 
@@ -425,6 +436,13 @@ Production preparation and all three corrected-LLR reconstructions completed
 on 2026-08-21. Their manifests, finite-value checks, matrices, voxel sizes,
 canonical-RAS affines, and GPU BART logs pass.
 
+The separate fully sampled R1 batch also completed on 2026-08-21 local time.
+It uses the frozen Wavelet `lambda=1.5e-2`, FISTA with 100 iterations and
+tolerance `1e-6`, case-specific maximum-eigenvalue estimation, and mandatory
+GPU `-g`. Its batch and all three case manifests report `complete`; all
+canonical-RAS NIfTI exports are finite and have the expected physical XYZ
+shapes `172x256x256`, `256x172x256`, and `204x204x256`.
+
 The current tool's phase-encoding-only crop is the intended behavior. For
 sagittal MPRAGE, physical X maps to logical partition/PE2, physical Y maps to
 logical line/PE1, and physical Z maps to logical readout. Never crop the
@@ -448,11 +466,13 @@ and `1.254902` mm. Crop the no-wave source in PE before Wave encoding and
 rebuild the target PE-grid PSF; the focused operator test confirms that
 cropping already Wave-encoded data is not an equivalent ordering.
 
-Evaluate the expected SNR/CNR gain together with the loss in sharpness and
-spatial resolution. Preserve native-resolution images and create explicitly
+Evaluate descriptive signal/local-residual, fidelity, and sharpness tradeoffs.
+Do not call a background-derived quantity true SNR/CNR because BART air support
+is nearly zero. Preserve native-resolution images and create explicitly
 labelled reference-grid resamples only for matched visual/metric comparisons.
 
-The first manifested visual-review package now provides both representations:
+The historical product corrected-LLR visual-review package provides both
+representations:
 native grids use the nearest slice to one shared RAS location with physical-mm
 extents and no spatial resampling; matched grids use linear interpolation onto
 the full-resolution 1 mm RAS grid. Both use display-only per-volume positive
@@ -461,8 +481,8 @@ an older full-resolution LLR NIfTI that predated the canonical-RAS exporter;
 that review is retained under a clearly rejected diagnostics directory. The
 existing BART result was re-exported without reconstruction, and the review
 code now rejects Wave NIfTIs lacking the corrected exporter sidecar contract.
-Visual approval of the corrected native/matched package is the gate before
-implementing quantitative sharpness and noise/contrast-proxy analysis.
+That corrected historical package was visually approved before its descriptive
+analysis.
 
 The manifested quantitative tradeoff analysis is complete. It transfers the
 approved BET mask into untouched reconstruction space using the frozen shared
@@ -487,35 +507,43 @@ scientifically uninformative. It is retained under diagnostics. Background
 statistics remain separately labelled QC; the accepted summary uses the fixed
 smooth-brain signal/local-residual proxy.
 
+For the R1 Wavelet batch, do not reuse the historical wrapper unchanged: its
+inputs, titles, and manifest scope name GRAPPA and corrected LLR. Generalize the
+review interface while retaining historical compatibility. The R1 review must
+include direct FFT RSS, the full-resolution frozen Wavelet result, and the
+three low-resolution Wavelet results; it must produce native physical-coordinate
+and explicitly resampled matched-grid figures. User approval of those figures
+is required before adapting or running the R1 descriptive analysis.
+
 ## 10. Phase H: R1-to-R3 parameter transfer check
 
-Apply the R1-selected parameter without retuning. Because this R3 dataset was
-already used for preliminary optimization, describe this as a transfer check,
-not an untouched independent validation. Compare the normalized
-unfiltered product DICOM, no-wave GRAPPA, full-resolution R3x2 Wave, and
-retrospective-LR R3x2 cases. Keep the earlier R3-specific optimum visibly
-separate from the R1-selected result.
+This check is complete. The frozen R1-selected Wavelet `lambda=1.5e-2` was
+applied to R3 without retuning and the user approved the visibly smoother
+regularized result. Because R3 had already been used for preliminary
+optimization, this remains a qualitative transfer check rather than untouched
+independent validation. No R3 selection metrics were calculated.
 
 ## 11. Presentation design gates
 
-For the near-term presentation, prioritize a compact R3 panel: normalized
-DICOM, no-wave GRAPPA, selected Wavelet result, corrected
-LLR result if useful, masked metric curves, and restrained difference maps.
-Label all selected values as provisional R3-specific parameters.
+Retain the compact R3 panel as historical development/transfer context:
+qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,
+corrected LLR if useful, and restrained difference maps. Do not present R3
+metrics as independent validation.
 
-Before the later R1/final batch, agree on the expanded presentation package.
-Proposed minimal outputs are:
+For the R1/final presentation package, proposed minimal outputs are:
 
 1. one pipeline/data-role diagram;
-2. a log-lambda plot for the R1 development and confirmation scans with brain
-   NRMSE/SSIM and one sharpness/noise tradeoff measure;
+2. the completed R1 log-lambda plots with brain NRMSE/SSIM and one
+   sharpness/detail tradeoff measure, without claiming an independent
+   confirmation scan;
 3. fixed-slice Wavelet comparison panels with identical windowing;
 4. an LLR heatmap only if corrected LLR proves scientifically useful;
-5. a resolution-versus-SNR/sharpness plot for the three retrospective-LR
-   cases plus 1 mm baseline;
+5. a resolution-versus-signal/local-residual/sharpness plot for the three
+   retrospective-LR cases plus the 1 mm baseline, explicitly avoiding a true
+   SNR claim;
 6. native-resolution and matched-grid zoom panels for the resolution study;
-7. one final R1-to-R3 transfer panel with normalized DICOM, no-wave
-   alternatives, full-resolution R3x2 Wave, and selected LR result; and
+7. one R1-to-R3 qualitative transfer panel, with DICOM clearly labelled as
+   presentation context rather than an intensity reference; and
 8. restrained difference maps for the final candidates, not every sweep case.
 
 Freeze slice positions, zoom boxes, display percentiles, metric definitions,
@@ -539,65 +567,46 @@ Do this only after the experiments and presentation outputs are frozen.
 
 ## 13. Immediate next step
 
-The NIfTI orientation correction and retrospective low-resolution code
-integration are complete. The latter uses the current BART-input/manifest
-contract, crop-first target-grid Wave synthesis, mandatory GPU BART
-reconstruction, norm restoration, resumable manifests, and the same canonical
-RAS exporter. Product configuration validation, the real source-operator
-gates, and all three production reconstructions pass. The corrected
-native-grid and matched-1-mm visual review is generated and awaits user
-approval. No accepted historical output was overwritten.
+The three R1 retrospective Wavelet reconstructions are complete and validated.
+Next, generalize `review_retrospective_low_resolution.py` and its launcher so
+the scientific labels and inputs come from a path-agnostic configuration rather
+than the historical product GRAPPA/corrected-LLR assumptions. Preserve that
+historical behavior and keep all real paths in ignored `.local.*` files.
 
-The retrospective resolution tradeoff analysis is complete and intentionally
-makes no automatic selection. The first dataset-portability layer is also
-complete: one validated manifest now carries geometry, acquired versus
-synthetic-Wave sampling, paths, reconstruction settings, and evaluation policy;
-the dataset inspector consumes it and records measured contract checks. Coil
-compression and the accepted R3x1 GRAPPA entry point now consume the passed
-contract; GRAPPA allocations are matrix-derived and an exact measured-sampling
-gate prevents R1 misuse. The direct fully sampled no-Wave source path is also
-implemented: it requires a centered complete readout and duplicate-free PE
-grid, permits explicitly image-derived coil compression when no PAT refscan is
-present, applies no interpolation, and creates resumable provenance-bound
-k-space. The next implementation step is manifest propagation
-through Wave synthesis and BART input export.
-Use GRAPPA as the temporary metric reference, apply BET only during metrics,
-and keep DICOM ranking as a configuration mode to enable on the new R1
-dataset. Defer no-wave BART PICS and the older R1 partial-readout work.
+Generate an R1 review package containing:
 
-## 14. Remaining readiness gaps for the incoming R1 dataset
+1. direct FFT RSS of the fully sampled compressed no-Wave source;
+2. the full-resolution frozen Wavelet `lambda=1.5e-2` result; and
+3. the three completed low-resolution Wavelet `lambda=1.5e-2` cases.
 
-The regularization engine, split-complex LLR handling, resumable manifests,
-and core metric functions are already available. The remaining infrastructure
-work is:
+The native-grid figure must select a shared RAS location and retain each
+matrix with physical-mm extents. The matched-grid figure may linearly resample
+for visual alignment only and must say so explicitly. Use display-only
+per-volume scaling, no DICOM, and no BET. Record hashes, geometry, sidecars,
+slice locations, and the batch/case manifests. Stop for explicit user visual
+approval before calculating retrospective-resolution metrics.
 
-1. **NIfTI orientation at source — complete:** the shared Wave exporter now
-   writes canonical RAS data/affines directly and no longer requires the
-   R3-only manual signed-axis correction. GRAPPA and SENSE already use the same
-   validated affine. Retrospective-LR consumes this shared exporter.
-2. **Retrospective low resolution — code complete:** the imported tool consumes
-   current BART manifests, crops only PE dimensions to four-multiple matrices,
-   rebuilds the target PSF, runs BART on GPU, restores the target k-space norm,
-   and exports with the same orientation contract. Product preparation,
-   reconstruction, and manifested native/matched visual review are complete;
-   the descriptive quantitative resolution-tradeoff analysis is also complete
-   without selecting a winning resolution.
-3. **Dataset portability — in progress:** the shared manifest, validator,
-   example, hard-code audit, inspection integration, coil compression, and
-   both direct R1 and compatible R3x1 GRAPPA source preparation are complete in
-   code. Propagate the contract through Wave/BART export, regularized
-   reconstruction, and evaluation to replace fixed
-   `256 x 256 x 256`, R3 sampling-line, subject, path, DICOM-count, and
-   maximum-eigenvalue assumptions with manifest or sequence/TWIX metadata.
-4. **Incoming-data qualification and reference construction:** provide one
-   audit entry point that records sampling completeness, readout center and
-   oversampling, matrix/FOV, coils, ACS, sequence match, DICOM series/tags,
-   and the chosen fully sampled no-wave reference construction.
-5. **Configurable evaluation reference:** support temporary GRAPPA ranking now
-   and DICOM/reference ranking later without changing metric code. BET is
-   applied only for metrics. DICOM mode must remain disabled for the current
-   R3 development run and enabled only after the new dataset is qualified.
-6. **End-to-end acceptance gates:** retain PSF=1/no-wave identity,
+After approval, generalize the descriptive analysis for the R1 direct-FFT and
+full-resolution Wavelet references. Use the approved BET mask only for metrics,
+keep native physical-mm and matched-grid measurements separate, avoid true-SNR
+claims, and make no composite rank or automatic resolution choice.
+
+## 14. Remaining work and deferred branches
+
+1. **R1 retrospective visual review — next:** generalize the historical
+   product-specific interface, generate the native/matched review, and obtain
+   explicit approval.
+2. **R1 retrospective descriptive analysis — gated:** adapt and run it only
+   after visual approval; do not automatically select a resolution.
+3. **Independent confirmation scan — unresolved:** no separate confirmation
+   scan has yet been designated. Do not call the selected parameter
+   independently confirmed.
+4. **DICOM ranking — disabled:** the direct FFT RSS is the active R1 reference.
+   Retain DICOM for metadata and qualitative context only unless a future
+   dataset is explicitly qualified for intensity ranking.
+5. **Deferred reconstruction branches:** no-wave BART PICS and completion of
+   older partial-readout R1 fallbacks remain out of scope.
+6. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
    full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
-   sample preservation, lambda-zero reconstruction, scaling/norm restoration,
-   orientation, and resumability checks in one dataset-level manifest.
+   sample preservation, lambda-zero scaling, norm restoration, orientation,
+   GPU `-g`, provenance, and resumability checks.
