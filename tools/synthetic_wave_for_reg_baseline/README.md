@@ -26,6 +26,9 @@ tests/         Unit and reference-oracle tests
 Machine-local dataset notes and generated reconstruction artifacts are ignored
 by git. Large artifacts should live in dataset output trees rather than at this
 directory's root; paths and scan filenames remain configuration/CLI inputs.
+Tracked launchers contain no machine-specific absolute paths. For transfer
+runs, copy the tracked `.example.sh` launcher to the ignored `.local.sh` name
+and put private paths only in that local copy.
 
 ## Current experiment
 
@@ -82,7 +85,7 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh prep
 
 tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
     reconstruct \
-    /path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2/dataset_manifest.json \
+    "$R1_SYNTHETIC_WAVE_ROOT/dataset_manifest.json" \
     --confirm-full-wave-reviewed
 ```
 
@@ -121,6 +124,19 @@ reuse an already complete output.
 After R1 refinement, apply the selected parameter back to R3 without retuning
 as a cross-dataset transfer check. Because R3 is used for the preliminary
 optimization, it is not an untouched independent validation dataset.
+
+The transfer is qualitative only. Prepare the private launcher with:
+
+```bash
+cp tools/synthetic_wave_for_reg_baseline/scripts/run_r3_wavelet_transfer.example.sh \
+   tools/synthetic_wave_for_reg_baseline/scripts/run_r3_wavelet_transfer.local.sh
+```
+
+Edit only the ignored `.local.sh` copy, then run it in tmux. The tracked generic
+runner validates the frozen selection, recalibrates dataset-specific crop-`0.6`
+maps, reconstructs solver-matched FISTA lambda zero and Wavelet `1.5e-2` with
+GPU `-g`, and creates a common-window qualitative review. It performs no R3
+metrics, ranking, or lambda selection.
 
 ## Which programs matter
 

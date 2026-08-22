@@ -213,6 +213,81 @@ class ManifestInputTests(unittest.TestCase):
                 provenance["dataset_manifest"]["sha256"], dataset.sha256
             )
 
+    def test_explicit_inputs_bind_to_lambda_zero_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            maps = root / "lambda0" / "coil_sens_bart"
+            lambda_zero = root / "lambda0" / "image_wave"
+            maps.parent.mkdir()
+            for base, content in ((maps, b"maps"), (lambda_zero, b"lambda-zero")):
+                base.with_suffix(".hdr").write_text("# Dimensions\n1\n", encoding="utf-8")
+                base.with_suffix(".cfl").write_bytes(content)
+            lambda_manifest = root / "lambda0" / "manifest.json"
+            lambda_manifest.write_text(
+                json.dumps(
+                    {
+                        "status": "lambda0_complete_awaiting_visual_review",
+                        "config": {
+                            "ecalib_crop": 0.6,
+                            "gpu_wave_reconstruction": True,
+                        },
+                        "bart_input_manifest": None,
+                        "ecalib": {
+                            "output_base": str(maps),
+                            "output_cfl_sha256": sha256_file(maps.with_suffix(".cfl")),
+                        },
+                        "wave_lambda0": {
+                            "output_base": str(lambda_zero),
+                            "output_cfl_sha256": sha256_file(
+                                lambda_zero.with_suffix(".cfl")
+                            ),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            required_files = {
+                "--wrapper": root / "run_wave_recon.sh",
+                "--bart": root / "bart",
+                "--python": root / "python",
+                "--bart-input-dir": root / "inputs",
+                "--twix": root / "meas.dat",
+                "--sequence": root / "sequence.seq",
+            }
+            required_files["--bart-input-dir"].mkdir()
+            for option, path in required_files.items():
+                if option != "--bart-input-dir":
+                    path.touch()
+            args_list = [
+                "--source-lambda-zero-manifest",
+                str(lambda_manifest),
+                "--maps",
+                str(maps),
+                "--expected-maps-sha256",
+                sha256_file(maps.with_suffix(".cfl")),
+                "--lambda-zero-base",
+                str(lambda_zero),
+                "--output-root",
+                str(root / "output"),
+                "--regularizer",
+                "wavelet",
+                "--lambda-value",
+                "1.5e-2",
+            ]
+            for option, path in required_files.items():
+                args_list.extend((option, str(path)))
+
+            resolved, provenance, matrix = resolve_regularization_inputs(
+                _build_parser().parse_args(args_list)
+            )
+
+            self.assertEqual(matrix, (256, 256, 256))
+            self.assertEqual(resolved.backend, "gpu")
+            self.assertEqual(
+                provenance["lambda_zero_manifest"]["sha256"],
+                sha256_file(lambda_manifest),
+            )
+
 
 class ResumeTests(unittest.TestCase):
     """Require matching configuration and intact hashes before skipping work."""

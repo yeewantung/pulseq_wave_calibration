@@ -19,6 +19,10 @@ These rules apply to work under `tools/synthetic_wave_for_reg_baseline/`.
   output tree. Never overwrite accepted or historical results. Keep each run
   discoverable through a manifest or index that records its purpose, status,
   inputs, configuration, provenance, and canonical outputs.
+- Never commit machine-specific absolute data, user-home, environment, or scan
+  paths in launcher scripts. Keep the tracked runner path-agnostic, provide a
+  copyable `.example.sh` launcher with placeholders, and put real paths only in
+  a matching `.local.sh` launcher that is explicitly ignored by Git.
 - Prefer a small number of predictable entry points and shallow, navigable
   directories. Use stable descriptive names, avoid unexplained abbreviations,
   and update the nearest README, manifest, or output index when adding something

@@ -244,5 +244,10 @@ separately and only after full Wave encoding.
   comparison and is not selected. The hash-bound decision record is
   `evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`.
 - [ ] Apply the frozen Wavelet `lambda=1.5e-2` configuration unchanged to R3 as
-  a cross-dataset transfer check. Do not retune against the historical R3 DICOM
-  or GRAPPA metrics.
+  a qualitative cross-dataset transfer check. Do not calculate R3 selection
+  metrics or retune against the historical R3 DICOM or GRAPPA results.
+- [x] Add the path-agnostic tracked R3 transfer runner and copyable example
+  launcher. Keep the real server paths only in
+  `run_r3_wavelet_transfer.local.sh`, which is explicitly ignored by Git.
+- [ ] Run the ignored local launcher in tmux and obtain visual confirmation of
+  the common-window FISTA-zero versus frozen-Wavelet transfer figure.

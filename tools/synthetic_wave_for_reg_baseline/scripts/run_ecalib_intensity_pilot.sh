@@ -6,7 +6,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 STAGE="all"
-OUTPUT_ROOT="/path/to/data/20260817_product/ecalib_intensity_c050_wave_lambda0"
+: "${R3_PRODUCT_ROOT:?Set R3_PRODUCT_ROOT in a private local launcher.}"
+: "${R3_TWIX:?Set R3_TWIX in a private local launcher.}"
+: "${R3_SEQUENCE:?Set R3_SEQUENCE in a private local launcher.}"
+OUTPUT_ROOT="${R3_ECALIB_INTENSITY_OUTPUT_ROOT:-$R3_PRODUCT_ROOT/ecalib_intensity_c050_wave_lambda0}"
 
 usage() {
     cat <<'EOF'
@@ -58,21 +61,17 @@ case "$STAGE" in
         ;;
 esac
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/user-mpl-ecalib-intensity}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-${TMPDIR:-/tmp}/synthetic-wave-ecalib-intensity}"
 
 BART_EXECUTABLE="$(command -v bart)"
 PYTHON_EXECUTABLE="$(command -v python)"
-DATASET_ROOT="/path/to/data/20260817_product"
+DATASET_ROOT="$(realpath "$R3_PRODUCT_ROOT")"
 WAVE_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2"
 PRESENTATION_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization"
 BART_INPUT_DIR="$WAVE_ROOT/bart_inputs"
 CALIBRATION_BASE="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12/bart_inputs/kspace_calib"
-TWIX="$DATASET_ROOT/meas_MID00345_FID35555_t1_mprage_sag_p2.dat"
-SEQUENCE_ROOT="/path/to/user_workspace/scan_protocols/20260817_integrated/v151"
-SEQUENCE="$SEQUENCE_ROOT/mprage_3d_wave_FOV256x256x256_res1x1x1_ETL256_R1-1_R2-3_os4_amp8_cyc10_SAG_prisma_v151.seq"
+TWIX="$(realpath "$R3_TWIX")"
+SEQUENCE="$(realpath "$R3_SEQUENCE")"
 RECON_DIR="$OUTPUT_ROOT/reconstruction"
 COMPARISON_DIR="$OUTPUT_ROOT/comparison"
 METRICS_PROVENANCE="$PRESENTATION_ROOT/evaluation/volume_metrics/metrics_provenance.json"

@@ -9,7 +9,13 @@ REPO_ROOT="$(cd -- "$TOOL_DIR/../.." && pwd)"
 
 STAGE="all-before-review"
 CONFIRM_VISUAL_QC=0
-PRESENTATION_ROOT="/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization"
+: "${R3_PRODUCT_ROOT:?Set R3_PRODUCT_ROOT in a private local launcher.}"
+: "${R3_TWIX:?Set R3_TWIX in a private local launcher.}"
+: "${R3_SEQUENCE:?Set R3_SEQUENCE in a private local launcher.}"
+: "${R3_DICOM_DIR:?Set R3_DICOM_DIR in a private local launcher.}"
+: "${R3_DICOM_UID:?Set R3_DICOM_UID in a private local launcher.}"
+: "${SYNTHETIC_WAVE_FSLDIR:?Set SYNTHETIC_WAVE_FSLDIR in a private local launcher.}"
+PRESENTATION_ROOT="${R3_PRESENTATION_ROOT:-$R3_PRODUCT_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization}"
 
 usage() {
     cat <<'EOF'
@@ -68,25 +74,22 @@ case "$STAGE" in
         ;;
 esac
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/user-mpl-r3-presentation}"
-export FSLDIR=/path/to/software/packages/fsl/6.0.6
+export MPLCONFIGDIR="${MPLCONFIGDIR:-${TMPDIR:-/tmp}/synthetic-wave-r3-presentation}"
+export FSLDIR="$SYNTHETIC_WAVE_FSLDIR"
 . "${FSLDIR}/etc/fslconf/fsl.sh"
 
 BART_EXECUTABLE="$(command -v bart)"
 PYTHON_EXECUTABLE="$(command -v python)"
-SOURCE_ROOT="/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2"
-DATASET_ROOT="/path/to/data/20260817_product"
+DATASET_ROOT="$(realpath "$R3_PRODUCT_ROOT")"
+SOURCE_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2"
 SYNTHESIS_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12"
 MAPS="$SYNTHESIS_ROOT/bart_lambda0_ecalib_c050/coil_sens_bart"
 MAPS_SHA256="95af12014c6fabab358e4177e091f8085a00619d93354385f32f4482be3e115d"
 LAMBDA_ZERO="$SOURCE_ROOT/bart_lambda0_existing_csm_c050/image_wave"
-TWIX="$DATASET_ROOT/meas_MID00345_FID35555_t1_mprage_sag_p2.dat"
-SEQUENCE="/path/to/user_workspace/scan_protocols/20260817_integrated/v151/mprage_3d_wave_FOV256x256x256_res1x1x1_ETL256_R1-1_R2-3_os4_amp8_cyc10_SAG_prisma_v151.seq"
-DICOM_DIR="$DATASET_ROOT/mprage_product_unfiltered_normalize"
-DICOM_UID="1.3.12.2.1107.5.2.0.99923.3.2026082020033466358602277.0.0.0"
+TWIX="$(realpath "$R3_TWIX")"
+SEQUENCE="$(realpath "$R3_SEQUENCE")"
+DICOM_DIR="$(realpath "$R3_DICOM_DIR")"
+DICOM_UID="$R3_DICOM_UID"
 WRAPPER="$REPO_ROOT/external/wave-mprage/recon/bart/run_wave_recon.sh"
 
 mkdir -p "$PRESENTATION_ROOT/regularization" "$PRESENTATION_ROOT/evaluation" "$PRESENTATION_ROOT/logs"

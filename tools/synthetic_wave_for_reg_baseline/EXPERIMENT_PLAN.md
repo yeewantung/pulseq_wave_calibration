@@ -71,7 +71,8 @@ Pending:
 - [x] combine retained and new cases for exact-grid validation and direct-FFT
   metrics without registration, interpolation, or DICOM intensity ranking;
 - [x] freeze Wavelet `lambda=1.5e-2` as the R1-selected MPRAGE regularization;
-- [ ] apply it unchanged to R3 as a cross-dataset transfer check.
+- [ ] apply it unchanged to R3 as a qualitative cross-dataset transfer check;
+  do not calculate selection metrics or retune on R3.
 
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
 partial-readout R1 scans, DICOM-intensity ranking before the new R1 DICOM is

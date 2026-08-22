@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from dataset_manifest import load_dataset_manifest  # noqa: E402
 from run_bart_wave_lambda0 import (  # noqa: E402
     _build_parser,
+    _completed_reconstruction_reusable,
     _resolve_run,
     build_ecalib_command,
     build_wave_command,
@@ -161,6 +162,58 @@ class ManifestResolutionTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "below outputs.root"),
             ):
                 _resolve_run(outside_args)
+
+    def test_explicit_interface_allows_hash_validated_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_bart = root / "bart"
+            fake_bart.touch()
+            args = _build_parser().parse_args(
+                [
+                    "--bart",
+                    str(fake_bart),
+                    "--bart-input-dir",
+                    str(root / "inputs"),
+                    "--calibration-base",
+                    str(root / "calibration"),
+                    "--output-dir",
+                    str(root / "output"),
+                    "--twix",
+                    str(root / "measurement.dat"),
+                    "--sequence",
+                    str(root / "sequence.seq"),
+                    "--resume",
+                ]
+            )
+
+            resolved = _resolve_run(args)
+
+            self.assertIsNone(resolved["dataset"])
+            self.assertEqual(resolved["calibration_base"], root / "calibration")
+
+
+class ResumeValidationTests(unittest.TestCase):
+    def test_explicit_resume_rejects_manifest_bound_to_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = Path(temporary) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "status": "lambda0_complete_awaiting_visual_review",
+                        "dataset_manifest": {"sha256": "dataset-hash"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(
+                _completed_reconstruction_reusable(
+                    manifest_path,
+                    dataset_sha256=None,
+                    bart_input_manifest_sha256="input-hash",
+                    expected_config={},
+                )
+            )
 
 
 if __name__ == "__main__":

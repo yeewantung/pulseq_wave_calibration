@@ -4,7 +4,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_MANIFEST="/path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2/dataset_manifest.json"
 
 usage() {
     echo "Usage: $0 prepare [dataset_manifest.json]" >&2
@@ -17,8 +16,12 @@ if [[ $# -lt 1 || $# -gt 3 ]]; then
 fi
 
 MODE="$1"
-DATASET_MANIFEST="${2:-$DEFAULT_MANIFEST}"
+DATASET_MANIFEST="${2:-${R1_SYNTHETIC_WAVE_ROOT:+$R1_SYNTHETIC_WAVE_ROOT/dataset_manifest.json}}"
 CONFIRMATION="${3:-}"
+if [[ -z "$DATASET_MANIFEST" ]]; then
+    echo "Error: provide dataset_manifest.json or set R1_SYNTHETIC_WAVE_ROOT." >&2
+    exit 2
+fi
 
 source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
 conda activate cuda133py312-macha

@@ -8,8 +8,12 @@ plan. The old R3x1 tracker is historical only.
 ## Immediate next action
 
 Apply the frozen R1-selected Wavelet `lambda=1.5e-2` configuration unchanged to
-the existing R3 dataset as a portability check; do not retune on R3. The
-hash-bound selection record is
+the existing R3 dataset as a qualitative portability check; do not calculate
+selection metrics or retune on R3. Run the ignored machine-local launcher
+`scripts/run_r3_wavelet_transfer.local.sh` in tmux. The tracked public template
+is `scripts/run_r3_wavelet_transfer.example.sh`, and the path-agnostic
+implementation is `scripts/run_r3_wavelet_transfer.sh`. Private absolute paths
+must appear only in the ignored local copy. The hash-bound selection record is
 `evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`
 under the R1 dataset root. It identifies the exact reconstruction, direct-FFT
 reference, 49-case geometry report, metric package, and explicit user decision.

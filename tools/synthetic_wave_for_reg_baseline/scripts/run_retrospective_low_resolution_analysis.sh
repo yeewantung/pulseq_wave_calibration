@@ -2,14 +2,12 @@
 set -euo pipefail
 
 REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DATASET_ROOT="/path/to/data/20260817_product"
+: "${R3_PRODUCT_ROOT:?Set R3_PRODUCT_ROOT in a private local launcher.}"
+DATASET_ROOT="$(realpath "$R3_PRODUCT_ROOT")"
 RETRO_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_low_resolution/retrospective_low_resolution"
 PRESENTATION_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization"
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/user-mpl-retro-low-resolution-analysis}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-${TMPDIR:-/tmp}/synthetic-wave-retro-low-resolution-analysis}"
 mkdir -p "$MPLCONFIGDIR"
 
 exec python "$REPOSITORY_ROOT/tools/synthetic_wave_for_reg_baseline/scripts/analyze_retrospective_low_resolution.py" \

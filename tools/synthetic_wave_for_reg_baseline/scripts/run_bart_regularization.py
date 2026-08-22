@@ -35,6 +35,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Derive frozen maps, data, geometry, and provenance from an accepted run.",
     )
+    parser.add_argument(
+        "--source-lambda-zero-manifest",
+        type=Path,
+        help=(
+            "Bind explicit inputs to a manifest-backed lambda-zero calibration. "
+            "Use this only with the explicit path interface."
+        ),
+    )
     parser.add_argument("--wrapper", type=Path)
     parser.add_argument("--bart", type=Path)
     parser.add_argument("--python", type=Path)
@@ -449,7 +457,12 @@ def resolve_regularization_inputs(
         args.backend,
         args.subject,
     )
+    source_lambda_zero_manifest = getattr(args, "source_lambda_zero_manifest", None)
     if args.lambda_zero_manifest is not None:
+        if source_lambda_zero_manifest is not None:
+            raise ValueError(
+                "--source-lambda-zero-manifest is only valid with explicit inputs"
+            )
         if any(value is not None for value in explicit):
             raise ValueError(
                 "--lambda-zero-manifest cannot be combined with explicit input, "
@@ -557,7 +570,41 @@ def resolve_regularization_inputs(
     args.max_eigenvalue = 6.70e7 if args.max_eigenvalue is None else args.max_eigenvalue
     args.backend = "gpu" if args.backend is None else args.backend
     args.subject = "20260817product" if args.subject is None else args.subject
-    return args, None, (256, 256, 256)
+    provenance = None
+    if source_lambda_zero_manifest is not None:
+        manifest_path = _resolved(source_lambda_zero_manifest)
+        if not manifest_path.is_file():
+            raise FileNotFoundError(manifest_path)
+        accepted = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if accepted.get("status") != "lambda0_complete_awaiting_visual_review":
+            raise ValueError("Explicit lambda-zero reconstruction is not complete.")
+        if float(accepted.get("config", {}).get("ecalib_crop", -1)) != 0.6:
+            raise ValueError("Explicit lambda-zero manifest must use ESPIRiT crop 0.6.")
+        if accepted.get("config", {}).get("gpu_wave_reconstruction") is not True:
+            raise ValueError("Explicit lambda-zero manifest was not reconstructed on GPU.")
+        accepted_maps = bart_base(Path(accepted["ecalib"]["output_base"]).resolve())
+        accepted_zero = bart_base(Path(accepted["wave_lambda0"]["output_base"]).resolve())
+        if accepted_maps != bart_base(_resolved(args.maps)):
+            raise ValueError("Explicit maps do not match the lambda-zero manifest.")
+        if accepted_zero != bart_base(_resolved(args.lambda_zero_base)):
+            raise ValueError("Explicit lambda zero does not match its manifest.")
+        if sha256_file(accepted_maps.with_suffix(".cfl")) != accepted["ecalib"].get(
+            "output_cfl_sha256"
+        ):
+            raise ValueError("Explicit lambda-zero ESPIRiT maps changed after calibration.")
+        if sha256_file(accepted_zero.with_suffix(".cfl")) != accepted[
+            "wave_lambda0"
+        ].get("output_cfl_sha256"):
+            raise ValueError("Explicit lambda-zero image changed after reconstruction.")
+        provenance = {
+            "dataset_manifest": None,
+            "lambda_zero_manifest": {
+                "path": str(manifest_path),
+                "sha256": sha256_file(manifest_path),
+            },
+            "bart_input_manifest": accepted.get("bart_input_manifest"),
+        }
+    return args, provenance, (256, 256, 256)
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -626,6 +673,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "dataset_manifest_sha256": (
             source_provenance["dataset_manifest"]["sha256"]
             if source_provenance is not None
+            and source_provenance.get("dataset_manifest") is not None
             else None
         ),
         "lambda_zero_manifest_sha256": (
@@ -636,6 +684,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "bart_input_manifest_sha256": (
             source_provenance["bart_input_manifest"]["sha256"]
             if source_provenance is not None
+            and source_provenance.get("bart_input_manifest") is not None
             else None
         ),
         "complex_representation": (

@@ -24,6 +24,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--regularizer", required=True, choices=("wavelet", "llr"))
     parser.add_argument("--block-size", type=int, default=8)
     parser.add_argument("--lambda-labels", required=True, nargs="+")
+    parser.add_argument(
+        "--qualitative-transfer-only",
+        action="store_true",
+        help="Label the output as a transfer assessment that cannot select or retune lambda.",
+    )
     return parser
 
 
@@ -196,9 +201,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             _add_orientation_labels(axis, view=view)
             axis.axis("off")
-    figure.suptitle(
-        f"R1 synthetic R3×2 {regularizer_title} sweep — common FISTA-λ=0 intensity window"
+    review_title = (
+        f"R3 transfer of frozen {regularizer_title} — qualitative common window"
+        if args.qualitative_transfer_only
+        else f"R1 synthetic R3×2 {regularizer_title} sweep — common FISTA-λ=0 intensity window"
     )
+    figure.suptitle(review_title)
     figure.tight_layout(rect=(0, 0, 1, 0.96), h_pad=2.5)
     output_dir.mkdir(parents=True, exist_ok=True)
     comparison = output_dir / f"{output_prefix}_sweep_common_window.png"
@@ -222,12 +230,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     report = {
         "format_version": 1,
-        "status": "awaiting_visual_selection",
+        "status": (
+            "awaiting_qualitative_transfer_assessment"
+            if args.qualitative_transfer_only
+            else "awaiting_visual_selection"
+        ),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "purpose": (
-            f"reference-neutral {regularizer_title} review; "
-            "no DICOM, BET, or candidate ranking"
+            f"reference-neutral {regularizer_title} "
+            + (
+                "cross-dataset transfer assessment; lambda is frozen and cannot be retuned"
+                if args.qualitative_transfer_only
+                else "review; no DICOM, BET, or candidate ranking"
+            )
         ),
+        "qualitative_transfer_only": args.qualitative_transfer_only,
         "regularizer": args.regularizer,
         "block_size": args.block_size if args.regularizer == "llr" else None,
         "lambda_zero_manifest": {

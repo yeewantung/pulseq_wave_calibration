@@ -2,7 +2,10 @@
 set -euo pipefail
 
 REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DATASET_ROOT="/path/to/data/20260817_product"
+: "${R3_PRODUCT_ROOT:?Set R3_PRODUCT_ROOT in a private local launcher.}"
+: "${R3_TWIX:?Set R3_TWIX in a private local launcher.}"
+: "${R3_SEQUENCE:?Set R3_SEQUENCE in a private local launcher.}"
+DATASET_ROOT="$(realpath "$R3_PRODUCT_ROOT")"
 RETRO_ROOT="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_low_resolution/retrospective_low_resolution"
 SOURCE_RUN="$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization/regularization/llr_block-8_lambda-2e-5"
 REFERENCE_ROOT="$RETRO_ROOT/full_resolution_reference"
@@ -10,10 +13,7 @@ REFERENCE_SUB="sub-20260817product-r3x2-low-resolution-reference"
 REFERENCE_NIFTI="$REFERENCE_ROOT/$REFERENCE_SUB/${REFERENCE_SUB}_part-mag_BARTWaveRegularized.nii.gz"
 REFERENCE_PHASE="$REFERENCE_ROOT/$REFERENCE_SUB/${REFERENCE_SUB}_part-phase_BARTWaveRegularized.nii.gz"
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-
-export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/user-mpl-retro-low-resolution-review}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-${TMPDIR:-/tmp}/synthetic-wave-retro-low-resolution-review}"
 mkdir -p "$MPLCONFIGDIR"
 
 # Re-export the existing full-resolution BART result with the corrected shared
@@ -23,8 +23,8 @@ if [[ ! -f "$REFERENCE_NIFTI" && ! -e "$REFERENCE_ROOT" ]]; then
     python "$REPOSITORY_ROOT/external/wave-mprage/recon/bart/wave_to_nifti.py" \
         --bart-input-dir "$DATASET_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2/bart_inputs" \
         --bart-output-dir "$SOURCE_RUN/bart" \
-        --twix "$DATASET_ROOT/meas_MID00345_FID35555_t1_mprage_sag_p2.dat" \
-        --seq "/path/to/user_workspace/scan_protocols/20260817_integrated/v151/mprage_3d_wave_FOV256x256x256_res1x1x1_ETL256_R1-1_R2-3_os4_amp8_cyc10_SAG_prisma_v151.seq" \
+        --twix "$R3_TWIX" \
+        --seq "$R3_SEQUENCE" \
         --out "$REFERENCE_ROOT" \
         --save-phase \
         --nifti-sub "20260817product-r3x2-low-resolution-reference" \

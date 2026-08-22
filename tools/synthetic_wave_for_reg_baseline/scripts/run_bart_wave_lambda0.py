@@ -72,7 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Reuse only a complete manifest-backed reconstruction with intact hashes.",
+        help="Reuse only a complete reconstruction with matching provenance and hashes.",
     )
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -361,7 +361,7 @@ def _extract_bart_times(log_path: Path) -> dict[str, float]:
 def _completed_reconstruction_reusable(
     manifest_path: Path,
     *,
-    dataset_sha256: str,
+    dataset_sha256: str | None,
     bart_input_manifest_sha256: str,
     expected_config: dict[str, Any],
 ) -> bool:
@@ -372,7 +372,13 @@ def _completed_reconstruction_reusable(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("status") != "lambda0_complete_awaiting_visual_review":
             return False
-        if manifest.get("dataset_manifest", {}).get("sha256") != dataset_sha256:
+        dataset_record = manifest.get("dataset_manifest")
+        if dataset_sha256 is None:
+            if dataset_record is not None:
+                return False
+        elif not isinstance(dataset_record, dict) or dataset_record.get(
+            "sha256"
+        ) != dataset_sha256:
             return False
         if manifest.get("bart_input_manifest", {}).get(
             "sha256"
@@ -475,8 +481,6 @@ def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "Use --dataset-manifest, or provide " + ", ".join(missing)
         )
-    if args.resume:
-        raise ValueError("--resume requires --dataset-manifest")
     return {
         "dataset": None,
         "bart": args.bart.expanduser().resolve(),
@@ -528,8 +532,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     bart_input_manifest = json.loads(
         bart_input_manifest_path.read_text(encoding="utf-8")
     )
-    if bart_input_manifest.get("status") != "calibration_kspace_ready_for_ecalib":
-        raise ValueError("Measured ACS is not ready for BART ecalib.")
+    bart_input_status = bart_input_manifest.get("status")
+    if dataset is not None:
+        if bart_input_status != "calibration_kspace_ready_for_ecalib":
+            raise ValueError("Measured ACS is not ready for BART ecalib.")
+    elif bart_input_status not in {
+        "calibration_kspace_ready_for_ecalib",
+        "masked_wave_inputs_ready_for_reconstruction_with_existing_maps",
+    }:
+        raise ValueError(
+            "Explicit BART inputs are not in a recognized reconstruction-ready state."
+        )
+    elif (
+        bart_input_status
+        == "masked_wave_inputs_ready_for_reconstruction_with_existing_maps"
+        and resolved["calibration_base"] is None
+    ):
+        raise ValueError(
+            "Legacy masked Wave inputs require an explicit --calibration-base."
+        )
     if dataset is not None and bart_input_manifest.get("dataset_manifest", {}).get(
         "sha256"
     ) != dataset.sha256:
@@ -548,11 +569,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     manifest_path = output_dir / "manifest.json"
     if (
-        dataset is not None
-        and args.resume
+        args.resume
         and _completed_reconstruction_reusable(
             manifest_path,
-            dataset_sha256=dataset.sha256,
+            dataset_sha256=dataset.sha256 if dataset is not None else None,
             bart_input_manifest_sha256=bart_input_manifest_sha256,
             expected_config=run_config,
         )

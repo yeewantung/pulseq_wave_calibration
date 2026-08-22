@@ -4,8 +4,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_ROOT="/path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2"
-DATASET_ROOT="${R1_SYNTHETIC_WAVE_ROOT:-$DEFAULT_ROOT}"
+: "${R1_SYNTHETIC_WAVE_ROOT:?Set R1_SYNTHETIC_WAVE_ROOT to the private dataset output root.}"
+DATASET_ROOT="$(realpath -m "$R1_SYNTHETIC_WAVE_ROOT")"
 DATASET_MANIFEST="${1:-$DATASET_ROOT/dataset_manifest.json}"
 OUTPUT_DIR="$DATASET_ROOT/reconstructions/synthetic_wave/ecalib_crop-0p6_lambda0"
 
