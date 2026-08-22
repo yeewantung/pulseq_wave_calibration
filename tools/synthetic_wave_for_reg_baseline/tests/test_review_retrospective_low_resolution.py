@@ -156,6 +156,118 @@ class ReviewRunTests(unittest.TestCase):
             self.assertTrue((output / "input_geometry.csv").is_file())
             self.assertTrue((output / "review_manifest.json").is_file())
 
+    def test_configured_review_uses_supplied_scientific_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            direct_path = root / "direct.nii.gz"
+            full_path = root / "full.nii.gz"
+            nib.save(_image((8, 8, 8), (1.0, 1.0, 1.0)), direct_path)
+            nib.save(_image((8, 8, 8), (1.0, 1.0, 1.0)), full_path)
+            full_path.with_name("full.json").write_text(
+                json.dumps(
+                    {
+                        "NIfTICanonicalRAS": True,
+                        "NIfTIAffineAxisFlips": [True, False, True],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            case_manifests = []
+            for key, shape, zooms in (
+                ("lower_x", (4, 8, 8), (2.0, 1.0, 1.0)),
+                ("lower_y", (8, 4, 8), (1.0, 2.0, 1.0)),
+                ("lower_xy", (4, 4, 8), (2.0, 2.0, 1.0)),
+            ):
+                magnitude = root / f"{key}_part-mag_test.nii.gz"
+                nib.save(_image(shape, zooms), magnitude)
+                magnitude.with_name(
+                    magnitude.name.removesuffix(".nii.gz") + ".json"
+                ).write_text(
+                    json.dumps(
+                        {
+                            "NIfTICanonicalRAS": True,
+                            "NIfTIAffineAxisFlips": [True, False, True],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                case_manifest = root / f"{key}_manifest.json"
+                case_manifest.write_text(
+                    json.dumps(
+                        {
+                            "status": "complete",
+                            "case": {
+                                "case_name": key,
+                                "label": f"configured {key}",
+                                "achieved_resolution_mm_xyz": list(zooms),
+                            },
+                            "reconstruction": {"nifti_outputs": [str(magnitude)]},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                case_manifests.append(str(case_manifest))
+            batch_manifest = root / "batch_manifest.json"
+            batch_manifest.write_text(
+                json.dumps({"status": "complete", "case_manifests": case_manifests}),
+                encoding="utf-8",
+            )
+            provenance = root / "selection_manifest.json"
+            provenance.write_text('{"status": "frozen"}\n', encoding="utf-8")
+            output = root / "configured_review"
+            config = root / "review.local.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "batch_manifest": str(batch_manifest),
+                        "output_dir": str(output),
+                        "reference_volumes": [
+                            {
+                                "key": "direct_fft",
+                                "title": "Direct FFT RSS",
+                                "path": str(direct_path),
+                            },
+                            {
+                                "key": "frozen_wavelet",
+                                "title": "Frozen Wavelet",
+                                "path": str(full_path),
+                                "require_canonical_export": True,
+                            },
+                        ],
+                        "matched_grid_reference_key": "frozen_wavelet",
+                        "retrospective_title_template": (
+                            "Frozen Wavelet {case_label}\\n{resolution_mm} mm"
+                        ),
+                        "scientific_scope": {
+                            "regularization": "Wavelet lambda=1.5e-2",
+                            "dicom_used": False,
+                            "bet_mask_used": False,
+                            "quantitative_ranking_performed": False,
+                        },
+                        "provenance_manifests": [str(provenance)],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest = run(
+                argparse.Namespace(
+                    config=config,
+                    batch_manifest=None,
+                    grappa_nifti=None,
+                    full_resolution_nifti=None,
+                    output_dir=None,
+                    slice_world_mm=None,
+                    display_percentile=99.5,
+                )
+            )
+            self.assertEqual(manifest["display"]["matched_grid_reference_key"], "frozen_wavelet")
+            self.assertEqual(manifest["scientific_scope"]["regularization"], "Wavelet lambda=1.5e-2")
+            self.assertEqual(len(manifest["provenance_manifests"]), 1)
+            self.assertNotIn("GRAPPA", json.dumps(manifest["inputs"]))
+            self.assertNotIn("LLR", json.dumps(manifest["inputs"]))
+
 
 if __name__ == "__main__":
     unittest.main()

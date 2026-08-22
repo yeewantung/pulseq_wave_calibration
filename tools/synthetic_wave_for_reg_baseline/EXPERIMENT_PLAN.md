@@ -15,11 +15,10 @@ The active execution order is now:
    qualitative-only R3 transfer;
 2. preserve the completed three-case R1 retrospective low-resolution
    reconstruction batch;
-3. generalize the historical product-specific visual-review interface for the
-   R1 Wavelet study and obtain explicit approval of native-grid and matched-grid
-   figures; and
-4. only after that approval, generalize and run descriptive R1
-   resolution-tradeoff metrics without automatic resolution selection.
+3. preserve the generalized, explicitly approved R1 native-grid and
+   matched-grid visual review; and
+4. preserve the completed descriptive R1 resolution-tradeoff analysis, which
+   makes no automatic resolution selection.
 
 The earlier R3 parameters and GRAPPA-referenced evaluation remain historical
 development results. The R1-selected setting is frozen and must not be retuned
@@ -28,9 +27,10 @@ on R3 or independently for the retrospective low-resolution cases.
 As of 2026-08-21, the fully sampled R1 source preparation, synthetic-Wave
 encoding, GPU lambda-zero/coarse/refined/targeted reconstructions, approved-mask
 metric support, combined 49-case exact-grid evaluation, frozen Wavelet
-selection, qualitative R3 transfer, and all three R1 retrospective
-low-resolution reconstructions are complete. The next action is visual review,
-not another reconstruction.
+selection, qualitative R3 transfer, all three R1 retrospective low-resolution
+reconstructions, the approved native/matched review, and the descriptive R1
+resolution analysis are complete. No retrospective resolution was selected
+automatically.
 
 ## Current implementation and execution status
 
@@ -55,6 +55,9 @@ Completed:
 - [x] completed all three R1 retrospective low-resolution Wavelet
   reconstructions with case-specific maximum-eigenvalue estimation and GPU
   `-g`.
+- [x] generalized and explicitly approved the R1 native/matched review;
+- [x] completed the approval-gated descriptive R1 resolution analysis without
+  a true-SNR claim, composite rank, or automatic selection.
 
 Pending:
 
@@ -81,10 +84,10 @@ Pending:
   do not calculate selection metrics or retune on R3.
 - [x] run the three retrospective low-resolution R1 cases with frozen Wavelet
   `lambda=1.5e-2` and case-specific maximum-eigenvalue estimation;
-- [ ] generalize the native/matched physical-coordinate review for the R1
+- [x] generalize the native/matched physical-coordinate review for the R1
   direct-FFT, full-resolution Wavelet, and low-resolution Wavelet inputs;
-- [ ] generate the R1 review package and obtain explicit visual approval;
-- [ ] after approval, generalize and run descriptive R1 resolution-tradeoff
+- [x] generate the R1 review package and obtain explicit visual approval;
+- [x] after approval, generalize and run descriptive R1 resolution-tradeoff
   analysis without an automatic winner.
 
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
@@ -567,37 +570,31 @@ Do this only after the experiments and presentation outputs are frozen.
 
 ## 13. Immediate next step
 
-The three R1 retrospective Wavelet reconstructions are complete and validated.
-Next, generalize `review_retrospective_low_resolution.py` and its launcher so
-the scientific labels and inputs come from a path-agnostic configuration rather
-than the historical product GRAPPA/corrected-LLR assumptions. Preserve that
-historical behavior and keep all real paths in ignored `.local.*` files.
+The R1 review was explicitly approved on 2026-08-21 and its separate approval
+record binds both figures and the review manifest. The path-agnostic analysis
+interface then completed using the approved BET mask on the exact shared RAS
+grid. The fixed auxiliary edge, smooth-brain, and background supports derive
+from the full-resolution frozen Wavelet image; direct FFT RSS contains genuine
+noise throughout the FOV and therefore cannot define thresholded air support.
+Background values remain QC only.
 
-Generate an R1 review package containing:
+For lower-X, lower-Y, and balanced cases respectively, native total
+edge-gradient ratios to full-resolution Wavelet are `0.9779`, `0.9773`, and
+`0.9627`; signal/local-residual proxies are `21.01`, `21.33`, and `21.47`
+versus `18.77` at full resolution; matched brain NRMSE is `0.06236`, `0.06260`,
+and `0.06552`; and mean axial SSIM is `0.9265`, `0.9280`, and `0.9150`.
+Directional losses occur on the expected changed axes. These are descriptive
+tradeoffs, not a selected winner.
 
-1. direct FFT RSS of the fully sampled compressed no-Wave source;
-2. the full-resolution frozen Wavelet `lambda=1.5e-2` result; and
-3. the three completed low-resolution Wavelet `lambda=1.5e-2` cases.
-
-The native-grid figure must select a shared RAS location and retain each
-matrix with physical-mm extents. The matched-grid figure may linearly resample
-for visual alignment only and must say so explicitly. Use display-only
-per-volume scaling, no DICOM, and no BET. Record hashes, geometry, sidecars,
-slice locations, and the batch/case manifests. Stop for explicit user visual
-approval before calculating retrospective-resolution metrics.
-
-After approval, generalize the descriptive analysis for the R1 direct-FFT and
-full-resolution Wavelet references. Use the approved BET mask only for metrics,
-keep native physical-mm and matched-grid measurements separate, avoid true-SNR
-claims, and make no composite rank or automatic resolution choice.
+The next scientific action is user interpretation or presentation of these
+tradeoffs. Do not infer a preferred retrospective resolution automatically.
 
 ## 14. Remaining work and deferred branches
 
-1. **R1 retrospective visual review — next:** generalize the historical
-   product-specific interface, generate the native/matched review, and obtain
-   explicit approval.
-2. **R1 retrospective descriptive analysis — gated:** adapt and run it only
-   after visual approval; do not automatically select a resolution.
+1. **R1 retrospective visual review — complete:** the generalized review and
+   hash-bound explicit approval are recorded.
+2. **R1 retrospective descriptive analysis — complete:** native and matched
+   metrics are manifested, with no automatic resolution selection.
 3. **Independent confirmation scan — unresolved:** no separate confirmation
    scan has yet been designated. Do not call the selected parameter
    independently confirmed.

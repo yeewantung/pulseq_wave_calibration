@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "review_manifest": "/path/to/approved_visual_review/review_manifest.json",
+  "visual_approval_record": "/path/to/approved_visual_review/visual_approval.json",
+  "approved_bet_mask": "/path/to/approved_metrics_only_mask.nii.gz",
+  "mask_alignment": "exact_reference_grid",
+  "shared_registration": null,
+  "output_dir": "/path/to/new_resolution_tradeoff_analysis",
+  "full_resolution_key": "full_resolution_regularized",
+  "anatomical_reference_key": "anatomical_reference",
+  "metric_mask_reference_key": "anatomical_reference",
+  "matched_reference_keys": [
+    "full_resolution_regularized",
+    "anatomical_reference"
+  ],
+  "excluded_resolution_keys": [
+    "anatomical_reference"
+  ],
+  "figure_title": "Retrospective-resolution tradeoffs — descriptive, no automatic selection",
+  "fidelity_title": "Matched-grid fidelity to the full-resolution regularized result",
+  "scientific_scope": {
+    "full_resolution_reference": "describe the same-regularizer reference",
+    "anatomical_reference": "describe the direct anatomical reference",
+    "dicom_intensities_used": false,
+    "approved_bet_used_for_metrics_only": true,
+    "candidate_registration_performed": false,
+    "true_snr_or_cnr_claimed": false,
+    "automatic_selection_performed": false
+  }
+}

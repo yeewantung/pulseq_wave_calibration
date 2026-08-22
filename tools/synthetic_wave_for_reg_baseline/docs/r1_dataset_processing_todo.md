@@ -15,10 +15,9 @@ is derived from the same raw acquisition without GRAPPA, SENSE, Wave encoding,
 or regularization. DICOM remains available for metadata and qualitative review,
 but its voxel intensities must not enter parameter selection.
 
-The active next gate is retrospective low-resolution visual review. Generalize
-the historical product-specific review for the R1 Wavelet study, generate
-native physical-coordinate and explicitly matched-grid figures, and obtain
-user approval before calculating descriptive resolution-tradeoff metrics.
+The retrospective low-resolution native/matched review was explicitly approved
+and the approval-gated descriptive analysis is complete. No resolution was
+selected automatically.
 
 ## Frozen source decision
 
@@ -276,16 +275,16 @@ separately and only after full Wave encoding.
   logical `(RO, LIN, PAR)` matrices are `256x256x172`, `256x172x256`, and
   `256x204x204`; the canonical-RAS physical XYZ NIfTI shapes are
   `172x256x256`, `256x172x256`, and `204x204x256`.
-- [ ] Generalize the historical product GRAPPA/corrected-LLR review interface
+- [x] Generalize the historical product GRAPPA/corrected-LLR review interface
   for the R1 direct-FFT reference, full-resolution frozen Wavelet result, and
   three low-resolution Wavelet results. Keep real paths in ignored local
   configuration or launcher files and preserve historical compatibility.
-- [ ] Generate and visually approve native-grid and matched-grid R1 review
+- [x] Generate and visually approve native-grid and matched-grid R1 review
   figures before calculating descriptive resolution-tradeoff metrics. Native
   panels must preserve each matrix and use physical RAS coordinates; matched
   panels must label display-only interpolation explicitly. Use neither BET nor
   DICOM for the visual review.
-- [ ] After visual approval, generalize and run descriptive R1
+- [x] After visual approval, generalize and run descriptive R1
   resolution-tradeoff analysis. Use the approved `f=0.59` plus one-voxel BET
   mask only for metrics, avoid true-SNR/CNR claims, and perform no composite
   ranking or automatic resolution selection.

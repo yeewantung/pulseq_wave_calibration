@@ -162,6 +162,67 @@ class AnalysisRunTests(unittest.TestCase):
             self.assertTrue((output / "resolution_tradeoff_summary.png").is_file())
             self.assertTrue((output / "analysis_manifest.json").is_file())
 
+            approval_path = root / "visual_approval.json"
+            approval_path.write_text(
+                json.dumps(
+                    {
+                        "status": "approved",
+                        "review_manifest": {
+                            "path": str(review_path.resolve()),
+                            "sha256": sha256_file(review_path),
+                        },
+                        "approved_outputs": [
+                            "native_grid_comparison",
+                            "matched_grid_comparison",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            configured_output = root / "configured_analysis"
+            config_path = root / "analysis.local.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "review_manifest": str(review_path),
+                        "visual_approval_record": str(approval_path),
+                        "approved_bet_mask": str(mask_path),
+                        "mask_alignment": "exact_reference_grid",
+                        "shared_registration": None,
+                        "output_dir": str(configured_output),
+                        "full_resolution_key": "full_resolution_llr",
+                        "anatomical_reference_key": "grappa",
+                        "metric_mask_reference_key": "full_resolution_llr",
+                        "matched_reference_keys": ["full_resolution_llr", "grappa"],
+                        "excluded_resolution_keys": ["grappa"],
+                        "scientific_scope": {
+                            "approved_bet_used_for_metrics_only": True,
+                            "true_snr_or_cnr_claimed": False,
+                            "automatic_selection_performed": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            configured = run(
+                argparse.Namespace(
+                    config=config_path,
+                    review_manifest=None,
+                    approved_bet_mask=None,
+                    shared_registration=None,
+                    output_dir=None,
+                )
+            )
+            self.assertEqual(
+                configured["inputs"]["mask_alignment"]["mode"],
+                "exact_reference_grid",
+            )
+            self.assertEqual(
+                configured["inputs"]["visual_approval"]["record"]["status"],
+                "approved",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

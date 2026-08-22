@@ -8,22 +8,27 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Adapt the physical-coordinate retrospective low-resolution review to the
-completed R1 Wavelet study, then generate native-grid and matched-grid figures
-for explicit user approval. The R1 review should compare the direct FFT RSS
-reference, the full-resolution frozen Wavelet result, and all three
-low-resolution Wavelet cases. Keep native data untouched; resample only the
-clearly labelled matched-grid display. Use physical RAS coordinates and
-display-only scaling. Do not calculate resolution-tradeoff metrics until the
-user approves the figures.
+The R1 native/matched review was explicitly approved and the approval-gated
+descriptive analysis is complete. Review or present its tradeoffs; do not infer
+an automatic preferred resolution. The next unresolved scientific item is an
+independent confirmation scan if one is acquired. Final repository/output
+cleanup remains deferred until presentation outputs are frozen.
 
-Do not run `scripts/run_retrospective_low_resolution_review.sh` unchanged for
-this task. That entry point and its current scientific labels are specific to
-the historical product GRAPPA/corrected-LLR study. Generalize the review code
-through a path-agnostic tracked interface plus an ignored machine-local
-configuration or launcher. In particular, remove hard-coded GRAPPA, LLR, and
-regularization labels from the reusable code. Preserve the existing historical
-product behavior.
+The review and analysis interfaces now accept path-agnostic JSON configuration
+while preserving the historical product launch behavior. The R1 outputs are
+under the private retrospective Wavelet tree in `visual_review` and
+`resolution_tradeoff_analysis`. A separate `visual_approval.json` binds the
+approved native and matched figures to their review manifest.
+
+For lower-X, lower-Y, and balanced cases respectively, native total
+edge-gradient ratios to full-resolution Wavelet are `0.9779/0.9773/0.9627`;
+the signal/local-residual proxy is `21.01/21.33/21.47` versus `18.77` at full
+resolution; matched brain NRMSE is `0.06236/0.06260/0.06552`; and mean axial
+SSIM is `0.9265/0.9280/0.9150`. Expected directional losses are X `0.9227`, Y
+`0.9164`, and balanced X/Y `0.9514/0.9463`. These are descriptive results, not
+a selected winner. The approved direct-FFT BET remains metrics-only and exact
+grid; fixed auxiliary supports derive from full-resolution Wavelet because
+direct FFT noise fills the FOV. Background quantities are QC, not SNR/CNR.
 
 The three R1 retrospective reconstructions completed successfully on
 2026-08-21 local time. The batch and all case manifests report `complete`;
@@ -466,13 +471,9 @@ smooth-brain signal/local-residual proxy and explicitly does not call it SNR.
 
 The fully sampled R1 retrospective batch uses the same target matrices but the
 frozen Wavelet `lambda=1.5e-2` configuration instead of the historical
-corrected LLR setting. All three R1 cases and their canonical-RAS exports are
-complete. The historical review and analysis launchers must be generalized
-before applying them to R1 because their current inputs, labels, and scientific
-scope are product GRAPPA/corrected-LLR-specific. Preserve backward
-compatibility, keep private paths in ignored local files, and require user
-approval of the R1 native/matched review before running R1 descriptive
-metrics.
+corrected LLR setting. All three cases, the generalized review, explicit visual
+approval, and descriptive analysis are complete. Backward compatibility is
+preserved and private paths remain in ignored local files.
 
 ## Accepted historical R3 outputs
 

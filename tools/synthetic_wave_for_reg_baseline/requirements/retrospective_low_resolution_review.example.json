@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "batch_manifest": "/path/to/retrospective_low_resolution/batch_manifest.json",
+  "output_dir": "/path/to/new_visual_review_output",
+  "reference_volumes": [
+    {
+      "key": "anatomical_reference",
+      "title": "Direct FFT RSS reference\\n1 x 1 x 1 mm",
+      "path": "/path/to/direct_fft_rss_ras.nii.gz",
+      "require_canonical_export": false
+    },
+    {
+      "key": "full_resolution_regularized",
+      "title": "Full-resolution frozen regularized result\\n1 x 1 x 1 mm",
+      "path": "/path/to/full_resolution_regularized_part-mag.nii.gz",
+      "require_canonical_export": true
+    }
+  ],
+  "matched_grid_reference_key": "full_resolution_regularized",
+  "retrospective_title_template": "Retrospective frozen regularized result\\n{case_label}\\n{resolution_mm} mm",
+  "display": {
+    "percentile": 99.5,
+    "native_figure_title": "Retrospective-resolution native-grid review\\nSame RAS locations and physical FOV; no spatial resampling",
+    "matched_figure_title": "Retrospective-resolution matched-grid review\\nLow-resolution magnitudes linearly resampled to the full-resolution RAS grid for display only"
+  },
+  "scientific_scope": {
+    "regularization": "describe the frozen method and parameter",
+    "anatomical_reference_role": "qualitative direct reconstruction reference",
+    "full_resolution_role": "same-regularizer resolution reference",
+    "dicom_used": false,
+    "bet_mask_used": false,
+    "quantitative_ranking_performed": false
+  },
+  "provenance_manifests": [
+    "/path/to/reference_manifest.json",
+    "/path/to/regularization_selection_manifest.json",
+    "/path/to/full_resolution_reconstruction_manifest.json"
+  ]
+}

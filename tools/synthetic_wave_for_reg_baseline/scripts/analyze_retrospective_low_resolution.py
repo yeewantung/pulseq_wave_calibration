@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quantify retrospective-resolution fidelity, sharpness, and noise proxies."""
+"""Quantify configured retrospective-resolution fidelity and sharpness tradeoffs."""
 
 from __future__ import annotations
 
@@ -42,6 +42,13 @@ class AnalysisVolume:
     data: np.ndarray
     geometry: dict[str, Any]
     case: dict[str, Any] | None
+
+
+def _resolve_config_path(config_path: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = config_path.parent / path
+    return path.resolve()
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -366,7 +373,9 @@ def _save_mask(
     nib.save(nib.Nifti1Image(mask.astype(np.uint8), reference_image.affine, header), path)
 
 
-def _load_review_volumes(review: dict[str, Any]) -> list[AnalysisVolume]:
+def _load_review_volumes(
+    review: dict[str, Any], required_reference_keys: Sequence[str]
+) -> list[AnalysisVolume]:
     volumes = []
     for record in review["inputs"]:
         path = Path(record["path"]).expanduser().resolve()
@@ -392,9 +401,11 @@ def _load_review_volumes(review: dict[str, Any]) -> list[AnalysisVolume]:
                 case=case,
             )
         )
-    required = {"grappa", "full_resolution_llr"}
+    required = set(required_reference_keys)
     if not required.issubset(volume.key for volume in volumes) or len(volumes) != 5:
-        raise ValueError("Review manifest must contain GRAPPA, full-resolution LLR, and three LR cases.")
+        raise ValueError(
+            "Review manifest must contain the configured references and three LR cases."
+        )
     return volumes
 
 
@@ -411,8 +422,14 @@ def _plot_summary(
     native_rows: Sequence[dict[str, Any]],
     matched_rows: Sequence[dict[str, Any]],
     output_path: Path,
+    *,
+    full_resolution_key: str,
+    excluded_resolution_keys: Sequence[str],
+    figure_title: str,
+    fidelity_title: str,
 ) -> None:
-    resolution_rows = [row for row in native_rows if row["case"] != "grappa"]
+    excluded = set(excluded_resolution_keys)
+    resolution_rows = [row for row in native_rows if row["case"] not in excluded]
 
     def display_label(row: dict[str, Any]) -> str:
         return " x ".join(
@@ -465,8 +482,8 @@ def _plot_summary(
     full_reference = {
         row["candidate"]: row
         for row in matched_rows
-        if row["reference"] == "full_resolution_llr"
-        and row["candidate"] != "grappa"
+        if row["reference"] == full_resolution_key
+        and row["candidate"] not in excluded
     }
     values = [full_reference[row["case"]]["nrmse_brain"] for row in resolution_rows]
     axes[1, 1].bar(x, values, color="0.45", hatch="//")
@@ -474,8 +491,8 @@ def _plot_summary(
         x, [display_label(row) for row in resolution_rows], rotation=18, ha="right"
     )
     axes[1, 1].set_ylabel("Brain NRMSE")
-    axes[1, 1].set_title("Matched 1 mm fidelity to full-resolution LLR")
-    figure.suptitle("Retrospective low-resolution tradeoffs — descriptive, no automatic selection", fontsize=14)
+    axes[1, 1].set_title(fidelity_title)
+    figure.suptitle(figure_title, fontsize=14)
     figure.savefig(output_path, dpi=180)
     plt.close(figure)
 
@@ -484,39 +501,182 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument("--review-manifest", required=True, type=Path)
-    parser.add_argument("--approved-bet-mask", required=True, type=Path)
-    parser.add_argument("--shared-registration", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
-    return parser.parse_args(argv)
+    parser.add_argument("--config", type=Path)
+    parser.add_argument("--review-manifest", type=Path, help="Legacy product-analysis input.")
+    parser.add_argument("--approved-bet-mask", type=Path, help="Legacy product-analysis input.")
+    parser.add_argument("--shared-registration", type=Path, help="Legacy product-analysis input.")
+    parser.add_argument("--output-dir", type=Path)
+    args = parser.parse_args(argv)
+    legacy = (
+        args.review_manifest,
+        args.approved_bet_mask,
+        args.shared_registration,
+        args.output_dir,
+    )
+    if args.config is not None:
+        if any(value is not None for value in legacy):
+            parser.error("--config cannot be mixed with legacy arguments")
+    elif any(value is None for value in legacy):
+        parser.error("either --config or all legacy analysis arguments are required")
+    return args
+
+
+def _legacy_settings(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "review_path": args.review_manifest.expanduser().resolve(),
+        "mask_path": args.approved_bet_mask.expanduser().resolve(),
+        "registration_path": args.shared_registration.expanduser().resolve(),
+        "output_dir": args.output_dir.expanduser().resolve(),
+        "full_resolution_key": "full_resolution_llr",
+        "anatomical_reference_key": "grappa",
+        "metric_mask_reference_key": "full_resolution_llr",
+        "matched_reference_keys": ["full_resolution_llr", "grappa"],
+        "excluded_resolution_keys": ["grappa"],
+        "figure_title": (
+            "Retrospective low-resolution tradeoffs — descriptive, "
+            "no automatic selection"
+        ),
+        "fidelity_title": "Matched 1 mm fidelity to full-resolution LLR",
+        "scientific_scope": {
+            "full_resolution_reference": "same corrected LLR regularization",
+            "grappa_reference": "temporary secondary anatomical comparison",
+            "dicom_intensities_used": False,
+            "approved_bet_used_for_metrics_only": True,
+            "candidate_registration_performed": False,
+            "true_snr_or_cnr_claimed": False,
+            "automatic_selection_performed": False,
+        },
+        "approval_path": None,
+        "config_path": None,
+    }
+
+
+def _configured_settings(config_path: Path) -> dict[str, Any]:
+    config_path = config_path.expanduser().resolve()
+    config = _load_json(config_path)
+    if config.get("format_version") != 1:
+        raise ValueError("Analysis config format_version must be 1.")
+    mask_alignment = config.get("mask_alignment")
+    if mask_alignment not in ("exact_reference_grid", "shared_rigid_registration"):
+        raise ValueError("Unsupported mask_alignment.")
+    registration = config.get("shared_registration")
+    if mask_alignment == "shared_rigid_registration" and not registration:
+        raise ValueError("shared_registration is required for shared rigid mask alignment.")
+    if mask_alignment == "exact_reference_grid" and registration is not None:
+        raise ValueError("Exact-grid mask alignment must not specify registration.")
+    matched_keys = [str(value) for value in config["matched_reference_keys"]]
+    if not matched_keys:
+        raise ValueError("matched_reference_keys must not be empty.")
+    scope = config.get("scientific_scope", {})
+    if not isinstance(scope, dict):
+        raise ValueError("scientific_scope must be an object.")
+    return {
+        "review_path": _resolve_config_path(config_path, str(config["review_manifest"])),
+        "mask_path": _resolve_config_path(config_path, str(config["approved_bet_mask"])),
+        "registration_path": (
+            None
+            if registration is None
+            else _resolve_config_path(config_path, str(registration))
+        ),
+        "output_dir": _resolve_config_path(config_path, str(config["output_dir"])),
+        "full_resolution_key": str(config["full_resolution_key"]),
+        "anatomical_reference_key": str(config["anatomical_reference_key"]),
+        "metric_mask_reference_key": str(config["metric_mask_reference_key"]),
+        "matched_reference_keys": matched_keys,
+        "excluded_resolution_keys": [
+            str(value) for value in config.get("excluded_resolution_keys", [])
+        ],
+        "figure_title": str(
+            config.get(
+                "figure_title",
+                "Retrospective low-resolution tradeoffs — descriptive, "
+                "no automatic selection",
+            )
+        ).replace("\\n", "\n"),
+        "fidelity_title": str(
+            config.get("fidelity_title", "Matched-grid fidelity to full resolution")
+        ),
+        "scientific_scope": scope,
+        "approval_path": _resolve_config_path(
+            config_path, str(config["visual_approval_record"])
+        ),
+        "config_path": config_path,
+    }
+
+
+def _validate_visual_approval(approval_path: Path, review_path: Path) -> dict[str, Any]:
+    approval = _load_json(approval_path)
+    if approval.get("status") != "approved":
+        raise ValueError("Visual approval record is not approved.")
+    review_record = approval.get("review_manifest", {})
+    if Path(str(review_record.get("path", ""))).expanduser().resolve() != review_path:
+        raise ValueError("Visual approval record names a different review manifest.")
+    if review_record.get("sha256") != sha256_file(review_path):
+        raise ValueError("Visual approval record does not match the review manifest hash.")
+    if set(approval.get("approved_outputs", [])) != {
+        "native_grid_comparison",
+        "matched_grid_comparison",
+    }:
+        raise ValueError("Both native-grid and matched-grid outputs require approval.")
+    return approval
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    review_path = args.review_manifest.expanduser().resolve()
-    mask_path = args.approved_bet_mask.expanduser().resolve()
-    registration_path = args.shared_registration.expanduser().resolve()
-    output_dir = args.output_dir.expanduser().resolve()
+    settings = (
+        _legacy_settings(args)
+        if getattr(args, "config", None) is None
+        else _configured_settings(args.config)
+    )
+    review_path = settings["review_path"]
+    mask_path = settings["mask_path"]
+    registration_path = settings["registration_path"]
+    output_dir = settings["output_dir"]
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Analysis output directory is not empty: {output_dir}")
 
     review = _load_json(review_path)
     if review.get("status") != "complete":
         raise ValueError(f"Visual review is not complete: {review_path}")
-    volumes = _load_review_volumes(review)
+    approval = (
+        None
+        if settings["approval_path"] is None
+        else _validate_visual_approval(settings["approval_path"], review_path)
+    )
+    required_keys = {
+        settings["full_resolution_key"],
+        settings["anatomical_reference_key"],
+        settings["metric_mask_reference_key"],
+        *settings["matched_reference_keys"],
+    }
+    volumes = _load_review_volumes(review, sorted(required_keys))
     by_key = {volume.key: volume for volume in volumes}
-    full = by_key["full_resolution_llr"]
-    grappa = by_key["grappa"]
-    if full.image.shape != grappa.image.shape or not np.allclose(
-        full.image.affine, grappa.image.affine, atol=1e-4
+    full = by_key[settings["full_resolution_key"]]
+    anatomical_reference = by_key[settings["anatomical_reference_key"]]
+    metric_mask_reference = by_key[settings["metric_mask_reference_key"]]
+    if full.image.shape != anatomical_reference.image.shape or not np.allclose(
+        full.image.affine, anatomical_reference.image.affine, atol=1e-4
     ):
-        raise ValueError("Full-resolution LLR and GRAPPA do not share the reference grid.")
+        raise ValueError("Configured full-resolution references do not share a grid.")
+    if full.image.shape != metric_mask_reference.image.shape or not np.allclose(
+        full.image.affine, metric_mask_reference.image.affine, atol=1e-4
+    ):
+        raise ValueError("Metric-mask reference does not share the full-resolution grid.")
 
     mask_image = nib.as_closest_canonical(nib.load(str(mask_path)))
-    registration = _load_json(registration_path)
-    brain = map_fixed_mask_to_reconstruction(mask_image, full.image, registration)
+    if registration_path is None:
+        if mask_image.shape != full.image.shape or not np.allclose(
+            mask_image.affine, full.image.affine, atol=1e-5
+        ):
+            raise ValueError("Approved BET mask does not match the exact reference grid.")
+        brain = np.asarray(mask_image.dataobj) > 0
+        if not 0.01 < float(brain.mean()) < 0.8:
+            raise ValueError("Approved BET mask has an implausible volume fraction.")
+    else:
+        registration = _load_json(registration_path)
+        brain = map_fixed_mask_to_reconstruction(mask_image, full.image, registration)
     zooms = full.image.header.get_zooms()[:3]
     edge, background, smooth_region, mask_metadata = _build_reference_masks(
-        full.data, brain, zooms
+        metric_mask_reference.data, brain, zooms
     )
 
     native_rows = []
@@ -529,8 +689,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             volume, native_brain, native_background, native_edge, native_smooth
         )
         native_rows.append(row)
-    native_rows.sort(key=lambda row: (row["case"] != "grappa", row["voxel_volume_mm3"], row["case"]))
-    full_native = next(row for row in native_rows if row["case"] == "full_resolution_llr")
+    excluded = set(settings["excluded_resolution_keys"])
+    native_rows.sort(
+        key=lambda row: (
+            row["case"] in excluded,
+            row["voxel_volume_mm3"],
+            row["case"],
+        )
+    )
+    full_native = next(
+        row for row in native_rows if row["case"] == settings["full_resolution_key"]
+    )
     ratio_metrics = (
         "edge_gradient_mean_per_mm",
         "edge_abs_gradient_x_mean_per_mm",
@@ -541,7 +710,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for key in ratio_metrics:
             row[f"{key}_ratio_to_full"] = (
                 float("nan")
-                if row["case"] == "grappa"
+                if row["case"] in excluded
                 else row[key] / max(full_native[key], 1e-12)
             )
 
@@ -558,7 +727,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             matched_data[volume.key] = data.astype(np.float32, copy=False)
 
     matched_rows = []
-    for reference_key in ("full_resolution_llr", "grappa"):
+    for reference_key in settings["matched_reference_keys"]:
         reference = matched_data[reference_key]
         for volume in volumes:
             metrics = matched_fidelity_metrics(
@@ -590,7 +759,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     native_path = output_dir / "native_resolution_metrics.csv"
     matched_path = output_dir / "matched_fidelity_metrics.csv"
     figure_path = output_dir / "resolution_tradeoff_summary.png"
-    _plot_summary(native_rows, matched_rows, figure_path)
+    _plot_summary(
+        native_rows,
+        matched_rows,
+        figure_path,
+        full_resolution_key=settings["full_resolution_key"],
+        excluded_resolution_keys=settings["excluded_resolution_keys"],
+        figure_title=settings["figure_title"],
+        fidelity_title=settings["fidelity_title"],
+    )
     _write_csv(native_path, native_rows)
     _write_csv(matched_path, matched_rows)
 
@@ -619,23 +796,41 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "complete",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "purpose": "retrospective low-resolution fidelity, sharpness, and noise-proxy analysis",
-        "scientific_scope": {
-            "full_resolution_reference": "same corrected LLR regularization",
-            "grappa_reference": "temporary secondary anatomical comparison",
-            "dicom_intensities_used": False,
-            "approved_bet_used_for_metrics_only": True,
-            "candidate_registration_performed": False,
-            "true_snr_or_cnr_claimed": False,
-            "automatic_selection_performed": False,
-        },
+        "scientific_scope": settings["scientific_scope"],
+        "analysis_config": (
+            None
+            if settings["config_path"] is None
+            else {
+                "path": str(settings["config_path"]),
+                "sha256": sha256_file(settings["config_path"]),
+                "snapshot": _load_json(settings["config_path"]),
+            }
+        ),
         "inputs": {
             "review_manifest": {"path": str(review_path), "sha256": sha256_file(review_path)},
             "approved_bet_mask": {"path": str(mask_path), "sha256": sha256_file(mask_path)},
-            "shared_registration": {
-                "path": str(registration_path),
-                "sha256": sha256_file(registration_path),
-                "use": "transfer the approved fixed mask into untouched reconstruction space",
-            },
+            "visual_approval": (
+                None
+                if settings["approval_path"] is None
+                else {
+                    "path": str(settings["approval_path"]),
+                    "sha256": sha256_file(settings["approval_path"]),
+                    "record": approval,
+                }
+            ),
+            "mask_alignment": (
+                {
+                    "mode": "exact_reference_grid",
+                    "reference_key": settings["metric_mask_reference_key"],
+                }
+                if registration_path is None
+                else {
+                    "mode": "shared_rigid_registration",
+                    "path": str(registration_path),
+                    "sha256": sha256_file(registration_path),
+                    "use": "transfer the approved fixed mask into untouched reconstruction space",
+                }
+            ),
         },
         "fixed_masks": {
             **mask_metadata,

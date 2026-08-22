@@ -19,11 +19,15 @@ These rules apply to work under `tools/synthetic_wave_for_reg_baseline/`.
   output tree. Never overwrite accepted or historical results. Keep each run
   discoverable through a manifest or index that records its purpose, status,
   inputs, configuration, provenance, and canonical outputs.
-- Never commit machine-specific absolute data, user-home, environment, or scan
-  paths in any tracked file. Keep tracked runners path-agnostic, provide
-  copyable `.example.sh` or `.example.json` files with placeholders, and put
-  real paths only in matching `.local.sh` or `.local.json` files that are
-  explicitly ignored by Git. Use environment variables in public documentation.
+- Never expose an actual machine-specific data, user-home, environment, scan,
+  or generated-output path to public GitHub. This prohibition applies to every
+  tracked file and staged change, including source, documentation, examples,
+  tests, fixtures, manifest snapshots, and logs. Put actual paths only in
+  matching `.local.sh` or `.local.json` files that are explicitly ignored by
+  Git; verify them with `git check-ignore` before use. Keep tracked runners
+  path-agnostic, use placeholders in copyable `.example.*` files and environment
+  variables in public documentation, and audit tracked content plus the staged
+  diff for private-path signatures before every commit or push.
 - Prefer a small number of predictable entry points and shallow, navigable
   directories. Use stable descriptive names, avoid unexplained abbreviations,
   and update the nearest README, manifest, or output index when adding something
