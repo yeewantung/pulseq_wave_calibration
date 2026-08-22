@@ -1,0 +1,49 @@
+{
+  "source": {
+    "bart_input_dir": "/path/to/r1/synthetic_wave/target_sampling/bart_inputs",
+    "no_wave_kspace": "/path/to/r1/reconstructions/no_wave/source_full_ncc12.npy",
+    "existing_maps": "/path/to/r1/reconstructions/synthetic_wave/ecalib_crop-0p6_lambda0/coil_sens_bart",
+    "calibration_kspace": "/path/to/r1/synthetic_wave/target_sampling/bart_inputs/kspace_calib",
+    "sequence": "/path/to/mprage_sequence.seq",
+    "twix": "/path/to/r1_measurement.dat",
+    "synthesis_manifest": "/path/to/r1/synthetic_wave/full_encoding/manifest.json",
+    "companion_manifests": [
+      "/path/to/r1/synthetic_wave/target_sampling/manifest.json",
+      "/path/to/r1/synthetic_wave/target_sampling/bart_inputs/kspace_calib_manifest.json",
+      "/path/to/r1/reconstructions/synthetic_wave/ecalib_crop-0p6_lambda0/manifest.json",
+      "/path/to/r1/evaluation/direct_fft_reference/regularization_selection/selection_manifest.json"
+    ],
+    "subject": "mprage-r1-retro-low-resolution"
+  },
+  "output_root": "/path/to/r1/retrospective_low_resolution_wavelet_lambda-1p5e-2",
+  "pe_matrix_policy": "nearest multiple of 4",
+  "cases": [
+    {
+      "resolution_mm_xyz": [1.5, 1.0, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "lower physical-X resolution"
+    },
+    {
+      "resolution_mm_xyz": [1.0, 1.5, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "lower physical-Y resolution"
+    },
+    {
+      "resolution_mm_xyz": [1.25, 1.25, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "balanced lower in-plane resolution"
+    }
+  ],
+  "reconstruction": {
+    "bart": "bart",
+    "regularizer": "wavelet",
+    "lambda": 0.015,
+    "iterations": 100,
+    "tolerance": 0.000001,
+    "maximum_eigenvalue": null
+  },
+  "runtime": {
+    "fft_workers": 4,
+    "readout_chunk": 8
+  }
+}

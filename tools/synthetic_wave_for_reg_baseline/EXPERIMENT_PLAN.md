@@ -28,9 +28,10 @@ new R1 dataset is available.
 
 As of 2026-08-21, the fully sampled R1 source preparation, synthetic-Wave
 encoding, GPU lambda-zero/coarse/refined/targeted reconstructions, approved-mask
-metric support, and combined 49-case exact-grid evaluation are complete. The next
-decision is visual and quantitative finalist selection, not more general
-infrastructure work.
+metric support, combined 49-case exact-grid evaluation, frozen Wavelet
+selection, and qualitative R3 transfer are complete. The next reconstruction
+is the three-case R1 retrospective low-resolution study using that frozen
+Wavelet setting.
 
 ## Current implementation and execution status
 
@@ -48,7 +49,10 @@ Completed:
 - [x] manifest-backed full Wave encoding and separate post-Wave target mask;
 - [x] manifest-backed measured ACS export from direct image data or refscan;
 - [x] manifest-backed GPU lambda-zero reconstruction and tmux runner;
-- [x] combined coarse/refined exact-grid validation and fixed-mask evaluation.
+- [x] combined coarse/refined exact-grid validation and fixed-mask evaluation;
+- [x] frozen R1 Wavelet selection and qualitative-only R3 transfer approval;
+- [x] structurally validated R1 retrospective low-resolution configuration and
+  private/public launcher split.
 
 Pending:
 
@@ -71,8 +75,10 @@ Pending:
 - [x] combine retained and new cases for exact-grid validation and direct-FFT
   metrics without registration, interpolation, or DICOM intensity ranking;
 - [x] freeze Wavelet `lambda=1.5e-2` as the R1-selected MPRAGE regularization;
-- [ ] apply it unchanged to R3 as a qualitative cross-dataset transfer check;
+- [x] apply it unchanged to R3 as a qualitative cross-dataset transfer check;
   do not calculate selection metrics or retune on R3.
+- [ ] run the three retrospective low-resolution R1 cases with frozen Wavelet
+  `lambda=1.5e-2` and case-specific maximum-eigenvalue estimation.
 
 Intentionally deferred or excluded: no-wave BART PICS, completion of the older
 partial-readout R1 scans, DICOM-intensity ranking before the new R1 DICOM is

@@ -244,14 +244,29 @@ separately and only after full Wave encoding.
   choice after quantitative and common-window review. LLR remains a documented
   comparison and is not selected. The hash-bound decision record is
   `evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`.
-- [ ] Apply the frozen Wavelet `lambda=1.5e-2` configuration unchanged to R3 as
+- [x] Apply the frozen Wavelet `lambda=1.5e-2` configuration unchanged to R3 as
   a qualitative cross-dataset transfer check. Do not calculate R3 selection
   metrics or retune against the historical R3 DICOM or GRAPPA results.
 - [x] Add the path-agnostic tracked R3 transfer runner and copyable example
   launcher. Keep the real server paths only in
   `run_r3_wavelet_transfer.local.sh`, which is explicitly ignored by Git.
-- [ ] Run the ignored local launcher in tmux and obtain visual confirmation of
-  the common-window FISTA-zero versus frozen-Wavelet transfer figure.
+- [x] Run the ignored local launcher in tmux and obtain visual confirmation of
+  the common-window FISTA-zero versus frozen-Wavelet transfer figure. The user
+  approved the smoother regularized result, and the hash-validated review
+  manifest is `qualitative_transfer_approved`.
+
+## R1 retrospective low resolution
+
+- [x] Add a tracked path-agnostic runner, copyable launcher/configuration
+  examples, and ignored machine-local files for the R1 study.
+- [x] Bind the configuration to the frozen selection manifest and require
+  Wavelet `lambda=1.5e-2`, FISTA, 100 iterations, tolerance `1e-6`, and BART
+  GPU `-g`; estimate maximum eigenvalue separately for each target matrix.
+- [x] Pass non-writing structural validation for `256x256x172`,
+  `256x172x256`, and `256x204x204` logical matrices.
+- [ ] Run the three R1 cases in tmux and retain their completed manifests.
+- [ ] Generate and visually approve native-grid and matched-grid R1 review
+  figures before calculating descriptive resolution-tradeoff metrics.
 
 ## Repository privacy and reproducibility
 

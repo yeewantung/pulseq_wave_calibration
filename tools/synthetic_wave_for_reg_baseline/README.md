@@ -45,18 +45,29 @@ signed-axis correction is no longer required for newly exported results.
 Retrospective low-resolution code support is integrated under
 `tools/wave_retro_lr_recon/`. It changes phase encoding only, rounds each PE
 matrix to the nearest multiple of four, reconstructs with GPU `bart wave -g`,
-and exports through the same canonical-RAS path. Copy
+and exports through the same canonical-RAS path. For the historical product
+study, copy
 `requirements/retrospective_low_resolution_product.example.json` to the
 ignored `.local.json` name, fill in private paths, and run the tmux-friendly
 `scripts/run_retrospective_low_resolution.sh` launcher. No large retrospective
 outputs are created by validation alone.
 
-MID00198 has passed manifest-backed metadata inspection and a sample probe.
-Large source preparation and reconstruction acceptance remain pending. The
-older 2021 R1 scans remain partial-readout fallbacks only. The final R1 Wavelet
-coarse sweep will use lambda values
-`1e-6`, `1e-5`, `1e-4`, `1e-3`, and `1e-2`, plus lambda zero. LLR must use the
-verified BART real/imaginary split (`-v`) and output recombination.
+For the final R1 study, use
+`requirements/retrospective_low_resolution_r1.example.json` and
+`scripts/run_r1_retrospective_low_resolution.example.sh` to create their
+ignored local copies. The R1 runner validates the frozen Wavelet
+`lambda=1.5e-2` selection before delegating to the same reconstruction tool.
+After a non-writing `--validate-only` preflight, run in tmux with:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_r1_retrospective_low_resolution.local.sh \
+    --resume
+```
+
+MID00198 has passed manifest-backed qualification, source preparation,
+synthetic-Wave reconstruction, refinement, and fixed-reference evaluation.
+Wavelet `lambda=1.5e-2` is frozen and its qualitative R3 transfer is approved.
+The older 2021 R1 scans remain partial-readout fallbacks only.
 
 New acquisitions use one portable dataset manifest for input/output paths,
 logical geometry, acquired and synthetic-Wave sampling, reconstruction

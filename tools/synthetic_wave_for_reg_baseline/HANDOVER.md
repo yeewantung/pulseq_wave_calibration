@@ -7,17 +7,20 @@ plan. The old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Apply the frozen R1-selected Wavelet `lambda=1.5e-2` configuration unchanged to
-the existing R3 dataset as a qualitative portability check; do not calculate
-selection metrics or retune on R3. Run the ignored machine-local launcher
-`scripts/run_r3_wavelet_transfer.local.sh` in tmux. The tracked public template
-is `scripts/run_r3_wavelet_transfer.example.sh`, and the path-agnostic
-implementation is `scripts/run_r3_wavelet_transfer.sh`. Private absolute paths
-must appear only in the ignored local copy. The hash-bound selection record is
-`evaluation/direct_fft_reference/regularization_selection/selection_manifest.json`
-under the R1 dataset root. It identifies the exact reconstruction, direct-FFT
-reference, 49-case geometry report, metric package, and explicit user decision.
-LLR is retained as a comparison but is not selected.
+Run the three retrospective low-resolution cases on the fully sampled R1
+source with frozen Wavelet `lambda=1.5e-2`. Use the ignored machine-local
+`scripts/run_r1_retrospective_low_resolution.local.sh --resume` launcher in
+tmux. The tracked example launcher and configuration contain placeholders;
+real paths remain only in ignored `.local.sh` and `.local.json` files. The
+configuration has passed structural validation without writing output and
+resolves logical matrices `256x256x172`, `256x172x256`, and `256x204x204`.
+Each case estimates its own maximum eigenvalue while preserving the selected
+regularizer, lambda, FISTA iterations/tolerance, and mandatory GPU `-g`.
+
+The R3 transfer review is complete and explicitly approved. Its manifest
+records that the frozen regularized result is visibly smoother, no metrics
+were calculated, and lambda was not retuned on R3. LLR remains a comparison
+but is not selected.
 
 The 11-case targeted follow-up is complete under
 `reconstructions/synthetic_wave/regularization_targeted_ecalib_crop-0p6`, and
