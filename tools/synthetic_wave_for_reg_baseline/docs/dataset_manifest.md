@@ -200,7 +200,7 @@ After reviewing the full-Wave diagnostics, continue in tmux with:
 ```bash
 tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
     reconstruct \
-    /path/to/data/20260821_product_synthetic_wave_r1_ncc12_r3x2/dataset_manifest.json \
+    "$R1_SYNTHETIC_WAVE_ROOT/dataset_manifest.json" \
     --confirm-full-wave-reviewed
 ```
 

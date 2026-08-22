@@ -9,10 +9,14 @@ DATASET_ROOT="$(realpath -m "$R1_SYNTHETIC_WAVE_ROOT")"
 DATASET_MANIFEST="${1:-$DATASET_ROOT/dataset_manifest.json}"
 OUTPUT_DIR="$DATASET_ROOT/reconstructions/synthetic_wave/ecalib_crop-0p6_lambda0"
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
-command -v bart
+command -v python >/dev/null 2>&1 || {
+    echo "Error: activate the intended Python environment first." >&2
+    exit 2
+}
+command -v bart >/dev/null 2>&1 || {
+    echo "Error: activate the compatible BART build first." >&2
+    exit 2
+}
 
 python "$SCRIPT_DIR/run_bart_wave_lambda0.py" \
     --dataset-manifest "$DATASET_MANIFEST" \

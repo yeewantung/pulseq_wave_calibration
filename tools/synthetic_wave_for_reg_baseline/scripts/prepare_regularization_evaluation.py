@@ -412,7 +412,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--dicom-series-description", default="t1_mprage_sag_p2_ND")
     parser.add_argument("--expected-cases", type=int, default=25)
     parser.add_argument("--expected-dicom-count", type=int, default=256)
-    parser.add_argument("--dcm2niix", type=Path, default=Path("/path/to/software/bin/dcm2niix"))
+    parser.add_argument("--dcm2niix", type=Path, default=Path("dcm2niix"))
     parser.add_argument(
         "--nifti-root",
         type=Path,
@@ -431,8 +431,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     if not recon_root.is_dir() or not dicom_dir.is_dir():
         raise FileNotFoundError("The reconstruction root or DICOM directory is missing")
-    if not args.dcm2niix.is_file():
+    located_dcm2niix = shutil.which(str(args.dcm2niix.expanduser()))
+    if located_dcm2niix is None:
         raise FileNotFoundError(args.dcm2niix)
+    args.dcm2niix = Path(located_dcm2niix).resolve()
 
     cases = discover_cases(recon_root)
     if len(cases) != args.expected_cases:

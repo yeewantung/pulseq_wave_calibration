@@ -131,7 +131,7 @@ class MetricsGeometryGateTests(unittest.TestCase):
         )
 
     def test_passes_exact_grid_with_approved_mask_and_gpu_case(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             args = self._fixture(Path(temporary))
             report = run(args)
 
@@ -142,7 +142,7 @@ class MetricsGeometryGateTests(unittest.TestCase):
             self.assertTrue(args.output.is_file())
 
     def test_rejects_case_without_gpu_flag(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             args = self._fixture(Path(temporary), gpu=False)
             with self.assertRaisesRegex(ValueError, "GPU BART -g"):
                 run(args)

@@ -83,12 +83,13 @@ unless `--resume` finds matching case metadata.
 
 ## Commands
 
-Activate the Macha environment and BART build first:
+Activate the appropriate Python environment and BART build first. Keep the
+machine-specific startup locations in an ignored local launcher:
 
 ```bash
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
+source "$CONDA_SETUP"
+conda activate "$WAVE_RECON_CONDA_ENV"
+source "$BART_STARTUP"
 ```
 
 Structural validation reads JSON, sequence metadata, NPY headers, and CFL

@@ -427,7 +427,7 @@ def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
         bart_command = shutil.which("bart")
         if bart_command is None:
             raise FileNotFoundError(
-                "bart is not on PATH; source /path/to/user_workspace/bart/bart_startup.sh first"
+                "bart is not on PATH; activate the compatible BART build first"
             )
         bart_settings = dataset.payload["reconstruction"]["bart"]
         if "lambda0_reconstruction_dir" not in dataset.payload["outputs"]:

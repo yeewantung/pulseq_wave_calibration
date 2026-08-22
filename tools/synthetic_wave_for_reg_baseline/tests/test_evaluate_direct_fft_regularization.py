@@ -25,7 +25,7 @@ from evaluate_direct_fft_regularization import (  # noqa: E402
 
 class CandidateLoadingTests(unittest.TestCase):
     def test_restores_export_percentile_normalization(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             nifti_path = root / "magnitude.nii.gz"
             sidecar_path = root / "magnitude.json"
@@ -101,7 +101,7 @@ class MetricLeaderTests(unittest.TestCase):
                 }
             )
 
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "ragged_grid.png"
             _plot_llr_heatmaps(records, output)
             self.assertGreater(output.stat().st_size, 0)

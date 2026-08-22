@@ -16,3 +16,6 @@ AGENTS.md
 
 # User/server-specific launchers copied from tracked examples.
 /tools/synthetic_wave_for_reg_baseline/scripts/*.local.sh
+
+# User/server-specific configuration copied from tracked examples.
+/tools/synthetic_wave_for_reg_baseline/requirements/*.local.json

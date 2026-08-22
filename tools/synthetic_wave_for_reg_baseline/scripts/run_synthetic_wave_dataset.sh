@@ -23,8 +23,10 @@ if [[ -z "$DATASET_MANIFEST" ]]; then
     exit 2
 fi
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
+command -v python >/dev/null 2>&1 || {
+    echo "Error: activate the intended Python environment first." >&2
+    exit 2
+}
 
 python "$SCRIPT_DIR/validate_dataset_manifest.py" \
     "$DATASET_MANIFEST" --check-inputs
@@ -44,8 +46,10 @@ case "$MODE" in
             echo "Reconstruction requires --confirm-full-wave-reviewed." >&2
             exit 2
         fi
-        source /path/to/user_workspace/bart/bart_startup.sh
-        command -v bart
+        command -v bart >/dev/null 2>&1 || {
+            echo "Error: activate the compatible BART build first." >&2
+            exit 2
+        }
         python "$SCRIPT_DIR/export_bart_wave_inputs.py" \
             --dataset-manifest "$DATASET_MANIFEST" \
             --visual-review-approved --resume

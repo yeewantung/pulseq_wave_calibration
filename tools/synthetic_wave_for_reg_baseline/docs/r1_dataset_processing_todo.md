@@ -2,10 +2,11 @@
 
 Updated: 2026-08-21
 
-This checklist covers the raw-data-first synthetic R3x2 Wave experiment under:
+This checklist covers the raw-data-first synthetic R3x2 Wave experiment under
+the private dataset root supplied by the local environment:
 
 ```text
-/path/to/data/20260821_product
+$R1_PRODUCT_ROOT
 ```
 
 The approved quantitative baseline is direct FFT root-sum-of-squares (RSS) of
@@ -44,7 +45,7 @@ For MID00198 measurement index 1:
 The candidate theoretical Wave sequence is:
 
 ```text
-/path/to/user_workspace/scan_protocols/20260817_integrated/v151/
+$SEQUENCE_ROOT/
   mprage_3d_wave_FOV256x256x256_res1x1x1_ETL256_R1-1_R2-3_
   os4_amp8_cyc10_SAG_prisma_v151.seq
 ```
@@ -104,8 +105,8 @@ separately and only after full Wave encoding.
 ## Reconstruction gates
 
 - [x] Finish manifest support in the lambda-zero runner before launching it.
-- [x] Source BART through `/path/to/user_workspace/bart/bart_startup.sh` and require `-g` for
-  every `bart wave` reconstruction.
+- [x] Require BART from the active local environment and use `-g` for every
+  `bart wave` reconstruction.
 - [x] Estimate the initial dataset-specific ESPIRiT map set from measured ACS.
   Do not
   use `ecalib -I` as the production solution; the prior pilot was negative.
@@ -251,3 +252,16 @@ separately and only after full Wave encoding.
   `run_r3_wavelet_transfer.local.sh`, which is explicitly ignored by Git.
 - [ ] Run the ignored local launcher in tmux and obtain visual confirmation of
   the common-window FISTA-zero versus frozen-Wavelet transfer figure.
+
+## Repository privacy and reproducibility
+
+- [x] Record the decision that R3 is rerun for qualitative visual transfer
+  assessment only; it must not provide metrics or retune the R1-selected lambda.
+- [x] Keep tracked launchers path-agnostic and provide copyable examples for
+  machine-local environment and dataset paths.
+- [x] Convert the retrospective low-resolution requirement to a tracked
+  `.example.json` plus ignored `.local.json` configuration.
+- [x] Remove private absolute paths and server startup locations from the
+  current tracked source, documentation, tests, and configuration.
+- [ ] Rewrite all reachable commits to remove historical private-path strings,
+  audit every rewritten commit, and force-update the public branch.

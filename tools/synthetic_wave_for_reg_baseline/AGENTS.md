@@ -20,9 +20,10 @@ These rules apply to work under `tools/synthetic_wave_for_reg_baseline/`.
   discoverable through a manifest or index that records its purpose, status,
   inputs, configuration, provenance, and canonical outputs.
 - Never commit machine-specific absolute data, user-home, environment, or scan
-  paths in launcher scripts. Keep the tracked runner path-agnostic, provide a
-  copyable `.example.sh` launcher with placeholders, and put real paths only in
-  a matching `.local.sh` launcher that is explicitly ignored by Git.
+  paths in any tracked file. Keep tracked runners path-agnostic, provide
+  copyable `.example.sh` or `.example.json` files with placeholders, and put
+  real paths only in matching `.local.sh` or `.local.json` files that are
+  explicitly ignored by Git. Use environment variables in public documentation.
 - Prefer a small number of predictable entry points and shallow, navigable
   directories. Use stable descriptive names, avoid unexplained abbreviations,
   and update the nearest README, manifest, or output index when adding something

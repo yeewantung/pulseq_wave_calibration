@@ -45,7 +45,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--twix", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--measurement-index", type=int, default=1)
-    parser.add_argument("--dcm2niix", type=Path, default=Path("/path/to/software/bin/dcm2niix"))
+    parser.add_argument("--dcm2niix", type=Path, default=Path("dcm2niix"))
     parser.add_argument(
         "--resume",
         action="store_true",

@@ -506,7 +506,7 @@ def resolve_regularization_inputs(
         bart_command = shutil.which("bart")
         if bart_command is None:
             raise FileNotFoundError(
-                "bart is not on PATH; source /path/to/user_workspace/bart/bart_startup.sh first"
+                "bart is not on PATH; activate the compatible BART build first"
             )
         wrapper = (
             Path(__file__).resolve().parents[3]

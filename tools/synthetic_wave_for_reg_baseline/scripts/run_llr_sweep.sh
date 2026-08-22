@@ -17,10 +17,14 @@ LAMBDA_ZERO_MANIFEST="${2:-$DEFAULT_LAMBDA_ZERO_MANIFEST}"
 OUTPUT_ROOT="$DATASET_ROOT/reconstructions/synthetic_wave/llr_block-8_sweep_ecalib_crop-0p6"
 NATIVE_ZERO_MANIFEST="$DATASET_ROOT/reconstructions/synthetic_wave/wavelet_sweep_ecalib_crop-0p6/wavelet_lambda-0/manifest.json"
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
-command -v bart
+command -v python >/dev/null 2>&1 || {
+    echo "Error: activate the intended Python environment first." >&2
+    exit 2
+}
+command -v bart >/dev/null 2>&1 || {
+    echo "Error: activate the compatible BART build first." >&2
+    exit 2
+}
 
 # Run and validate the split-complex representation before positive regularization.
 python "$SCRIPT_DIR/run_bart_regularization.py" \

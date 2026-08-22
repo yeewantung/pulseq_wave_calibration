@@ -1,0 +1,48 @@
+{
+  "source": {
+    "bart_input_dir": "/path/to/r3/bart_inputs",
+    "no_wave_kspace": "/path/to/full_no_wave_kspace.npy",
+    "existing_maps": "/path/to/coil_sens_bart",
+    "calibration_kspace": "/path/to/kspace_calib",
+    "sequence": "/path/to/mprage_sequence.seq",
+    "twix": "/path/to/measurement.dat",
+    "synthesis_manifest": "/path/to/synthesis_manifest.json",
+    "companion_manifests": [
+      "/path/to/lambda_zero_manifest.json",
+      "/path/to/calibration_manifest.json"
+    ],
+    "subject": "mprage-retro-low-resolution"
+  },
+  "output_root": "/path/to/retrospective_low_resolution_output",
+  "pe_matrix_policy": "nearest multiple of 4",
+  "cases": [
+    {
+      "resolution_mm_xyz": [1.5, 1.0, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "lower physical-X resolution"
+    },
+    {
+      "resolution_mm_xyz": [1.0, 1.5, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "lower physical-Y resolution"
+    },
+    {
+      "resolution_mm_xyz": [1.25, 1.25, 1.0],
+      "acceleration_ry_rz": [3, 2],
+      "label": "balanced lower in-plane resolution"
+    }
+  ],
+  "reconstruction": {
+    "bart": "bart",
+    "regularizer": "llr",
+    "lambda": 0.00002,
+    "block_size": 8,
+    "iterations": 100,
+    "tolerance": 0.000001,
+    "maximum_eigenvalue": null
+  },
+  "runtime": {
+    "fft_workers": 4,
+    "readout_chunk": 8
+  }
+}

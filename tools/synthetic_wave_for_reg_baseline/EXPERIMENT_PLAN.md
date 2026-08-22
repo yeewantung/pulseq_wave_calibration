@@ -116,17 +116,18 @@ when the acquisition provides enough data.
 The older R1 candidates below are retained as documented fallbacks, not the
 active final-selection dataset.
 
-The original two R1 MPRAGE scans are in:
+The original two R1 MPRAGE scans are under the private path recorded as
+`$FALLBACK_R1_ROOT` in the ignored local dataset notes:
 
 ```text
-/path/to/data/2021_05_10_bay4_mprage_R1_subjects2and3
+$FALLBACK_R1_ROOT
 ```
 
-Two additional R1 TWIX files are in:
+Two additional R1 TWIX datasets are similarly referenced as:
 
 ```text
-/path/to/data/2021_05_14_bay4_subject6
-/path/to/data/2021_05_14_bay4_subject7
+$ADDITIONAL_R1_ROOT/subject6
+$ADDITIONAL_R1_ROOT/subject7
 ```
 
 All four scans contain the complete 256 x 192 PE1 x PE2 grid, so none needs
@@ -151,10 +152,10 @@ least one independent scan for confirmation.
 
 ### Preliminary optimization, presentation, and later transfer check
 
-Use the R3x1 product dataset in:
+Use the R3x1 product dataset referenced locally as:
 
 ```text
-/path/to/data/20260817_product
+$R3_PRODUCT_ROOT
 ```
 
 This accelerated dataset is not a true parameter-selection baseline. It has
@@ -190,12 +191,12 @@ historical presentation pilots, not parameter-selection references.
 
 ## 2. Reproducible environment
 
-On `macha`:
+Use environment variables supplied by an ignored machine-local launcher:
 
 ```bash
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
+source "$CONDA_SETUP"
+conda activate "$SYNTHETIC_WAVE_CONDA_ENV"
+source "$BART_STARTUP"
 ```
 
 Use the `bart` resolved by `command -v bart`. Always use `-g` for every BART
@@ -205,7 +206,7 @@ command-specific incompatibility.
 For FSL BET:
 
 ```bash
-export FSLDIR=/path/to/software/packages/fsl/6.0.6
+: "${FSLDIR:?Set FSLDIR in the private local environment}"
 . "${FSLDIR}/etc/fslconf/fsl.sh"
 ```
 
@@ -405,7 +406,7 @@ the current BART-input manifest contract, uses the parent's pinned
 The synthetic-Wave workflow calls it through:
 
 ```text
-requirements/retrospective_low_resolution_product.json
+requirements/retrospective_low_resolution_product.example.json
 scripts/run_retrospective_low_resolution.sh
 ```
 

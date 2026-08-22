@@ -16,10 +16,14 @@ fi
 LAMBDA_ZERO_MANIFEST="${2:-$DEFAULT_LAMBDA_ZERO_MANIFEST}"
 OUTPUT_ROOT="$DATASET_ROOT/reconstructions/synthetic_wave/wavelet_sweep_ecalib_crop-0p6"
 
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
-command -v bart
+command -v python >/dev/null 2>&1 || {
+    echo "Error: activate the intended Python environment first." >&2
+    exit 2
+}
+command -v bart >/dev/null 2>&1 || {
+    echo "Error: activate the compatible BART build first." >&2
+    exit 2
+}
 
 for LAMBDA_VALUE in 0 1e-6 1e-5 1e-4 1e-3 1e-2; do
     python "$SCRIPT_DIR/run_bart_regularization.py" \

@@ -104,8 +104,7 @@ available. The new R1 acquisition is ready, its manifest-backed metadata
 inspection and sample probe pass, and the lambda-zero runner is manifest-aware.
 Remaining consumers are listed in `docs/dataset_portability_audit.md`.
 
-The new R1 dataset is under
-`/path/to/data/20260821_product`. Metadata inspection
+The new R1 dataset is referenced locally as `$R1_PRODUCT_ROOT`. Metadata inspection
 selects MID00198 `t1_mprage_sag_p2.dat` as the actual fully sampled source:
 256 cubed logical matrix, 64 coils, complete duplicate-free PE support, and no
 refscan. MID00196 `pulseq151fix_mprage.dat` is measured R3x1 and must not enter
@@ -120,15 +119,15 @@ separate R3x2 target mask, and image-derived measured ACS.
 ## Environment on macha
 
 ```bash
-source /path/to/user_workspace/miniforge3/etc/profile.d/conda.sh
-conda activate cuda133py312-macha
-source /path/to/user_workspace/bart/bart_startup.sh
+source "$CONDA_SETUP"
+conda activate "$SYNTHETIC_WAVE_CONDA_ENV"
+source "$BART_STARTUP"
 ```
 
 FSL BET:
 
 ```bash
-export FSLDIR=/path/to/software/packages/fsl/6.0.6
+: "${FSLDIR:?Set FSLDIR in the private local environment}"
 . "${FSLDIR}/etc/fslconf/fsl.sh"
 ```
 
@@ -144,7 +143,7 @@ and neck and is retained only under `diagnostics/rejected_bet_loose_mask_f025`.
 The isolated output tree is:
 
 ```text
-/path/to/data/20260817_product/
+$R3_PRODUCT_ROOT/
   synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization
 ```
 
@@ -179,7 +178,7 @@ directory supplies the masked reconstruction k-space and linked PSF without
 duplicating the 1.5 GB calibration CFL. The default output tree is:
 
 ```text
-/path/to/data/20260817_product/
+$R3_PRODUCT_ROOT/
   ecalib_intensity_c050_wave_lambda0
 ```
 
@@ -195,7 +194,7 @@ provisional regularization sweep.
 Repository:
 
 ```text
-/path/to/user_workspace/sources/published_code/pulseq_wave_calibration
+$REPOSITORY_ROOT
 ```
 
 The accepted R3x2 evaluation is commit:
@@ -213,7 +212,7 @@ plan is `EXPERIMENT_PLAN.md`.
 Original R1 candidates:
 
 ```text
-/path/to/data/2021_05_10_bay4_mprage_R1_subjects2and3
+$FALLBACK_R1_ROOT
 ```
 
 - `meas_MID00792_FID57743_tfl_mprage_R1_Qiyuan.dat` / DICOM `0013`.
@@ -225,10 +224,10 @@ Original R1 candidates:
 Additional R1 candidates inspected on 2026-08-20:
 
 ```text
-/path/to/data/2021_05_14_bay4_subject6/
+$ADDITIONAL_R1_ROOT/subject6/
   meas_MID00786_FID58692_tfl_mprage_R1_Qiyuan.dat
 
-/path/to/data/2021_05_14_bay4_subject7/
+$ADDITIONAL_R1_ROOT/subject7/
   meas_MID00805_FID58714_tfl_mprage_R1_Qiyuan.dat
 ```
 
@@ -245,7 +244,7 @@ explicitly reactivated.
 An additional candidate inspected on 2026-08-20 was:
 
 ```text
-/path/to/data/20260601_cimax_mprage_invivo/
+$REJECTED_R1_ROOT/
   meas_MID00077_FID25178_pulseq_mprage_nowave_full.dat
 ```
 
@@ -257,13 +256,13 @@ role.
 R3 preliminary optimization and later parameter-transfer dataset:
 
 ```text
-/path/to/data/20260817_product
+$R3_PRODUCT_ROOT
 ```
 
 Qualitative DICOM presentation source:
 
 ```text
-/path/to/data/20260817_product/mprage_product_unfiltered_normalize
+$R3_PRODUCT_ROOT/mprage_product_unfiltered_normalize
 ```
 
 Select the 256-image `ND,NORM` series UID
@@ -347,7 +346,7 @@ mandatory `bart wave -g`, target-k-space norm restoration, resumable case
 manifests, and the shared canonical-RAS exporter. The baseline entry points are:
 
 ```text
-requirements/retrospective_low_resolution_product.json
+requirements/retrospective_low_resolution_product.example.json
 scripts/run_retrospective_low_resolution.sh
 ```
 
@@ -426,13 +425,13 @@ smooth-brain signal/local-residual proxy and explicitly does not call it SNR.
 Accepted R3x1 5x5x5-derived synthetic Wave tree:
 
 ```text
-/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12
+$R3_PRODUCT_ROOT/synthetic_wave_grappa_5x5x5_ncc12
 ```
 
 Accepted R3x2 sweep/evaluation:
 
 ```text
-/path/to/data/20260817_product/synthetic_wave_grappa_5x5x5_ncc12_r3x2
+$R3_PRODUCT_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2
 ```
 
 The complete 25-case R3x2 evaluation is retained as a historical pilot. Its
@@ -442,13 +441,13 @@ normalized reference. Do not overwrite it.
 Canonical accepted GRAPPA 5x5x5 results after cleanup:
 
 ```text
-/path/to/data/20260817_product/grappa_5x5x5_ncc12
+$R3_PRODUCT_ROOT/grappa_5x5x5_ncc12
 ```
 
 The dataset-level canonical/historical inventory and deletion record is:
 
 ```text
-/path/to/data/20260817_product/OUTPUTS_INDEX.md
+$R3_PRODUCT_ROOT/OUTPUTS_INDEX.md
 ```
 
 The old manifest path below is retained as a compatibility symlink:

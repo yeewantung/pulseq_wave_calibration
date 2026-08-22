@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -150,7 +151,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reference", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--bet", type=Path, default=Path("/path/to/software/packages/fsl/6.0.6/share/fsl/bin/bet"))
+    parser.add_argument("--bet", type=Path, default=Path("bet"))
     parser.add_argument("--fractional-threshold", type=float, default=0.25)
     parser.add_argument(
         "--robust-center",
@@ -172,7 +173,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     reference_path = args.reference.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
-    bet = args.bet.expanduser().resolve()
+    requested_bet = args.bet.expanduser()
+    located_bet = shutil.which(str(requested_bet))
+    bet = Path(located_bet).resolve() if located_bet else requested_bet.resolve()
     if not reference_path.is_file() or not bet.is_file():
         raise FileNotFoundError("Reference NIfTI or FSL BET executable is missing")
     if args.mask_dilation_voxels < 0:

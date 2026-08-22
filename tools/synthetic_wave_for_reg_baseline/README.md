@@ -45,11 +45,11 @@ signed-axis correction is no longer required for newly exported results.
 Retrospective low-resolution code support is integrated under
 `tools/wave_retro_lr_recon/`. It changes phase encoding only, rounds each PE
 matrix to the nearest multiple of four, reconstructs with GPU `bart wave -g`,
-and exports through the same canonical-RAS path. The product configuration and
-tmux-friendly launcher are
-`requirements/retrospective_low_resolution_product.json` and
-`scripts/run_retrospective_low_resolution.sh`. No large retrospective outputs
-are created by validation alone.
+and exports through the same canonical-RAS path. Copy
+`requirements/retrospective_low_resolution_product.example.json` to the
+ignored `.local.json` name, fill in private paths, and run the tmux-friendly
+`scripts/run_retrospective_low_resolution.sh` launcher. No large retrospective
+outputs are created by validation alone.
 
 MID00198 has passed manifest-backed metadata inspection and a sample probe.
 Large source preparation and reconstruction acceptance remain pending. The
