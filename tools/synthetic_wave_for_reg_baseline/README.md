@@ -366,6 +366,30 @@ The optional SENSE diagnostic additionally uses:
 python -m pip install -r tools/synthetic_wave_for_reg_baseline/requirements/sense_diagnostics.txt
 ```
 
+## Presentation magnitude collection
+
+`build_presentation_nifti_collection.py` materializes a private, manifested
+folder of magnitude NIfTIs from accepted outputs. It copies available sources
+byte-for-byte, validates finite canonical-RAS storage, preserves native
+retrospective-resolution grids, and uses explicit JSON records rather than
+fake NIfTIs for pending reconstructions. Display order lives in the manifest;
+filenames remain descriptive and stable.
+
+The presentation-only no-Wave R3x1 comparison is prepared with
+`run_no_wave_r3x1_pics_sweep.py`. It masks the fully sampled no-Wave source on
+the product R3x1 PE1 lattice plus 24-line ACS, runs a GPU `bart pics -g -S`
+CG-SENSE control, and runs a compact Wavelet/FISTA sweep with random cycle
+spinning disabled. Its lambda values are not assumed to be numerically
+interchangeable with the custom `bart wave` operator.
+
+`run_previous_non_bart_wave_cg_sense.py` is a presentation comparison adapter,
+not a new reconstruction algorithm. It calls the existing Torch PCG-SENSE
+operator in `external/wave-mprage`, reuses the accepted maps and R3x2 inputs,
+and exports a canonical-RAS magnitude NIfTI. Copy the matching `.example.sh`
+launchers to ignored `.local.sh` files and run the long jobs in tmux. Both
+launchers accept `--validate-only`, and completed cases are safely reusable.
+See [`docs/presentation_nifti_collection.md`](docs/presentation_nifti_collection.md).
+
 Wave-MPRAGE is pinned as a submodule because the current scripts import its
 BART CFL and TWIX-to-NIfTI utilities at runtime. Wave-GRE remains an optional
 reference and is not a submodule because no current code depends on it.

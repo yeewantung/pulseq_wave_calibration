@@ -1,6 +1,6 @@
 # R3 presentation optimization, R1 refinement, and retrospective-resolution plan
 
-Updated: 2026-08-21
+Updated: 2026-08-24
 
 This is the active experiment plan. The original R3x1-centered tracker is
 preserved as a historical record in
@@ -544,8 +544,19 @@ independent validation. No R3 selection metrics were calculated.
 
 ## 11. Presentation design gates
 
-Presentation work is deferred at the user's request. The design below remains
-the frozen proposal rather than an active execution checklist.
+Presentation packaging resumed on 2026-08-24. The private magnitude-NIfTI
+collection is manifested with 20 requested slots: 16 accepted outputs are
+present as byte-identical copies and four unfinished reconstructions are
+represented by explicit JSON placeholders rather than fake NIfTIs. No spatial
+resampling or cross-volume intensity normalization is performed while
+collecting files.
+
+Two tmux-ready, ignored local launchers are prepared but have not been run:
+the previous non-BART R3x2 Wave PCG-SENSE reconstruction and the no-Wave R3x1
+PICS CG-SENSE/Wavelet sweep. The no-Wave sweep uses its own `pics -g -S`
+scaling contract and includes `1.5e-2` as a requested presentation case; it
+does not assume numerical lambda transfer from the custom Wave operator. The
+no-Wave R3x1 GRAPPA slot remains a placeholder as requested.
 
 Retain the compact R3 panel as historical development/transfer context:
 qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,
@@ -605,10 +616,13 @@ and `0.06552`; and mean axial SSIM is `0.9265`, `0.9280`, and `0.9150`.
 Directional losses occur on the expected changed axes. These are descriptive
 tradeoffs, not a selected winner.
 
-Presentation and an independent confirmation scan are deferred at the user's
-request. No active scientific or implementation checklist item remains. The
-next optional action is a non-destructive final repository/output audit before
-any cleanup; do not infer a preferred retrospective resolution automatically.
+The immediate actions are for the user to run the two prepared long jobs in
+tmux, validate their manifested magnitude NIfTIs, and refresh the collection
+to replace three placeholders. The no-Wave GRAPPA slot remains a placeholder.
+Only after the presentation collection is complete and frozen should the
+non-destructive redundant-sweep audit and later cleanup begin. Independent
+confirmation remains deferred, and no preferred retrospective resolution is
+inferred automatically.
 
 ## 14. Remaining work and deferred branches
 
@@ -622,12 +636,20 @@ any cleanup; do not infer a preferred retrospective resolution automatically.
 4. **DICOM ranking — disabled:** the direct FFT RSS is the active R1 reference.
    Retain DICOM for metadata and qualitative context only unless a future
    dataset is explicitly qualified for intensity ranking.
-5. **Deferred reconstruction branches:** no-wave BART PICS and completion of
-   older partial-readout R1 fallbacks remain out of scope.
+5. **Reconstruction branches:** the presentation-only no-Wave R3x1 PICS sweep
+   and previous non-BART Wave PCG-SENSE adapter are ready for user-run tmux
+   execution. No-Wave R3x1 GRAPPA and older partial-readout R1 fallbacks remain
+   placeholders/out of scope.
 6. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
    full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
    sample preservation, lambda-zero scaling, norm restoration, orientation,
    GPU `-g`, provenance, and resumability checks. The two source-operator gates
    are now productionized and passed on every R1 virtual coil.
-7. **Presentation package — deferred:** retain the frozen proposal in Section
-   11, but do not generate it unless the user resumes that work.
+7. **Presentation package — active:** the manifested collection currently has
+   16 NIfTIs and four placeholders. Replace only the three launcher-backed
+   placeholders after their outputs pass validation; retain the GRAPPA
+   placeholder until that reconstruction is separately authorized.
+8. **Redundant sweep cleanup — gated:** after presentation is frozen, audit
+   hashes and downstream references, choose canonical runs, merge indexes and
+   organization, and archive superseded sweep folders before considering any
+   deletion.

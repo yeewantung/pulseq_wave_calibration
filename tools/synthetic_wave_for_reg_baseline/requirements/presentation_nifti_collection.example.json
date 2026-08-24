@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "collection_name": "Presentation magnitude NIfTIs",
+  "output_dir": "/path/to/dataset/presentation/magnitude_niftis",
+  "entries": [
+    {
+      "display_order": 1,
+      "key": "direct_fft_rss",
+      "label": "Direct FFT",
+      "status": "available",
+      "source_nifti": "/path/to/canonical/direct_fft_rss.nii.gz",
+      "source_manifest": "/path/to/canonical/manifest.json"
+    },
+    {
+      "display_order": 2,
+      "key": "pending_reconstruction",
+      "label": "Pending reconstruction",
+      "status": "placeholder",
+      "reason": "Reconstruction has not been run yet."
+    }
+  ]
+}

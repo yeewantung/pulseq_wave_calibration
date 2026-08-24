@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-08-21, America/New_York
+Updated: 2026-08-24, America/New_York
 
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
@@ -8,13 +8,27 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-The R1 native/matched review was explicitly approved, the approval-gated
-descriptive analysis is complete, and the real-data source-operator gates pass
-on all 12 virtual coils. Presentation and an independent confirmation scan are
-deferred at the user's request. No active scientific or implementation
-checklist item remains. The next optional action is a non-destructive final
-repository/output audit before deciding whether any cleanup is warranted; do
-not infer an automatic preferred resolution.
+The requested presentation magnitude collection is now materialized with 20
+manifested slots: 16 finite canonical-RAS NIfTIs and four explicit JSON
+placeholders. Canonical sources were copied byte-for-byte and were not moved,
+resampled, or cross-normalized. The collection builder and its ignored local
+configuration are ready for safe placeholder refresh.
+
+The immediate next actions are user-run tmux jobs. Run the ignored local
+no-Wave R3x1 PICS launcher to produce the CG-SENSE control and compact
+Wavelet/FISTA sweep, including `lambda=1.5e-2`. Run the separate ignored local
+legacy Wave launcher to produce the previous non-BART R3x2 PCG-SENSE result
+using the existing maps and operator. Both launchers pass structural
+`--validate-only` checks; neither long reconstruction was launched by the
+agent. Do not run them concurrently on the same GPU. After completion,
+validate the manifests/NIfTIs and refresh the three corresponding collection
+placeholders. The no-Wave R3x1 GRAPPA entry remains a placeholder as requested.
+
+Only after the collection is complete and frozen, audit redundant sweep
+folders by hash and manifest, select canonical runs, merge their indexes and
+organization, and archive superseded trees. Delete nothing until downstream
+references have been verified. Independent confirmation remains deferred; do
+not infer an automatic preferred retrospective resolution.
 
 The hash-bound operator gate is
 `evaluation/full_sampling_wave_operator_validation/operator_validation_manifest.json`
