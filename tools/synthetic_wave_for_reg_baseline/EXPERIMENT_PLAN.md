@@ -556,7 +556,11 @@ the previous non-BART R3x2 Wave PCG-SENSE reconstruction and the no-Wave R3x1
 PICS CG-SENSE/Wavelet sweep. The no-Wave sweep uses its own `pics -g -S`
 scaling contract and includes `1.5e-2` as a requested presentation case; it
 does not assume numerical lambda transfer from the custom Wave operator. The
-no-Wave R3x1 GRAPPA slot remains a placeholder as requested.
+no-Wave R3x1 GRAPPA slot remains a placeholder as requested. Both launcher
+workflows calculate and save the existing standard metric set against the
+approved direct-FFT R1 RSS and BET mask on the exact grid. They restore export
+normalization, permit only the metric contract's one least-squares intensity
+scale, and perform neither registration nor interpolation.
 
 Retain the compact R3 panel as historical development/transfer context:
 qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,

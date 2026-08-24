@@ -15,6 +15,7 @@ conda activate "${SYNTHETIC_WAVE_CONDA_ENV:?Set SYNTHETIC_WAVE_CONDA_ENV.}"
 : "${PRESENTATION_TWIX:?Set PRESENTATION_TWIX.}"
 : "${PRESENTATION_SEQUENCE:?Set PRESENTATION_SEQUENCE.}"
 : "${PREVIOUS_WAVE_CG_OUTPUT:?Set PREVIOUS_WAVE_CG_OUTPUT.}"
+: "${METRICS_REFERENCE_MANIFEST:?Set METRICS_REFERENCE_MANIFEST.}"
 
 exec python "$SCRIPT_DIR/run_previous_non_bart_wave_cg_sense.py" \
     --bart-input-manifest "$WAVE_BART_INPUT_MANIFEST" \
@@ -24,6 +25,7 @@ exec python "$SCRIPT_DIR/run_previous_non_bart_wave_cg_sense.py" \
     --twix "$PRESENTATION_TWIX" \
     --sequence "$PRESENTATION_SEQUENCE" \
     --output-dir "$PREVIOUS_WAVE_CG_OUTPUT" \
+    --metrics-reference-manifest "$METRICS_REFERENCE_MANIFEST" \
     --subject presentation-r1-previous-wave-cg-sense \
     --iterations 50 \
     --tolerance 1e-6 \

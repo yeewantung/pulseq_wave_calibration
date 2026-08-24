@@ -4,7 +4,8 @@
 The source is fully sampled, compressed no-Wave k-space. This script applies
 the measured product R3x1 PE1 lattice plus its 24-line ACS support, runs one
 unregularized CG-SENSE control and a compact Wavelet/FISTA sweep, and exports
-canonical-RAS magnitude NIfTIs. Completed cases are safely reusable.
+canonical-RAS magnitude NIfTIs. Each case saves exact-grid metrics against the
+approved direct-FFT R1 reference. Completed cases are safely reusable.
 """
 
 from __future__ import annotations
@@ -29,6 +30,11 @@ from bart_cfl import (
     sha256_file,
     validate_finite_bart,
     write_bart_header,
+)
+from presentation_metrics import (
+    evaluate_against_direct_fft,
+    magnitude_sidecar_path,
+    validate_metrics_reference_manifest,
 )
 
 
@@ -283,9 +289,14 @@ def _export_nifti(
     saved = nib.load(str(outputs[0]))
     if saved.shape != GRID_SHAPE or nib.aff2axcodes(saved.affine) != ("R", "A", "S"):
         raise ValueError("No-Wave PICS NIfTI geometry validation failed.")
+    sidecar = magnitude_sidecar_path(outputs[0])
+    if not sidecar.is_file():
+        raise FileNotFoundError(sidecar)
     return {
         "magnitude_nifti": str(outputs[0]),
         "magnitude_nifti_sha256": sha256_file(outputs[0]),
+        "magnitude_sidecar": str(sidecar),
+        "magnitude_sidecar_sha256": sha256_file(sidecar),
         "shape": list(saved.shape),
         "axis_codes": list(nib.aff2axcodes(saved.affine)),
     }
@@ -301,6 +312,7 @@ def _run_case(
     twix: Path,
     sequence: Path,
     subject: str,
+    metrics_reference_manifest: Path,
     iterations: int,
     regularizer: str,
     lambda_value: float | None,
@@ -310,11 +322,15 @@ def _run_case(
     if manifest_path.is_file() and resume:
         manifest = _load_json(manifest_path)
         nifti_path = Path(manifest.get("nifti", {}).get("magnitude_nifti", ""))
+        metrics_record = manifest.get("direct_fft_metrics", {})
         if (
             manifest.get("status") == "complete"
             and nifti_path.is_file()
             and sha256_file(nifti_path)
             == manifest.get("nifti", {}).get("magnitude_nifti_sha256")
+            and metrics_record.get("status") == "complete"
+            and metrics_record.get("metrics_reference_manifest", {}).get("sha256")
+            == sha256_file(metrics_reference_manifest)
         ):
             print(f"Reusing complete no-Wave case: {manifest_path}")
             return manifest
@@ -343,6 +359,9 @@ def _run_case(
         lambda_value=lambda_value,
         command=command,
     )
+    direct_fft_metrics = evaluate_against_direct_fft(
+        Path(nifti["magnitude_nifti"]), metrics_reference_manifest
+    )
     payload = {
         "format_version": 1,
         "status": "complete",
@@ -370,6 +389,7 @@ def _run_case(
             "cfl_sha256": sha256_file(image_base.with_suffix(".cfl")),
         },
         "nifti": nifti,
+        "direct_fft_metrics": direct_fft_metrics,
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     _write_json_atomic(manifest_path, payload)
@@ -383,6 +403,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     twix = args.twix.expanduser().resolve()
     sequence = args.sequence.expanduser().resolve()
     output_root = args.output_root.expanduser().resolve()
+    metrics_reference_manifest = (
+        args.metrics_reference_manifest.expanduser().resolve()
+    )
     for path in (
         bart,
         source,
@@ -390,6 +413,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         maps.with_suffix(".cfl"),
         twix,
         sequence,
+        metrics_reference_manifest,
     ):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -400,6 +424,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("Wavelet lambda list contains duplicates.")
     for value in lambdas:
         lambda_label(value)
+    metrics_context = validate_metrics_reference_manifest(metrics_reference_manifest)
 
     source_array = np.load(source, mmap_mode="r")
     if source_array.shape != (*GRID_SHAPE, NCC) or source_array.dtype != np.complex64:
@@ -433,6 +458,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         print("No-Wave R3x1 sweep structural validation: PASSED")
         print("CG command:", " ".join(cg_command))
         print("Wavelet command example:", " ".join(wavelet_command))
+        print(
+            "Direct-FFT metrics reference:",
+            metrics_context["reference_path"],
+        )
         return {"status": "validated", "case_count": 1 + len(lambdas)}
 
     version = subprocess.run(
@@ -454,6 +483,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             twix=twix,
             sequence=sequence,
             subject=args.subject,
+            metrics_reference_manifest=metrics_reference_manifest,
             iterations=args.iterations,
             regularizer="cg_sense",
             lambda_value=None,
@@ -471,6 +501,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 twix=twix,
                 sequence=sequence,
                 subject=args.subject,
+                metrics_reference_manifest=metrics_reference_manifest,
                 iterations=args.iterations,
                 regularizer="wavelet",
                 lambda_value=value,
@@ -485,8 +516,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "bart_version_output": (version.stdout + version.stderr).strip(),
         "input_manifest": str(input_manifest),
         "maps_base": str(maps),
+        "metrics_reference_manifest": {
+            "path": str(metrics_reference_manifest),
+            "sha256": metrics_context["manifest_sha256"],
+        },
         "wavelet_lambdas": lambdas,
-        "cases": [str(Path(record["nifti"]["magnitude_nifti"])) for record in records],
+        "cases": [
+            {
+                "magnitude_nifti": record["nifti"]["magnitude_nifti"],
+                "direct_fft_metrics": record["direct_fft_metrics"]["metrics"],
+            }
+            for record in records
+        ],
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     _write_json_atomic(output_root / "sweep_manifest.json", payload)
@@ -502,6 +543,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--twix", required=True, type=Path)
     parser.add_argument("--sequence", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--metrics-reference-manifest", required=True, type=Path)
     parser.add_argument("--subject", required=True)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--pe2-chunk", type=int, default=4)

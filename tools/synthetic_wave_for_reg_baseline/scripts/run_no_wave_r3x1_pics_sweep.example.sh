@@ -14,6 +14,7 @@ source "${BART_STARTUP:?Set BART_STARTUP in the local copy.}"
 : "${PRESENTATION_TWIX:?Set PRESENTATION_TWIX.}"
 : "${PRESENTATION_SEQUENCE:?Set PRESENTATION_SEQUENCE.}"
 : "${NO_WAVE_SWEEP_ROOT:?Set NO_WAVE_SWEEP_ROOT.}"
+: "${METRICS_REFERENCE_MANIFEST:?Set METRICS_REFERENCE_MANIFEST.}"
 
 exec python "$SCRIPT_DIR/run_no_wave_r3x1_pics_sweep.py" \
     --bart "$(command -v bart)" \
@@ -22,6 +23,7 @@ exec python "$SCRIPT_DIR/run_no_wave_r3x1_pics_sweep.py" \
     --twix "$PRESENTATION_TWIX" \
     --sequence "$PRESENTATION_SEQUENCE" \
     --output-root "$NO_WAVE_SWEEP_ROOT" \
+    --metrics-reference-manifest "$METRICS_REFERENCE_MANIFEST" \
     --subject presentation-r1 \
     --wavelet-lambdas 1e-4 1e-3 1e-2 1.5e-2 2e-2 5e-2 \
     --resume \

@@ -5,7 +5,8 @@ This adapter does not define a new reconstruction algorithm. It loads the
 accepted BART-formatted synthetic-Wave k-space, theoretical PSF, and ESPIRiT
 maps, embeds the native-readout maps on the oversampled grid exactly as the
 historical integrated reconstruction did, and calls the existing
-``cg_sense_wave`` implementation from ``external/wave-mprage/recon``.
+``cg_sense_wave`` implementation from ``external/wave-mprage/recon``. It then
+saves exact-grid metrics against the approved direct-FFT R1 reference.
 """
 
 from __future__ import annotations
@@ -24,6 +25,11 @@ import numpy as np
 import torch
 
 from bart_cfl import bart_base, open_bart_memmap, sha256_file
+from presentation_metrics import (
+    evaluate_against_direct_fft,
+    magnitude_sidecar_path,
+    validate_metrics_reference_manifest,
+)
 from wave_synthesis import logical_array_sha256
 
 
@@ -156,9 +162,14 @@ def _export_nifti(
         raise ValueError("Previous non-BART NIfTI geometry validation failed.")
     if not np.isfinite(np.asanyarray(saved.dataobj)).all():
         raise ValueError("Previous non-BART NIfTI contains non-finite samples.")
+    sidecar = magnitude_sidecar_path(outputs[0])
+    if not sidecar.is_file():
+        raise FileNotFoundError(sidecar)
     return {
         "magnitude_nifti": str(outputs[0]),
         "magnitude_nifti_sha256": sha256_file(outputs[0]),
+        "magnitude_sidecar": str(sidecar),
+        "magnitude_sidecar_sha256": sha256_file(sidecar),
         "shape": list(saved.shape),
         "axis_codes": list(nib.aff2axcodes(saved.affine)),
     }
@@ -172,6 +183,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     twix = args.twix.expanduser().resolve()
     sequence = args.sequence.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
+    metrics_reference_manifest = (
+        args.metrics_reference_manifest.expanduser().resolve()
+    )
     manifest_path = output_dir / "manifest.json"
     required = (
         wave_base.with_suffix(".hdr"),
@@ -183,12 +197,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         input_manifest_path,
         twix,
         sequence,
+        metrics_reference_manifest,
     )
     for path in required:
         if not path.is_file():
             raise FileNotFoundError(path)
     if args.iterations < 1 or not math.isfinite(args.tolerance) or args.tolerance <= 0:
         raise ValueError("Iterations and tolerance must be positive.")
+    metrics_context = validate_metrics_reference_manifest(metrics_reference_manifest)
     input_manifest, mask = _validate_input_manifest(
         input_manifest_path, wave_base, psf_base
     )
@@ -217,15 +233,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         print(f"PSF shape: {psf_view.shape}")
         print(f"Native maps shape: {maps_view.shape}")
         print(f"Acquired PE coordinates: {int(mask.sum())}")
+        print("Direct-FFT metrics reference:", metrics_context["reference_path"])
         return {"status": "validated"}
     if manifest_path.is_file() and args.resume:
         manifest = _load_json(manifest_path)
         nifti_path = Path(manifest.get("nifti", {}).get("magnitude_nifti", ""))
+        metrics_record = manifest.get("direct_fft_metrics", {})
         if (
             manifest.get("status") == "complete"
             and nifti_path.is_file()
             and sha256_file(nifti_path)
             == manifest.get("nifti", {}).get("magnitude_nifti_sha256")
+            and metrics_record.get("status") == "complete"
+            and metrics_record.get("metrics_reference_manifest", {}).get("sha256")
+            == metrics_context["manifest_sha256"]
         ):
             print(f"Reusing previous non-BART reconstruction: {manifest_path}")
             return manifest
@@ -296,6 +317,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         subject=args.subject,
         config=config,
     )
+    complex_image = {
+        "path": str(image_path),
+        "sha256": sha256_file(image_path),
+        "shape": list(image.shape),
+        "dtype": str(image.dtype),
+        "all_samples_finite": True,
+    }
+    del reconstructed, image, y, sens, psf, mask_t
+    torch.cuda.empty_cache()
+    direct_fft_metrics = evaluate_against_direct_fft(
+        Path(nifti["magnitude_nifti"]), metrics_reference_manifest
+    )
     source_code = recon_root / "utils" / "wave_cg_sense_precondition.py"
     payload = {
         "format_version": 1,
@@ -335,14 +368,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "logical_sha256"
             ],
         },
-        "complex_image": {
-            "path": str(image_path),
-            "sha256": sha256_file(image_path),
-            "shape": list(image.shape),
-            "dtype": str(image.dtype),
-            "all_samples_finite": True,
-        },
+        "complex_image": complex_image,
         "nifti": nifti,
+        "direct_fft_metrics": direct_fft_metrics,
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     _write_json_atomic(manifest_path, payload)
@@ -359,6 +387,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--twix", required=True, type=Path)
     parser.add_argument("--sequence", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--metrics-reference-manifest", required=True, type=Path)
     parser.add_argument("--subject", required=True)
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--tolerance", type=float, default=1e-6)

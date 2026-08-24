@@ -36,6 +36,16 @@ does not claim that the custom-Wave `lambda=1.5e-2` transfers numerically.
 The requested `1.5e-2` result is retained as one presentation case within that
 compact no-Wave-specific sweep.
 
+Both launcher-backed workflows evaluate every completed NIfTI against the
+approved direct-FFT R1 RSS reference and approved BET mask on their exact
+shared grid. Export normalization is restored first, one unconstrained
+least-squares intensity scale is fitted inside the fixed brain mask, and no
+registration or interpolation is allowed. The complete metric dictionary is
+stored at `direct_fft_metrics.metrics` in each case `manifest.json`; useful
+presentation fields include `nrmse_brain`, `ssim_3d_brain_bbox`,
+`ssim_axial_brain_mean`, and `gradient_ncc_brain_edge`. These are reference
+similarity/QC measures, not true SNR.
+
 ## Tmux launch pattern
 
 First validate either ignored launcher without creating outputs:
@@ -51,7 +61,9 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_previous_non_bart_wave_cg_sens
 Then start a tmux session, run one launcher inside it, detach with `Ctrl-b d`,
 and later reattach with `tmux attach -t SESSION_NAME`. Do not launch both jobs
 on the same GPU concurrently. The no-Wave path requires BART GPU `-g`; the
-legacy Torch path stops unless CUDA is visible.
+legacy Torch path stops unless CUDA is visible. Both launchers also require
+the evaluation dependencies because they calculate the saved direct-FFT
+metrics after NIfTI export.
 
 After either job completes, change only the corresponding ignored local
 collection entries from `placeholder` to `available`, point them at the new

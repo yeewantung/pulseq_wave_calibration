@@ -20,7 +20,10 @@ Wavelet/FISTA sweep, including `lambda=1.5e-2`. Run the separate ignored local
 legacy Wave launcher to produce the previous non-BART R3x2 PCG-SENSE result
 using the existing maps and operator. Both launchers pass structural
 `--validate-only` checks; neither long reconstruction was launched by the
-agent. Do not run them concurrently on the same GPU. After completion,
+agent. Each completed case now saves the standard exact-grid direct-FFT
+metric dictionary under `direct_fft_metrics.metrics` in its manifest, using
+the approved reference/mask with no registration or interpolation. Do not run
+the launchers concurrently on the same GPU. After completion,
 validate the manifests/NIfTIs and refresh the three corresponding collection
 placeholders. The no-Wave R3x1 GRAPPA entry remains a placeholder as requested.
 
