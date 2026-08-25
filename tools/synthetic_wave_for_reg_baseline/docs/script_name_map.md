@@ -38,6 +38,8 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/presentation_metrics.py` | Shared presentation evaluation | Restores NIfTI export normalization and computes the standard fixed-mask metric set against the hash-bound approved direct-FFT R1 reference without registration or interpolation. |
 | `scripts/nifti_phase_resume.py` | Shared phase-export safety | Validates and installs a missing phase NIfTI from a temporary complex-image export without replacing the accepted magnitude. |
 | `scripts/build_presentation_nifti_collection.py` | Presentation packaging | Copies accepted magnitude NIfTIs byte-for-byte into a manifested collection and records pending reconstructions as JSON placeholders. |
+| `scripts/build_presentation_metrics_csv.py` | Presentation metrics packaging | Combines exact-grid, matched-grid retrospective, and native descriptive metrics into one presentation-ordered CSV with explicit scope labels. |
+| `scripts/export_presentation_orientation_tiffs.py` | Presentation image export | Saves fixed-index sagittal, coronal, and axial 16-bit TIFFs for every available collection NIfTI with manifested display scaling and hashes. |
 | `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
 | `scripts/run_wavelet_sweep.sh` | Canonical workflow | Runs/resumes the compact R1 Wavelet sweep and its reference-neutral review. |
 | `scripts/run_llr_sweep.sh` | Canonical workflow | Gates split-complex lambda zero, then runs/resumes the compact block-8 LLR sweep and review. |

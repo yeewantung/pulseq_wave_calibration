@@ -240,6 +240,9 @@ def run(config_path: Path, *, refresh: bool) -> dict[str, Any]:
         "Available NIfTIs are byte-for-byte copies of canonical outputs.",
         "JSON placeholder files mark reconstructions that are not complete yet.",
         "No spatial resampling or cross-volume intensity normalization is performed.",
+        "`presentation_metrics.csv` lists metric status and values in display order.",
+        "`orientation_slices_index-128/` contains manifested presentation TIFFs.",
+        "Phase NIfTIs remain in their canonical reconstruction output trees.",
         "",
     ]
     readme.write_text("\n".join(lines), encoding="utf-8")

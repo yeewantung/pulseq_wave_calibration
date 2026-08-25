@@ -545,9 +545,10 @@ independent validation. No R3 selection metrics were calculated.
 ## 11. Presentation design gates
 
 Presentation packaging resumed on 2026-08-24. The private magnitude-NIfTI
-collection is manifested with 20 requested slots: 16 accepted outputs are
-present as byte-identical copies and four unfinished reconstructions are
-represented by explicit JSON placeholders rather than fake NIfTIs. No spatial
+collection is manifested with 20 requested slots: 19 accepted outputs are
+present as byte-identical copies and the unfinished no-Wave R3x1 GRAPPA
+reconstruction is represented by an explicit JSON placeholder rather than a
+fake NIfTI. No spatial
 resampling or cross-volume intensity normalization is performed while
 collecting files.
 
@@ -561,9 +562,13 @@ against the approved direct-FFT R1 RSS and BET mask on the exact grid. They
 restore export normalization, permit only the metric contract's one least-
 squares intensity scale, and perform neither registration nor interpolation.
 
-Both workflows now export magnitude and phase for new cases. Their existing
-`--resume` path backfills phase for the completed cases from hash-validated
-complex images without rerunning either solver or replacing magnitude.
+Both workflows now export magnitude and phase, including completed resume-mode
+phase backfills from hash-validated complex images. The presentation collection
+copies magnitude only and now contains 19 available NIfTIs plus the one
+requested GRAPPA placeholder. Its ordered metric CSV distinguishes exact-grid,
+matched-grid retrospective, native descriptive, qualitative-only, and pending
+rows. Fifty-seven manifested index-128 orthogonal TIFFs cover all available
+NIfTIs.
 
 Retain the compact R3 panel as historical development/transfer context:
 qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,
@@ -623,10 +628,11 @@ and `0.06552`; and mean axial SSIM is `0.9265`, `0.9280`, and `0.9150`.
 Directional losses occur on the expected changed axes. These are descriptive
 tradeoffs, not a selected winner.
 
-The immediate actions are to rerun both launchers with `--resume` to backfill
-phase, validate the updated magnitude/phase manifests, and refresh the
-magnitude-only collection to replace three placeholders. The no-Wave GRAPPA
-slot remains a placeholder.
+The presentation collection, metric table, and orthogonal TIFF exports are
+current. The no-Wave GRAPPA slot remains a placeholder. Decide whether to keep
+that branch pending or authorize its reconstruction before freezing the
+presentation collection and starting the non-destructive redundant-sweep
+audit.
 Only after the presentation collection is complete and frozen should the
 non-destructive redundant-sweep audit and later cleanup begin. Independent
 confirmation remains deferred, and no preferred retrospective resolution is
@@ -645,18 +651,18 @@ inferred automatically.
    Retain DICOM for metadata and qualitative context only unless a future
    dataset is explicitly qualified for intensity ranking.
 5. **Reconstruction branches:** the presentation-only no-Wave R3x1 PICS sweep
-   and previous non-BART Wave PCG-SENSE reconstruction are complete; only
-   resume-mode phase backfill remains. No-Wave R3x1 GRAPPA and older partial-
-   readout R1 fallbacks remain placeholders/out of scope.
+   and previous non-BART Wave PCG-SENSE reconstruction and phase exports are
+   complete. No-Wave R3x1 GRAPPA and older partial-readout R1 fallbacks remain
+   placeholders/out of scope.
 6. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
    full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
    sample preservation, lambda-zero scaling, norm restoration, orientation,
    GPU `-g`, provenance, and resumability checks. The two source-operator gates
    are now productionized and passed on every R1 virtual coil.
-7. **Presentation package — active:** the manifested collection currently has
-   16 NIfTIs and four placeholders. Replace only the three launcher-backed
-   placeholders after their outputs pass validation; retain the GRAPPA
-   placeholder until that reconstruction is separately authorized.
+7. **Presentation package — active:** the manifested collection has 19 NIfTIs,
+   one GRAPPA placeholder, an ordered metric CSV, and 57 orthogonal TIFFs.
+   Retain the GRAPPA placeholder until that reconstruction is separately
+   authorized.
 8. **Redundant sweep cleanup — gated:** after presentation is frozen, audit
    hashes and downstream references, choose canonical runs, merge indexes and
    organization, and archive superseded sweep folders before considering any

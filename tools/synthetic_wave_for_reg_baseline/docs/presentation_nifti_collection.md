@@ -1,9 +1,10 @@
 # Presentation magnitude NIfTI collection
 
 The active private collection contains the requested 20 presentation slots.
-It currently has 16 finite canonical-RAS magnitude NIfTIs and four explicit
-JSON placeholders. Files are not resampled or cross-normalized while being
-collected; the three retrospective-resolution images retain their native
+It currently has 19 finite canonical-RAS magnitude NIfTIs and one explicit
+JSON placeholder for no-Wave R3x1 GRAPPA. Files are not resampled or
+cross-normalized while being collected; the three retrospective-resolution
+images retain their native
 matrices and voxel sizes.
 
 Canonical reconstruction output trees retain both magnitude and phase NIfTIs.
@@ -26,13 +27,9 @@ replace an owned placeholder with a newly available NIfTI, but it refuses to
 overwrite a changed collected NIfTI or replace an available NIfTI with a
 placeholder.
 
-## Current pending entries
+## Current pending entry
 
 - Synthetic no-Wave R3x1 GRAPPA remains an explicit placeholder, as requested.
-- Synthetic no-Wave R3x1 CG-SENSE and Wavelet `lambda=1.5e-2` have completed
-  and are pending collection refresh.
-- Previous non-BART synthetic-Wave R3x2 CG-SENSE has completed and is pending
-  collection refresh.
 
 The no-Wave sweep includes `1e-4`, `1e-3`, `1e-2`, `1.5e-2`, `2e-2`, and
 `5e-2`. It uses a separate no-Wave PICS scaling contract (`-S`) and therefore
@@ -49,6 +46,39 @@ stored at `direct_fft_metrics.metrics` in each case `manifest.json`; useful
 presentation fields include `nrmse_brain`, `ssim_3d_brain_bbox`,
 `ssim_axial_brain_mean`, and `gradient_ncc_brain_edge`. These are reference
 similarity/QC measures, not true SNR.
+
+`presentation_metrics.csv` contains one row per requested display slot in the
+same order as the collection manifest. Its companion
+`presentation_metrics_manifest.json` hash-binds the source tables. DICOM rows
+are explicitly qualitative-only, the GRAPPA row remains pending, standard
+reconstructions use exact-grid direct-FFT metrics, and retrospective-resolution
+rows retain their documented matched-grid fidelity and native descriptive
+measures.
+
+Rebuild the table with path-local inputs:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/build_presentation_metrics_csv.py \
+    --collection-manifest /path/to/collection_manifest.json \
+    --regularization-metrics /path/to/regularization_metrics.csv \
+    --retrospective-matched-metrics /path/to/matched_fidelity_metrics.csv \
+    --retrospective-native-metrics /path/to/native_resolution_metrics.csv \
+    --output /path/to/presentation_metrics.csv \
+    --refresh
+```
+
+The ignored `export_presentation_orientation_tiffs.local.sh` launcher exports
+index-128 sagittal, coronal, and axial slices for every available NIfTI into
+`orientation_slices_index-128/`. TIFFs are 16-bit grayscale with per-volume
+positive-voxel p99.5 display scaling; the slice manifest records scaling,
+orientation convention, source hashes, and output hashes. The presentation
+collection itself remains magnitude-NIfTI-only.
+
+Refresh the TIFFs using the ignored local launcher:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/export_presentation_orientation_tiffs.local.sh
+```
 
 ## Tmux launch pattern
 
@@ -76,8 +106,8 @@ temporary directory, verifies regenerated magnitude against the accepted one
 voxel-for-voxel, and installs only the missing phase files. Neither solver is
 rerun and the accepted magnitude is not replaced.
 
-After either job completes, change only the corresponding ignored local
-collection entries from `placeholder` to `available`, point them at the new
+For a future reconstruction-backed placeholder, change only its corresponding
+ignored local collection entry to `available`, point it at the accepted
 magnitude NIfTI and case manifest, and rerun the collection builder with
 `--refresh`.
 

@@ -400,6 +400,14 @@ hash-bound reference. Install both the BART reconstruction and evaluation
 requirements for these presentation jobs.
 See [`docs/presentation_nifti_collection.md`](docs/presentation_nifti_collection.md).
 
+`build_presentation_metrics_csv.py` writes a presentation-ordered metric table
+and provenance manifest beside the collection. It keeps exact-grid metrics and
+matched-grid retrospective-resolution metrics explicitly labelled and leaves
+DICOM rows qualitative-only. `export_presentation_orientation_tiffs.py`
+exports sagittal, coronal, and axial 16-bit TIFFs at a fixed array index using
+per-volume display scaling. Copy its `.example.sh` launcher to the ignored
+`.local.sh` form so private collection paths remain local.
+
 Wave-MPRAGE is pinned as a submodule because the current scripts import its
 BART CFL and TWIX-to-NIfTI utilities at runtime. Wave-GRE remains an optional
 reference and is not a submodule because no current code depends on it.

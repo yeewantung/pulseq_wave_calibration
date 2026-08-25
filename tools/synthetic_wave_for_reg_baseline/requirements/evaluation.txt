@@ -1,3 +1,4 @@
 -r bart_reconstruction.txt
 matplotlib>=3.8
+Pillow>=10
 pydicom>=3.0
