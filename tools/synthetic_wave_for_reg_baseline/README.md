@@ -383,11 +383,16 @@ spinning disabled. Its lambda values are not assumed to be numerically
 interchangeable with the custom `bart wave` operator. Every completed case is
 evaluated on the unchanged approved direct-FFT R1 grid and mask; the standard
 metric set is saved under `direct_fft_metrics.metrics` in its case manifest.
+Fresh cases export both canonical-RAS magnitude and phase NIfTIs. On an older
+completed case, `--resume` backfills a missing phase from the hash-validated
+complex BART image without rerunning PICS or replacing the accepted magnitude.
 
 `run_previous_non_bart_wave_cg_sense.py` is a presentation comparison adapter,
 not a new reconstruction algorithm. It calls the existing Torch PCG-SENSE
 operator in `external/wave-mprage`, reuses the accepted maps and R3x2 inputs,
-and exports a canonical-RAS magnitude NIfTI. Copy the matching `.example.sh`
+and exports canonical-RAS magnitude and phase NIfTIs. On an older completed
+case, `--resume` similarly backfills phase from the saved complex image without
+rerunning CG-SENSE. Copy the matching `.example.sh`
 launchers to ignored `.local.sh` files and run the long jobs in tmux. Both
 launchers require the approved metrics-reference manifest, accept
 `--validate-only`, and safely reuse only cases carrying metrics from the same

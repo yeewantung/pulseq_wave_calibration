@@ -41,7 +41,7 @@ def _verify_hash(path: Path, expected: str, label: str) -> None:
         raise ValueError(f"{label} hash mismatch: {actual} != {expected}: {path}")
 
 
-def magnitude_sidecar_path(nifti_path: Path) -> Path:
+def nifti_sidecar_path(nifti_path: Path) -> Path:
     """Return the BIDS-like JSON sidecar path for one ``.nii.gz`` output."""
     if not nifti_path.name.endswith(".nii.gz"):
         raise ValueError(f"Expected a .nii.gz magnitude output: {nifti_path}")
@@ -121,7 +121,7 @@ def evaluate_against_direct_fft(
             "and interpolation are forbidden"
         )
 
-    sidecar_path = magnitude_sidecar_path(candidate_nifti)
+    sidecar_path = nifti_sidecar_path(candidate_nifti)
     sidecar = _load_json(sidecar_path, "candidate magnitude sidecar")
     normalization = sidecar.get("MagnitudeNormalization", {})
     if normalization.get("Method") != "positive-finite-percentile":

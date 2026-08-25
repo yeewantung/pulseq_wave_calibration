@@ -6,6 +6,10 @@ JSON placeholders. Files are not resampled or cross-normalized while being
 collected; the three retrospective-resolution images retain their native
 matrices and voxel sizes.
 
+Canonical reconstruction output trees retain both magnitude and phase NIfTIs.
+This presentation collection intentionally copies only magnitude; phase stays
+beside the reconstruction and is recorded in its case manifest.
+
 The collection manifest records the requested display order, source and copied
 file hashes, source manifests, shapes, voxel sizes, and orientation. The
 tracked builder is:
@@ -25,10 +29,10 @@ placeholder.
 ## Current pending entries
 
 - Synthetic no-Wave R3x1 GRAPPA remains an explicit placeholder, as requested.
-- Synthetic no-Wave R3x1 CG-SENSE and Wavelet `lambda=1.5e-2` are produced by
-  the no-Wave PICS sweep after its tmux launcher is run.
-- Previous non-BART synthetic-Wave R3x2 CG-SENSE is produced by the legacy
-  Torch PCG-SENSE adapter after its tmux launcher is run.
+- Synthetic no-Wave R3x1 CG-SENSE and Wavelet `lambda=1.5e-2` have completed
+  and are pending collection refresh.
+- Previous non-BART synthetic-Wave R3x2 CG-SENSE has completed and is pending
+  collection refresh.
 
 The no-Wave sweep includes `1e-4`, `1e-3`, `1e-2`, `1.5e-2`, `2e-2`, and
 `5e-2`. It uses a separate no-Wave PICS scaling contract (`-S`) and therefore
@@ -64,6 +68,13 @@ on the same GPU concurrently. The no-Wave path requires BART GPU `-g`; the
 legacy Torch path stops unless CUDA is visible. Both launchers also require
 the evaluation dependencies because they calculate the saved direct-FFT
 metrics after NIfTI export.
+
+For cases reconstructed before phase export was enabled, rerun the same local
+launcher with `--resume` (already present in the supplied local launchers).
+The workflow reads the saved complex image, exports magnitude and phase in a
+temporary directory, verifies regenerated magnitude against the accepted one
+voxel-for-voxel, and installs only the missing phase files. Neither solver is
+rerun and the accepted magnitude is not replaced.
 
 After either job completes, change only the corresponding ignored local
 collection entries from `placeholder` to `available`, point them at the new

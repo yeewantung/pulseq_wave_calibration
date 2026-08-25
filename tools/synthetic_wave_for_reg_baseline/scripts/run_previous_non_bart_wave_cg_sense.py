@@ -16,6 +16,7 @@ import json
 import math
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -25,9 +26,13 @@ import numpy as np
 import torch
 
 from bart_cfl import bart_base, open_bart_memmap, sha256_file
+from nifti_phase_resume import (
+    install_phase_from_temporary_export,
+    validate_phase_record,
+)
 from presentation_metrics import (
     evaluate_against_direct_fft,
-    magnitude_sidecar_path,
+    nifti_sidecar_path,
     validate_metrics_reference_manifest,
 )
 from wave_synthesis import logical_array_sha256
@@ -151,28 +156,79 @@ def _export_nifti(
         file_tag="previous-non-bart-r3x2-cg-sense",
         voxel_size_mm=voxel_size_mm,
         crop_readout_os=4,
-        save_phase=False,
+        save_phase=True,
         metadata=metadata,
     )
     outputs = sorted(nifti_dir.rglob("*part-mag*.nii.gz"))
     if len(outputs) != 1:
         raise ValueError(f"Expected one previous-CG magnitude NIfTI, found {outputs}")
+    phase_outputs = sorted(nifti_dir.rglob("*part-phase*.nii.gz"))
+    if len(phase_outputs) != 1:
+        raise ValueError(f"Expected one previous-CG phase NIfTI, found {phase_outputs}")
     saved = nib.load(str(outputs[0]))
     if saved.shape != NATIVE_SHAPE or nib.aff2axcodes(saved.affine) != ("R", "A", "S"):
         raise ValueError("Previous non-BART NIfTI geometry validation failed.")
     if not np.isfinite(np.asanyarray(saved.dataobj)).all():
         raise ValueError("Previous non-BART NIfTI contains non-finite samples.")
-    sidecar = magnitude_sidecar_path(outputs[0])
+    sidecar = nifti_sidecar_path(outputs[0])
     if not sidecar.is_file():
         raise FileNotFoundError(sidecar)
-    return {
+    phase_sidecar = nifti_sidecar_path(phase_outputs[0])
+    if not phase_sidecar.is_file():
+        raise FileNotFoundError(phase_sidecar)
+    record = {
         "magnitude_nifti": str(outputs[0]),
         "magnitude_nifti_sha256": sha256_file(outputs[0]),
         "magnitude_sidecar": str(sidecar),
         "magnitude_sidecar_sha256": sha256_file(sidecar),
         "shape": list(saved.shape),
         "axis_codes": list(nib.aff2axcodes(saved.affine)),
+        "phase_nifti": str(phase_outputs[0]),
+        "phase_nifti_sha256": sha256_file(phase_outputs[0]),
+        "phase_sidecar": str(phase_sidecar),
+        "phase_sidecar_sha256": sha256_file(phase_sidecar),
     }
+    if not validate_phase_record(record, expected_shape=NATIVE_SHAPE):
+        raise ValueError("Previous non-BART phase NIfTI validation failed.")
+    return record
+
+
+def _backfill_phase_nifti(
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    output_dir: Path,
+    twix: Path,
+    sequence: Path,
+    subject: str,
+) -> dict[str, Any]:
+    complex_path = Path(manifest["complex_image"]["path"])
+    if sha256_file(complex_path) != manifest["complex_image"]["sha256"]:
+        raise ValueError("Saved complex image hash changed before phase backfill")
+    image = np.load(complex_path, mmap_mode="r")
+    if image.shape != (EXTENDED_READOUT, 256, 256) or image.dtype != np.complex64:
+        raise ValueError(f"Unexpected saved complex image: {image.shape}, {image.dtype}")
+    with tempfile.TemporaryDirectory(prefix=".phase-backfill-", dir=output_dir) as temp:
+        temporary_root = Path(temp)
+        generated = _export_nifti(
+            image,
+            output_dir=temporary_root,
+            twix=twix,
+            sequence=sequence,
+            subject=subject,
+            config=manifest["config"],
+        )
+        manifest["nifti"] = install_phase_from_temporary_export(
+            existing_record=manifest["nifti"],
+            generated_record=generated,
+            existing_nifti_root=output_dir / "nifti",
+            generated_nifti_root=temporary_root / "nifti",
+            expected_shape=NATIVE_SHAPE,
+        )
+    manifest["phase_exported_at_utc"] = datetime.now(timezone.utc).isoformat()
+    _write_json_atomic(manifest_path, manifest)
+    print(f"Backfilled phase NIfTI without rerunning CG-SENSE: {manifest_path}")
+    return manifest
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -239,7 +295,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         manifest = _load_json(manifest_path)
         nifti_path = Path(manifest.get("nifti", {}).get("magnitude_nifti", ""))
         metrics_record = manifest.get("direct_fft_metrics", {})
-        if (
+        magnitude_and_metrics_reusable = (
             manifest.get("status") == "complete"
             and nifti_path.is_file()
             and sha256_file(nifti_path)
@@ -247,9 +303,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and metrics_record.get("status") == "complete"
             and metrics_record.get("metrics_reference_manifest", {}).get("sha256")
             == metrics_context["manifest_sha256"]
+        )
+        if magnitude_and_metrics_reusable and validate_phase_record(
+            manifest.get("nifti", {}), expected_shape=NATIVE_SHAPE
         ):
             print(f"Reusing previous non-BART reconstruction: {manifest_path}")
             return manifest
+        if magnitude_and_metrics_reusable:
+            return _backfill_phase_nifti(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                twix=twix,
+                sequence=sequence,
+                subject=args.subject,
+            )
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Output directory is not safely reusable: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -392,7 +460,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--tolerance", type=float, default=1e-6)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Reuse a complete reconstruction; if only phase NIfTI is missing, "
+            "export it from the saved complex image without rerunning CG-SENSE."
+        ),
+    )
     parser.add_argument(
         "--validate-only",
         action="store_true",

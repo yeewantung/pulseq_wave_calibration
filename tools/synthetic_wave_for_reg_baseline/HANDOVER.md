@@ -14,18 +14,16 @@ placeholders. Canonical sources were copied byte-for-byte and were not moved,
 resampled, or cross-normalized. The collection builder and its ignored local
 configuration are ready for safe placeholder refresh.
 
-The immediate next actions are user-run tmux jobs. Run the ignored local
-no-Wave R3x1 PICS launcher to produce the CG-SENSE control and compact
-Wavelet/FISTA sweep, including `lambda=1.5e-2`. Run the separate ignored local
-legacy Wave launcher to produce the previous non-BART R3x2 PCG-SENSE result
-using the existing maps and operator. Both launchers pass structural
-`--validate-only` checks; neither long reconstruction was launched by the
-agent. Each completed case now saves the standard exact-grid direct-FFT
-metric dictionary under `direct_fft_metrics.metrics` in its manifest, using
-the approved reference/mask with no registration or interpolation. Do not run
-the launchers concurrently on the same GPU. After completion,
-validate the manifests/NIfTIs and refresh the three corresponding collection
-placeholders. The no-Wave R3x1 GRAPPA entry remains a placeholder as requested.
+The no-Wave R3x1 PICS CG-SENSE/Wavelet sweep and previous non-BART R3x2
+PCG-SENSE reconstruction have completed. Each completed case saves the
+standard exact-grid direct-FFT metric dictionary under
+`direct_fft_metrics.metrics` in its manifest, using
+the approved reference/mask with no registration or interpolation. These runs
+predate phase export; rerunning each ignored launcher with its existing
+`--resume` option now backfills phase from the saved complex image without
+rerunning a solver or replacing magnitude. Validate the updated manifests and
+then refresh the three corresponding magnitude-only collection placeholders.
+The no-Wave R3x1 GRAPPA entry remains a placeholder as requested.
 
 Only after the collection is complete and frozen, audit redundant sweep
 folders by hash and manifest, select canonical runs, merge their indexes and

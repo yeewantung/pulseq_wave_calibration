@@ -16,6 +16,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,9 +32,13 @@ from bart_cfl import (
     validate_finite_bart,
     write_bart_header,
 )
+from nifti_phase_resume import (
+    install_phase_from_temporary_export,
+    validate_phase_record,
+)
 from presentation_metrics import (
     evaluate_against_direct_fft,
-    magnitude_sidecar_path,
+    nifti_sidecar_path,
     validate_metrics_reference_manifest,
 )
 
@@ -280,26 +285,79 @@ def _export_nifti(
         file_tag=label,
         voxel_size_mm=voxel_size_mm,
         crop_readout_os=1,
-        save_phase=False,
+        save_phase=True,
         metadata=metadata,
     )
     outputs = sorted(nifti_dir.rglob("*part-mag*.nii.gz"))
     if len(outputs) != 1:
         raise ValueError(f"Expected one magnitude NIfTI, found {outputs}")
+    phase_outputs = sorted(nifti_dir.rglob("*part-phase*.nii.gz"))
+    if len(phase_outputs) != 1:
+        raise ValueError(f"Expected one phase NIfTI, found {phase_outputs}")
     saved = nib.load(str(outputs[0]))
     if saved.shape != GRID_SHAPE or nib.aff2axcodes(saved.affine) != ("R", "A", "S"):
         raise ValueError("No-Wave PICS NIfTI geometry validation failed.")
-    sidecar = magnitude_sidecar_path(outputs[0])
+    sidecar = nifti_sidecar_path(outputs[0])
     if not sidecar.is_file():
         raise FileNotFoundError(sidecar)
-    return {
+    phase_sidecar = nifti_sidecar_path(phase_outputs[0])
+    if not phase_sidecar.is_file():
+        raise FileNotFoundError(phase_sidecar)
+    record = {
         "magnitude_nifti": str(outputs[0]),
         "magnitude_nifti_sha256": sha256_file(outputs[0]),
         "magnitude_sidecar": str(sidecar),
         "magnitude_sidecar_sha256": sha256_file(sidecar),
         "shape": list(saved.shape),
         "axis_codes": list(nib.aff2axcodes(saved.affine)),
+        "phase_nifti": str(phase_outputs[0]),
+        "phase_nifti_sha256": sha256_file(phase_outputs[0]),
+        "phase_sidecar": str(phase_sidecar),
+        "phase_sidecar_sha256": sha256_file(phase_sidecar),
     }
+    if not validate_phase_record(record, expected_shape=GRID_SHAPE):
+        raise ValueError("No-Wave PICS phase NIfTI validation failed.")
+    return record
+
+
+def _backfill_phase_nifti(
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    output_dir: Path,
+    twix: Path,
+    sequence: Path,
+    subject: str,
+) -> dict[str, Any]:
+    image_base = bart_base(Path(manifest["bart_output"]["base"]))
+    if sha256_file(image_base.with_suffix(".cfl")) != manifest["bart_output"][
+        "cfl_sha256"
+    ]:
+        raise ValueError("Saved BART image hash changed before phase backfill")
+    config = manifest["config"]
+    with tempfile.TemporaryDirectory(prefix=".phase-backfill-", dir=output_dir) as temp:
+        temporary_root = Path(temp)
+        generated = _export_nifti(
+            image_base,
+            output_dir=temporary_root,
+            twix=twix,
+            sequence=sequence,
+            subject=subject,
+            regularizer=config["regularizer"],
+            lambda_value=config["lambda"],
+            command=manifest["execution"]["command"],
+        )
+        manifest["nifti"] = install_phase_from_temporary_export(
+            existing_record=manifest["nifti"],
+            generated_record=generated,
+            existing_nifti_root=output_dir / "nifti",
+            generated_nifti_root=temporary_root / "nifti",
+            expected_shape=GRID_SHAPE,
+        )
+    manifest["phase_exported_at_utc"] = datetime.now(timezone.utc).isoformat()
+    _write_json_atomic(manifest_path, manifest)
+    print(f"Backfilled phase NIfTI without rerunning PICS: {manifest_path}")
+    return manifest
 
 
 def _run_case(
@@ -323,7 +381,7 @@ def _run_case(
         manifest = _load_json(manifest_path)
         nifti_path = Path(manifest.get("nifti", {}).get("magnitude_nifti", ""))
         metrics_record = manifest.get("direct_fft_metrics", {})
-        if (
+        magnitude_and_metrics_reusable = (
             manifest.get("status") == "complete"
             and nifti_path.is_file()
             and sha256_file(nifti_path)
@@ -331,9 +389,21 @@ def _run_case(
             and metrics_record.get("status") == "complete"
             and metrics_record.get("metrics_reference_manifest", {}).get("sha256")
             == sha256_file(metrics_reference_manifest)
+        )
+        if magnitude_and_metrics_reusable and validate_phase_record(
+            manifest.get("nifti", {}), expected_shape=GRID_SHAPE
         ):
             print(f"Reusing complete no-Wave case: {manifest_path}")
             return manifest
+        if magnitude_and_metrics_reusable:
+            return _backfill_phase_nifti(
+                manifest=manifest,
+                manifest_path=manifest_path,
+                output_dir=output_dir,
+                twix=twix,
+                sequence=sequence,
+                subject=subject,
+            )
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"No-Wave case is not safely reusable: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -524,6 +594,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "cases": [
             {
                 "magnitude_nifti": record["nifti"]["magnitude_nifti"],
+                "phase_nifti": record["nifti"]["phase_nifti"],
                 "direct_fft_metrics": record["direct_fft_metrics"]["metrics"],
             }
             for record in records
@@ -553,7 +624,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=(1e-4, 1e-3, 1e-2, 1.5e-2, 2e-2, 5e-2),
     )
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Reuse complete cases; if only phase NIfTI is missing, export it from "
+            "the saved complex BART image without rerunning PICS."
+        ),
+    )
     parser.add_argument(
         "--validate-only",
         action="store_true",

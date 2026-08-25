@@ -551,16 +551,19 @@ represented by explicit JSON placeholders rather than fake NIfTIs. No spatial
 resampling or cross-volume intensity normalization is performed while
 collecting files.
 
-Two tmux-ready, ignored local launchers are prepared but have not been run:
-the previous non-BART R3x2 Wave PCG-SENSE reconstruction and the no-Wave R3x1
-PICS CG-SENSE/Wavelet sweep. The no-Wave sweep uses its own `pics -g -S`
-scaling contract and includes `1.5e-2` as a requested presentation case; it
-does not assume numerical lambda transfer from the custom Wave operator. The
-no-Wave R3x1 GRAPPA slot remains a placeholder as requested. Both launcher
-workflows calculate and save the existing standard metric set against the
-approved direct-FFT R1 RSS and BET mask on the exact grid. They restore export
-normalization, permit only the metric contract's one least-squares intensity
-scale, and perform neither registration nor interpolation.
+The previous non-BART R3x2 Wave PCG-SENSE reconstruction and no-Wave R3x1
+PICS CG-SENSE/Wavelet sweep have completed. The no-Wave sweep uses its own
+`pics -g -S` scaling contract and includes `1.5e-2` as a requested presentation
+case; it does not assume numerical lambda transfer from the custom Wave
+operator. The no-Wave R3x1 GRAPPA slot remains a placeholder as requested.
+Both launcher workflows calculate and save the existing standard metric set
+against the approved direct-FFT R1 RSS and BET mask on the exact grid. They
+restore export normalization, permit only the metric contract's one least-
+squares intensity scale, and perform neither registration nor interpolation.
+
+Both workflows now export magnitude and phase for new cases. Their existing
+`--resume` path backfills phase for the completed cases from hash-validated
+complex images without rerunning either solver or replacing magnitude.
 
 Retain the compact R3 panel as historical development/transfer context:
 qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,
@@ -620,9 +623,10 @@ and `0.06552`; and mean axial SSIM is `0.9265`, `0.9280`, and `0.9150`.
 Directional losses occur on the expected changed axes. These are descriptive
 tradeoffs, not a selected winner.
 
-The immediate actions are for the user to run the two prepared long jobs in
-tmux, validate their manifested magnitude NIfTIs, and refresh the collection
-to replace three placeholders. The no-Wave GRAPPA slot remains a placeholder.
+The immediate actions are to rerun both launchers with `--resume` to backfill
+phase, validate the updated magnitude/phase manifests, and refresh the
+magnitude-only collection to replace three placeholders. The no-Wave GRAPPA
+slot remains a placeholder.
 Only after the presentation collection is complete and frozen should the
 non-destructive redundant-sweep audit and later cleanup begin. Independent
 confirmation remains deferred, and no preferred retrospective resolution is
@@ -641,9 +645,9 @@ inferred automatically.
    Retain DICOM for metadata and qualitative context only unless a future
    dataset is explicitly qualified for intensity ranking.
 5. **Reconstruction branches:** the presentation-only no-Wave R3x1 PICS sweep
-   and previous non-BART Wave PCG-SENSE adapter are ready for user-run tmux
-   execution. No-Wave R3x1 GRAPPA and older partial-readout R1 fallbacks remain
-   placeholders/out of scope.
+   and previous non-BART Wave PCG-SENSE reconstruction are complete; only
+   resume-mode phase backfill remains. No-Wave R3x1 GRAPPA and older partial-
+   readout R1 fallbacks remain placeholders/out of scope.
 6. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
    full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
    sample preservation, lambda-zero scaling, norm restoration, orientation,

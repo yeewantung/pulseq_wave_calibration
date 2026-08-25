@@ -36,6 +36,7 @@ Unchanged files were also reviewed rather than silently retained:
 | `scripts/run_no_wave_r3x1_pics_sweep.py` | Presentation comparison | Builds a retrospective R3x1 no-Wave input, runs a GPU PICS CG-SENSE control and compact Wavelet/FISTA sweep, exports magnitude NIfTIs, and saves exact-grid direct-FFT metrics. |
 | `scripts/run_previous_non_bart_wave_cg_sense.py` | Historical-algorithm presentation comparison | Adapts accepted BART-formatted inputs to the existing Torch Wave PCG-SENSE implementation and saves exact-grid direct-FFT metrics without defining a new reconstruction algorithm. |
 | `scripts/presentation_metrics.py` | Shared presentation evaluation | Restores NIfTI export normalization and computes the standard fixed-mask metric set against the hash-bound approved direct-FFT R1 reference without registration or interpolation. |
+| `scripts/nifti_phase_resume.py` | Shared phase-export safety | Validates and installs a missing phase NIfTI from a temporary complex-image export without replacing the accepted magnitude. |
 | `scripts/build_presentation_nifti_collection.py` | Presentation packaging | Copies accepted magnitude NIfTIs byte-for-byte into a manifested collection and records pending reconstructions as JSON placeholders. |
 | `scripts/run_bart_regularization.py` | Canonical workflow | Calls the pinned Wave wrapper for one validated, hashed wavelet or LLR case. |
 | `scripts/run_wavelet_sweep.sh` | Canonical workflow | Runs/resumes the compact R1 Wavelet sweep and its reference-neutral review. |
