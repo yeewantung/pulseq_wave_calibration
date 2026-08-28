@@ -198,6 +198,7 @@ def run(config_path: Path, *, refresh: bool) -> dict[str, Any]:
     manifest_path = output_dir / "collection_manifest.json"
     if output_dir.exists() and any(output_dir.iterdir()) and not manifest_path.is_file():
         raise FileExistsError(f"Nonempty output is not an owned collection: {output_dir}")
+    previous_manifest = _load_json(manifest_path) if manifest_path.is_file() else None
     output_dir.mkdir(parents=True, exist_ok=True)
 
     records = []
@@ -231,7 +232,29 @@ def run(config_path: Path, *, refresh: bool) -> dict[str, Any]:
         "entries": records,
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
+    current_files = {str(record["collection_file"]) for record in records}
+    stale_owned_files: list[Path] = []
+    if previous_manifest is not None:
+        for previous in previous_manifest.get("entries", []):
+            name = str(previous.get("collection_file", ""))
+            if name in current_files:
+                continue
+            if Path(name).name != name or not (
+                name.endswith(".nii.gz") or name.endswith(".placeholder.json")
+            ):
+                raise ValueError("Prior collection manifest contains an unsafe output path")
+            stale = output_dir / name
+            if not stale.exists():
+                continue
+            expected_hash = previous.get("collection_sha256")
+            if expected_hash is not None and sha256_file(stale) != expected_hash:
+                raise FileExistsError(f"Refusing to remove a changed collection file: {stale}")
+            stale_owned_files.append(stale)
     _write_json_atomic(manifest_path, payload)
+    for stale in stale_owned_files:
+        stale.unlink()
+    if stale_owned_files:
+        print(f"Removed stale owned collection files: {len(stale_owned_files)}")
     readme = output_dir / "README.md"
     lines = [
         f"# {payload['collection_name']}",
@@ -241,7 +264,7 @@ def run(config_path: Path, *, refresh: bool) -> dict[str, Any]:
         "JSON placeholder files mark reconstructions that are not complete yet.",
         "No spatial resampling or cross-volume intensity normalization is performed.",
         "`presentation_metrics.csv` lists metric status and values in display order.",
-        "`orientation_slices_index-128/` contains manifested presentation TIFFs.",
+        "`orientation_slices/` contains manifested presentation TIFFs.",
         "Phase NIfTIs remain in their canonical reconstruction output trees.",
         "",
     ]

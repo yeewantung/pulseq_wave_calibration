@@ -41,6 +41,17 @@ These rules apply to work under `tools/synthetic_wave_for_reg_baseline/`.
   an implementation choice is necessary. Keep straightforward mechanics
   self-explanatory through clear names; do not add line-by-line narration or
   comments that merely repeat the code.
+- Keep code paths concise and make the scientific operation obvious at first
+  reading. Before writing an adapter or runner, find and reuse the existing
+  function that owns the operation; do not reimplement algorithms, helpers,
+  I/O, validation, or orchestration that already exist. When a workflow only
+  needs one existing function call, keep its wrapper thin and put the exact
+  imported callable, implementation file, and backend in a plain sentence at
+  the top and beside the call. Never leave it ambiguous whether a result uses
+  the local/Torch implementation, BART, or another backend. Add brief comments
+  only where they are necessary to explain non-obvious data adaptation or
+  scientific choices, and keep provenance/export plumbing visibly separate
+  from the core reconstruction call.
 - When changing structure, preserve compatibility where practical and document
   relocations. Remove or archive obsolete material only after checking manifests,
   hashes, references, and downstream consumers.

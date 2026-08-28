@@ -47,7 +47,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     write_json_atomic(path, payload)
 
 
-def _link_bart_pair(source_base: Path, output_base: Path, *, replace: bool) -> None:
+def link_bart_pair(source_base: Path, output_base: Path, *, replace: bool) -> None:
     """Link a BART header/CFL pair without duplicating the theoretical PSF."""
     for suffix in (".hdr", ".cfl"):
         source = source_base.with_suffix(suffix)
@@ -250,7 +250,7 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
     kspace_info["cfl_sha256"] = sha256_file(Path(kspace_info["cfl"]))
 
     output_psf_base = bart_dir / "psf"
-    _link_bart_pair(source_psf_base, output_psf_base, replace=recover_incomplete)
+    link_bart_pair(source_psf_base, output_psf_base, replace=recover_incomplete)
     output_psf_hash = logical_bart_cfl_sha256(output_psf_base, psf_shape)
     if output_psf_hash != source_psf_hash:
         raise ValueError("Exported BART PSF differs from the full-Wave synthesis PSF.")

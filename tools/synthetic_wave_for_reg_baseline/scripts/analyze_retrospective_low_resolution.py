@@ -308,14 +308,26 @@ def _resample_binary_mask(
     return np.asarray(resample_from_to(mask_image, target_image, order=0).dataobj) > 0
 
 
-def _build_reference_masks(
+def _reference_edge_components(
     reference: np.ndarray, brain: np.ndarray, voxel_sizes: Sequence[float]
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Build the physical-gradient edge support used by fidelity metrics."""
     normalized = reference / float(np.percentile(reference[brain], 99.0))
     *_, gradient = gradient_components_per_mm(normalized, voxel_sizes)
     interior = binary_erosion(brain, iterations=2)
     threshold = float(np.percentile(gradient[interior], 80.0))
     edge = interior & (gradient >= threshold)
+    if int(edge.sum()) < 1000:
+        raise ValueError("The reference-derived edge mask is unexpectedly small.")
+    return normalized, gradient, edge, threshold
+
+
+def _build_reference_masks(
+    reference: np.ndarray, brain: np.ndarray, voxel_sizes: Sequence[float]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    normalized, gradient, edge, threshold = _reference_edge_components(
+        reference, brain, voxel_sizes
+    )
 
     anatomy_support = normalized >= 0.02
     excluded = binary_dilation(anatomy_support, iterations=6)
@@ -339,8 +351,8 @@ def _build_reference_masks(
         & (normalized <= intensity_high)
         & (gradient <= smooth_gradient_threshold)
     )
-    if any(int(mask.sum()) < 1000 for mask in (edge, background, smooth_region)):
-        raise ValueError("A reference-derived metric mask is unexpectedly small.")
+    if any(int(mask.sum()) < 1000 for mask in (background, smooth_region)):
+        raise ValueError("A reference-derived background or smooth mask is unexpectedly small.")
     metadata = {
         "edge_rule": "top 20% of sigma-0.7-mm full-resolution gradient inside 2-mm-eroded BET brain",
         "edge_gradient_threshold_per_mm": threshold,
@@ -597,8 +609,12 @@ def _configured_settings(config_path: Path) -> dict[str, Any]:
             config.get("fidelity_title", "Matched-grid fidelity to full resolution")
         ),
         "scientific_scope": scope,
-        "approval_path": _resolve_config_path(
-            config_path, str(config["visual_approval_record"])
+        "approval_path": (
+            None
+            if config.get("visual_approval_record") in (None, "")
+            else _resolve_config_path(
+                config_path, str(config["visual_approval_record"])
+            )
         ),
         "config_path": config_path,
     }

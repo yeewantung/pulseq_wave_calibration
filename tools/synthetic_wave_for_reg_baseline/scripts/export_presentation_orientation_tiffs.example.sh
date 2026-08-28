@@ -15,6 +15,10 @@ exec python "$SCRIPT_DIR/export_presentation_orientation_tiffs.py" \
     --collection-manifest "$PRESENTATION_COLLECTION_MANIFEST" \
     --output-dir "$PRESENTATION_TIFF_DIR" \
     --index 128 \
+    --center-keys \
+        synthetic_wave_r3x2_retro-lr_1p25x1p25x1mm \
+        synthetic_wave_r3x2_retro-lr_1p49x1x1mm \
+        synthetic_wave_r3x2_retro-lr_1x1p49x1mm \
     --display-percentile 99.5 \
     --refresh \
     "$@"

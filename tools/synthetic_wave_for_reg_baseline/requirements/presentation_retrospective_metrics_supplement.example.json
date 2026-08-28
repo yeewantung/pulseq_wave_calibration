@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "matched_metrics": "/path/to/additional_analysis/matched_fidelity_metrics.csv",
+  "native_metrics": "/path/to/additional_analysis/native_resolution_metrics.csv",
+  "entries": [
+    {
+      "key": "collection-key-for-retrospective-case",
+      "case": "case-name-in-metric-tables"
+    }
+  ]
+}

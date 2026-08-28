@@ -1,4 +1,4 @@
-"""Tests for fixed-index presentation TIFF export."""
+"""Tests for fixed-or-center presentation TIFF export."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from bart_cfl import sha256_file  # noqa: E402
 from export_presentation_orientation_tiffs import (  # noqa: E402
     orientation_slices,
     run,
+    slice_indices,
 )
 
 
@@ -30,6 +31,12 @@ class PresentationOrientationTiffTests(unittest.TestCase):
         self.assertEqual(slices["sagittal"][0, 0], volume[1, 0, 2])
         self.assertEqual(slices["coronal"][0, 0], volume[0, 1, 2])
         self.assertEqual(slices["axial"][0, 0], volume[0, 2, 1])
+
+    def test_center_indices_are_resolved_per_orientation_axis(self) -> None:
+        self.assertEqual(
+            slice_indices((172, 256, 204), 128, use_center=True),
+            {"sagittal": 86, "coronal": 128, "axial": 102},
+        )
 
     def test_run_exports_three_tiffs_per_available_nifti(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -65,6 +72,7 @@ class PresentationOrientationTiffTests(unittest.TestCase):
                     collection_manifest=collection_path,
                     output_dir=output,
                     index=2,
+                    center_keys=("example",),
                     display_percentile=99.5,
                     refresh=False,
                 )
@@ -72,6 +80,12 @@ class PresentationOrientationTiffTests(unittest.TestCase):
             self.assertEqual(result["entry_count"], 1)
             self.assertEqual(result["tiff_count"], 3)
             self.assertEqual(len(list(output.glob("*.tiff"))), 3)
+            record = result["entries"][0]
+            self.assertEqual(record["slice_selection"], "volume_center_each_orientation")
+            self.assertEqual(
+                record["slice_indices_by_orientation"],
+                {"sagittal": 2, "coronal": 2, "axial": 2},
+            )
 
 
 if __name__ == "__main__":

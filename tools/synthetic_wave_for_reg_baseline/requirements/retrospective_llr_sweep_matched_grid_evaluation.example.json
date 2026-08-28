@@ -1,0 +1,6 @@
+{
+  "format_version": 1,
+  "sweep_manifest": "/path/to/completed_retrospective_llr_sweep/sweep_manifest.json",
+  "original_analysis_manifest": "/path/to/original_retrospective_analysis/analysis_manifest.json",
+  "output_dir": "/path/to/new/matched_grid_evaluation"
+}

@@ -371,6 +371,22 @@ def _validate_source_operator(
     return metrics
 
 
+def _prepared_validation_metrics(
+    batch: Mapping[str, Any],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Reuse finite operator gates from a hash-matched completed preparation."""
+    records: list[dict[str, float]] = []
+    for key in ("psf_source_identity", "native_wave_operator_identity"):
+        value = batch.get(key)
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError(f"Prepared batch is missing {key}.")
+        record = {str(name): float(metric) for name, metric in value.items()}
+        if not all(np.isfinite(metric) for metric in record.values()):
+            raise ValueError(f"Prepared batch contains non-finite {key} metrics.")
+        records.append(record)
+    return records[0], records[1]
+
+
 def _write_target_psf(
     output_base: Path,
     alpha: np.ndarray,
@@ -600,6 +616,71 @@ def _prepare_case(
     return payload
 
 
+def _reuse_prepared_case(
+    case: ResolvedCase,
+    source_case_dir: Path,
+    case_dir: Path,
+    source_provenance: Mapping[str, Any],
+    config_sha256: str,
+    *,
+    recover: bool = False,
+) -> dict[str, Any]:
+    """Link a hash-validated prior case's BART inputs into a new solver run."""
+    source_manifest_path = source_case_dir / "case_manifest.json"
+    source_payload = _load_json(
+        _require_file(source_manifest_path, "Prepared case manifest")
+    )
+    if source_payload.get("status") != "complete":
+        raise ValueError(f"Prepared source case is not complete: {source_manifest_path}")
+    if source_payload.get("case") != case.to_json():
+        raise ValueError(f"Prepared source case geometry differs: {source_manifest_path}")
+    if source_payload.get("source") != source_provenance:
+        raise ValueError(f"Prepared source provenance differs: {source_manifest_path}")
+
+    source_inputs = source_case_dir / "bart_inputs"
+    _require_file(source_inputs / "manifest.json", "Prepared BART input manifest")
+    for name in ("wave_kspace", "psf", "coil_sens", "kspace_calib"):
+        expected = source_payload["bart_inputs"][name]
+        if cfl_record(source_inputs / name) != expected:
+            raise ValueError(f"Prepared BART input changed: {source_inputs / name}")
+
+    linked_inputs = case_dir / "bart_inputs"
+    if linked_inputs.exists() or linked_inputs.is_symlink():
+        if not recover or not linked_inputs.is_symlink():
+            raise FileExistsError(f"Reused BART input link already exists: {linked_inputs}")
+        linked_inputs.unlink()
+    linked_inputs.symlink_to(source_inputs, target_is_directory=True)
+
+    payload = {
+        key: source_payload[key]
+        for key in (
+            "format_version",
+            "case",
+            "operator_order",
+            "readout_cropped",
+            "sampling_mask_saved",
+            "sampled_coordinate_count",
+            "sampling_fraction",
+            "bart_inputs",
+        )
+    }
+    payload.update(
+        {
+            "status": "prepared",
+            "config_sha256": config_sha256,
+            "source": source_provenance,
+            "prepared_inputs_reused_from": {
+                "case_manifest": str(source_manifest_path),
+                "case_manifest_sha256": sha256_file(source_manifest_path),
+                "bart_inputs": str(source_inputs),
+            },
+            "prepared_at_utc": _utc_now(),
+        }
+    )
+    _write_json(case_dir / "case_manifest.json", payload)
+    return payload
+
+
 def _stream_command(command: Sequence[str], log_path: Path) -> float:
     print("Running:", " ".join(command), flush=True)
     started = time.perf_counter()
@@ -658,15 +739,10 @@ def _load_upstream_exporter(repo_root: Path):
     return module
 
 
-def _run_reconstruction(
-    case: ResolvedCase,
-    case_dir: Path,
-    contract: SourceContract,
+def _reconstruction_settings(
     config: Mapping[str, Any],
-    repo_root: Path,
-    *,
-    recover: bool = False,
-) -> dict[str, Any]:
+) -> tuple[Mapping[str, Any], str, list[str]]:
+    """Return the declared regularizer and its validated BART Wave options."""
     reconstruction = config.get("reconstruction")
     if not isinstance(reconstruction, Mapping):
         raise ValueError("Configuration must contain a reconstruction object.")
@@ -686,6 +762,19 @@ def _run_reconstruction(
     )
     if "-g" not in options:
         raise AssertionError("Every BART reconstruction must use GPU option -g.")
+    return reconstruction, regularizer, options
+
+
+def _run_reconstruction(
+    case: ResolvedCase,
+    case_dir: Path,
+    contract: SourceContract,
+    config: Mapping[str, Any],
+    repo_root: Path,
+    *,
+    recover: bool = False,
+) -> dict[str, Any]:
+    reconstruction, regularizer, options = _reconstruction_settings(config)
     bart_value = str(reconstruction.get("bart", os.environ.get("BART_BIN", "bart")))
     bart_executable = shutil.which(bart_value)
     if bart_executable is None:
@@ -780,6 +869,7 @@ def run_config(
     config = _load_json(_require_file(config_path, "Configuration"))
     contract, source_manifest = load_source_contract(config, config_path.parent)
     geometry, cases, shape_validation = validate_contract(contract, config)
+    _, regularizer, wave_options = _reconstruction_settings(config)
     output_root = _resolve_path(config.get("output_root"), config_path.parent, "output_root")
     summary = {
         "config": str(config_path),
@@ -790,7 +880,48 @@ def run_config(
         "shape_validation": shape_validation,
         "source": _source_provenance(contract, source_manifest),
         "cases": [case.to_json() for case in cases],
+        "reconstruction": {
+            "backend": "BART wave",
+            "regularizer": regularizer,
+            "wave_options": wave_options,
+        },
     }
+    prepared_cases_value = config.get("prepared_cases_root")
+    prepared_cases_root = (
+        None
+        if prepared_cases_value in (None, "")
+        else _resolve_path(
+            prepared_cases_value, config_path.parent, "prepared_cases_root"
+        )
+    )
+    prepared_batch: dict[str, Any] | None = None
+    if prepared_cases_root is not None:
+        source_batch_path = _require_file(
+            prepared_cases_root / "batch_manifest.json", "Prepared batch manifest"
+        )
+        prepared_batch = _load_json(source_batch_path)
+        if prepared_batch.get("status") != "complete":
+            raise ValueError("The prepared source batch is not complete.")
+        if prepared_batch.get("source") != summary["source"]:
+            raise ValueError("The prepared source batch has different source provenance.")
+        for case in cases:
+            source_case_path = (
+                prepared_cases_root / case.case_name / "case_manifest.json"
+            )
+            source_case = _load_json(
+                _require_file(source_case_path, "Prepared case manifest")
+            )
+            if source_case.get("status") != "complete" or source_case.get(
+                "case"
+            ) != case.to_json():
+                raise ValueError(
+                    "Prepared case is incomplete or has different geometry: "
+                    f"{source_case_path}"
+                )
+        summary["prepared_cases_reused_from"] = {
+            "root": str(prepared_cases_root),
+            "batch_manifest_sha256": sha256_file(source_batch_path),
+        }
     print(f"Validated retrospective source: {contract.bart_input_dir}")
     for case in cases:
         print(
@@ -802,25 +933,32 @@ def run_config(
         print("Structural validation complete; no output was written.")
         return {**summary, "status": "validated"}
     workflow_root = output_root / OUTPUT_FOLDER_NAME
+    if prepared_cases_root == workflow_root:
+        raise ValueError("prepared_cases_root must differ from the new workflow root.")
     if workflow_root.exists() and any(workflow_root.iterdir()) and not resume:
         raise FileExistsError(
             f"Output tree is not empty: {workflow_root}. Use a new output_root or --resume."
         )
     workflow_root.mkdir(parents=True, exist_ok=True)
     batch_manifest = workflow_root / "batch_manifest.json"
-    source_psf_raw = open_cfl(contract.psf)
-    source_psf = source_psf_raw[:, :, :, 0, 0]
     runtime = config.get("runtime") if isinstance(config.get("runtime"), Mapping) else {}
-    alpha, beta, gamma, psf_metrics = _validate_psf(source_psf, runtime)
-    source_mask = np.asarray(
-        np.load(contract.sampling_mask, mmap_mode="r", allow_pickle=False), dtype=bool
-    )
-    operator_metrics = _validate_source_operator(
-        contract,
-        source_psf,
-        source_mask,
-        fft_workers=int(runtime.get("fft_workers", 4)),
-    )
+    alpha = beta = gamma = source_mask = None
+    if prepared_batch is None:
+        source_psf_raw = open_cfl(contract.psf)
+        source_psf = source_psf_raw[:, :, :, 0, 0]
+        alpha, beta, gamma, psf_metrics = _validate_psf(source_psf, runtime)
+        source_mask = np.asarray(
+            np.load(contract.sampling_mask, mmap_mode="r", allow_pickle=False),
+            dtype=bool,
+        )
+        operator_metrics = _validate_source_operator(
+            contract,
+            source_psf,
+            source_mask,
+            fft_workers=int(runtime.get("fft_workers", 4)),
+        )
+    else:
+        psf_metrics, operator_metrics = _prepared_validation_metrics(prepared_batch)
     batch = {
         **summary,
         "status": "running",
@@ -870,19 +1008,31 @@ def run_config(
             }
             _write_json(case_manifest_path, case_payload)
         if case_payload.get("status") == "preparing":
-            case_payload = _prepare_case(
-                case,
-                contract,
-                source_mask,
-                alpha,
-                beta,
-                gamma,
-                case_dir,
-                runtime,
-                summary["source"],
-                summary["config_sha256"],
-                recover=recover_preparation,
-            )
+            if prepared_cases_root is None:
+                assert source_mask is not None
+                assert alpha is not None and beta is not None and gamma is not None
+                case_payload = _prepare_case(
+                    case,
+                    contract,
+                    source_mask,
+                    alpha,
+                    beta,
+                    gamma,
+                    case_dir,
+                    runtime,
+                    summary["source"],
+                    summary["config_sha256"],
+                    recover=recover_preparation,
+                )
+            else:
+                case_payload = _reuse_prepared_case(
+                    case,
+                    prepared_cases_root / case.case_name,
+                    case_dir,
+                    summary["source"],
+                    summary["config_sha256"],
+                    recover=recover_preparation,
+                )
         if not prepare_only and case_payload.get("status") != "complete":
             case_payload = {
                 **case_payload,

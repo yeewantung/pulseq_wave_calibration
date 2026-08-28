@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-08-24, America/New_York
+Updated: 2026-08-28, America/New_York
 
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
@@ -8,10 +8,65 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-The requested presentation magnitude collection is materialized with 20
-manifested slots: 19 finite canonical-RAS magnitude NIfTIs and one explicit
-JSON placeholder for no-Wave R3x1 GRAPPA. Canonical sources were copied byte-
-for-byte and were not moved, resampled, or cross-normalized.
+Start the final repository/output cleanup in a fresh session. Do not launch
+another reconstruction, sweep, evaluation, presentation refresh, or archive
+operation before the cleanup audit. The experiment and requested presentation
+package are frozen.
+
+The cleanup session must begin read-only:
+
+1. read the applicable `AGENTS.md` files, this handover, and
+   `EXPERIMENT_PLAN.md`;
+2. inventory the dirty worktree and separate the accumulated in-scope tool
+   changes from unrelated user work—do not reset, discard, or overwrite any
+   existing change;
+3. inventory the private output tree by manifest and hash, classifying each
+   directory as canonical, retained diagnostic/historical, duplicate sweep, or
+   rebuildable intermediate;
+4. propose the repository consolidation, output-index merge, archive moves,
+   and any deletion candidates before moving or deleting material; and
+5. after implementation, update all downstream paths/manifests, run both tool
+   test suites, run `git diff --check`, and audit every tracked/staged file for
+   private paths.
+
+No large output should be deleted merely because it appears redundant. Verify
+canonical consumers and hashes first, prefer reversible archive moves, and ask
+before any irreversible deletion. Actual machine paths must remain only in
+ignored `.local.sh`/`.local.json` files or private generated manifests.
+
+## Frozen completion state
+
+The synthetic-Wave R3x1 target, visual gate, coarse Wavelet/LLR sweep, Wavelet
+refinement, and exact-grid evaluation are complete. The user selected Wavelet
+`lambda=2.2e-2`. It has the lowest refined brain NRMSE (`0.0275119`), 3D SSIM
+`0.985167`, brain NCC `0.996493`, gradient NCC `0.995822`, and edge ratio
+`1.004955`. The hash-bound choice is recorded under
+`synthetic_wave_r3x1/evaluation/direct_fft_wavelet_refinement/selection` with
+`automatic_selection_performed=false`.
+
+The presentation collection now includes exactly the two requested R3x1
+views: solver-matched unregularized BART Wave FISTA lambda zero and Wavelet
+FISTA `lambda=2.2e-2`. Their magnitude NIfTIs, central triplanar TIFFs, and
+exact-grid direct-FFT metrics are included. No R3x1 reconstruction or
+presentation follow-up remains.
+
+The retrospective-resolution Wavelet and corrected-LLR sweeps and their fresh
+matched-grid evaluations are complete. The superseded native-grid Wavelet
+evaluator remains diagnostic only and must not be promoted during cleanup.
+The explicit presentation choices are recorded in
+`retrospective_low_resolution_selected_cases/selection_decision.json`:
+
+- lower-X (`1.49x1x1 mm` achieved): Wavelet `lambda=1e-2`;
+- lower-Y (`1x1.49x1 mm` achieved): Wavelet `lambda=5e-3`; and
+- balanced (`1.25x1.25x1 mm` requested): unregularized FISTA `lambda=0`.
+
+Those choices are presentation decisions, not automatic metric winners and
+not a redefinition of the frozen full-resolution Wavelet `lambda=1.5e-2`.
+
+The requested presentation magnitude collection is materialized with 28
+available slots, all containing finite canonical-RAS magnitude NIfTIs.
+Canonical sources were copied byte-for-byte and were not moved, resampled, or
+cross-normalized.
 
 The no-Wave R3x1 PICS CG-SENSE/Wavelet sweep and previous non-BART R3x2
 PCG-SENSE reconstruction have completed. Each completed case saves the
@@ -20,17 +75,33 @@ standard exact-grid direct-FFT metric dictionary under
 the approved reference/mask with no registration or interpolation. These runs
 have magnitude and phase NIfTIs in their reconstruction trees; only magnitude
 is copied into the presentation collection. `presentation_metrics.csv` lists
-all 20 requested slots with explicit metric status and comparison-grid scope.
-The `orientation_slices_index-128` subdirectory contains 57 validated 16-bit
-TIFFs (three orientations for each available NIfTI) plus a hash-bound manifest.
-The ignored local TIFF launcher is ready for reproducible refresh. The no-Wave
-R3x1 GRAPPA entry remains a placeholder as requested.
+all 28 entries with explicit metric status and comparison-grid scope.
+The `orientation_slices` subdirectory contains 84 validated 16-bit TIFFs
+(three orientations for each available NIfTI) plus a hash-bound manifest.
+Standard cases use index 128; the six retrospective-resolution cases use the
+center index of each physical RAS orientation independently.
+The no-Wave R3x1 GRAPPA reconstruction and presentation refresh are complete.
+It used the accepted joint-coil 5x5x5/Ncc=12 implementation on the same
+retrospective R3x1-plus-ACS source contract, preserved every acquired sample
+bitwise, and saved magnitude/phase plus direct-FFT metrics. Its brain NRMSE is
+`0.046644` and 3D brain-bounding-box SSIM is `0.963763`. The collection,
+metric CSV, and TIFF manifests were revalidated together with 28/28 available
+entries, 28 metric rows, and 84 TIFFs. The added FISTA-lambda-zero controls
+have matched direct-FFT and native same-solver descriptive metrics.
 
-Only after the collection is complete and frozen, audit redundant sweep
-folders by hash and manifest, select canonical runs, merge their indexes and
-organization, and archive superseded trees. Delete nothing until downstream
-references have been verified. Independent confirmation remains deferred; do
-not infer an automatic preferred retrospective resolution.
+A dedicated no-Wave R3x1 sweep evaluation now plots all six Wavelet lambdas
+with CG-SENSE and GRAPPA controls. Among tested values, `1e-3` leads brain
+NRMSE (`0.038955`), 3D SSIM (`0.972682`), and edge-ratio closeness (`1.004790`),
+while `1e-4` leads edge-gradient NCC (`0.993260`). The current presentation
+value is now explicitly selected as `1e-3`; the former `1.5e-2` entry is worse
+on all four plotted metrics and has been replaced only in the presentation
+collection. Its canonical sweep reconstruction remains intact.
+
+Do not confuse the no-Wave PICS-specific `1e-3` choice with either the frozen
+full-resolution custom-Wave R3x2 `1.5e-2` result or the new per-resolution
+follow-up sweep; the operators and target-grid norms differ. Independent
+confirmation remains deferred; do not infer an automatic preferred
+retrospective resolution.
 
 The hash-bound operator gate is
 `evaluation/full_sampling_wave_operator_validation/operator_validation_manifest.json`
@@ -261,18 +332,19 @@ Repository:
 $REPOSITORY_ROOT
 ```
 
-The repository was clean and synchronized with `origin/main` immediately
-before this handover refresh. The preceding R1 retrospective launcher commit
-is:
+The branch tip is synchronized with `origin/main` at the start of this
+handover refresh, but the working tree is intentionally dirty with accumulated
+implementation, test, documentation, and retrospective-library changes from
+the completed follow-up work. Do not assume any modified or untracked file is
+disposable. The current tip before cleanup is:
 
 ```text
-c3225b1 Add R1 retrospective Wavelet launcher
+ce0dab8 Package presentation metrics and orientation TIFFs
 ```
 
-Use the newer documentation commit containing this handover after the refresh
-is committed. Check `git status --short --branch` before working. The
-historical tracker is under `docs/archive/`, and the active plan is
-`EXPERIMENT_PLAN.md`.
+Check `git status --short --branch` before working, inventory the complete diff,
+and form cleanup commits without resetting the tree. The historical tracker is
+under `docs/archive/`, and the active plan is `EXPERIMENT_PLAN.md`.
 
 ## Dataset roles and baseline status
 
@@ -388,9 +460,11 @@ the wrapper when needed. `-e` is maximum-eigenvalue/step-size information, not
 intensity scaling.
 
 The final R1 refinement and targeted evaluation selected and froze Wavelet
-`lambda=1.5e-2` for MPRAGE. LLR remains a documented comparison and is not
-selected. Do not retune lambda during the retrospective low-resolution study
-or the R3 qualitative transfer.
+`lambda=1.5e-2` for full-resolution MPRAGE. LLR remains a documented
+comparison and is not selected. The user has now explicitly authorized a
+separate per-target-grid Wavelet sweep for the retrospective low-resolution
+presentation cases; it does not reopen the full-resolution selection or the R3
+qualitative transfer.
 
 ## Evaluation decisions
 

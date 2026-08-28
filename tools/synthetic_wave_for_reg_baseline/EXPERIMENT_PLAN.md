@@ -1,6 +1,6 @@
 # R3 presentation optimization, R1 refinement, and retrospective-resolution plan
 
-Updated: 2026-08-24
+Updated: 2026-08-28
 
 This is the active experiment plan. The original R3x1-centered tracker is
 preserved as a historical record in
@@ -462,6 +462,24 @@ GPU `-g`. Its batch and all three case manifests report `complete`; all
 canonical-RAS NIfTI exports are finite and have the expected physical XYZ
 shapes `172x256x256`, `256x172x256`, and `204x204x256`.
 
+The user subsequently authorized a separate Wavelet-lambda sweep on these
+three target grids. Evaluate it with the already accepted retrospective
+matched-grid calculation: linearly resample candidates to the original 1 mm
+RAS grid and reuse the exact hash-bound full-resolution FISTA-lambda-zero and
+direct-FFT references plus the fixed approved BET brain/edge masks. Do not
+create or substitute a new native-grid reference for this selection. The
+sweep reuses the completed lambda-zero and `1.5e-2` controls and makes no
+automatic choice.
+
+A corrected-LLR follow-up uses the same three target grids and prepared inputs.
+Its configurable default tests block 4 at `2e-3, 5e-3, 6e-3, 1e-2` and blocks
+8/16 at `2e-3, 5e-3, 1e-2, 2e-2`. Reconstruction must retain split-complex
+`-l -v`, FISTA `-f`, mandatory GPU `-g`, magnitude/phase export, and resume
+manifests. Evaluation is a separate program using the exact original matched
+1 mm references, BET brain mask, edge mask, and LSQ scaling; retrospective
+FISTA lambda zero is a control, not an LLR reconstruction. Make no automatic
+block/lambda selection.
+
 The current tool's phase-encoding-only crop is the intended behavior. For
 sagittal MPRAGE, physical X maps to logical partition/PE2, physical Y maps to
 logical line/PE1, and physical Z maps to logical readout. Never crop the
@@ -545,30 +563,43 @@ independent validation. No R3 selection metrics were calculated.
 ## 11. Presentation design gates
 
 Presentation packaging resumed on 2026-08-24. The private magnitude-NIfTI
-collection is manifested with 20 requested slots: 19 accepted outputs are
-present as byte-identical copies and the unfinished no-Wave R3x1 GRAPPA
-reconstruction is represented by an explicit JSON placeholder rather than a
-fake NIfTI. No spatial
-resampling or cross-volume intensity normalization is performed while
+collection is manifested with all 20 requested outputs plus three supplemental
+retrospective FISTA-lambda-zero controls present as byte-identical copies. No
+spatial resampling or cross-volume intensity normalization is performed while
 collecting files.
 
 The previous non-BART R3x2 Wave PCG-SENSE reconstruction and no-Wave R3x1
 PICS CG-SENSE/Wavelet sweep have completed. The no-Wave sweep uses its own
-`pics -g -S` scaling contract and includes `1.5e-2` as a requested presentation
-case; it does not assume numerical lambda transfer from the custom Wave
-operator. The no-Wave R3x1 GRAPPA slot remains a placeholder as requested.
-Both launcher workflows calculate and save the existing standard metric set
+`pics -g -S` scaling contract and retains the originally requested `1.5e-2`
+case, but the presentation entry now uses the explicit `1e-3` choice. It does
+not assume numerical lambda transfer from the custom Wave operator. The no-Wave
+R3x1 GRAPPA reconstruction subsequently completed with
+the accepted joint-coil 5x5x5/Ncc=12 implementation and bitwise preservation of
+acquired samples. All reconstruction launcher workflows calculate and save the
+existing standard metric set
 against the approved direct-FFT R1 RSS and BET mask on the exact grid. They
 restore export normalization, permit only the metric contract's one least-
 squares intensity scale, and perform neither registration nor interpolation.
 
-Both workflows now export magnitude and phase, including completed resume-mode
+All workflows export magnitude and phase, including completed resume-mode
 phase backfills from hash-validated complex images. The presentation collection
-copies magnitude only and now contains 19 available NIfTIs plus the one
-requested GRAPPA placeholder. Its ordered metric CSV distinguishes exact-grid,
-matched-grid retrospective, native descriptive, qualitative-only, and pending
-rows. Fifty-seven manifested index-128 orthogonal TIFFs cover all available
-NIfTIs.
+copies magnitude only and now contains 23 NIfTIs. Its ordered
+metric CSV distinguishes exact-grid, matched-grid retrospective, native
+descriptive, and qualitative-only rows. Sixty-nine manifested orthogonal TIFFs
+cover all available NIfTIs. Standard cases use index 128; the six
+retrospective-resolution cases use each physical orientation's center index.
+GRAPPA has brain NRMSE `0.046644`, 3D
+brain-bounding-box SSIM `0.963763`, and axial mean SSIM `0.976415` against the
+approved exact-grid direct-FFT reference.
+
+The no-Wave R3x1 Wavelet sweep now has a dedicated metric CSV and lambda-curve
+plot with CG-SENSE and GRAPPA controls. Among tested values, `1e-3` leads brain
+NRMSE (`0.038955`), 3D SSIM (`0.972682`), and edge-ratio closeness (`1.004790`),
+whereas `1e-4` leads edge-gradient NCC (`0.993260`). The presentation's
+`1.5e-2` case is worse on all four plotted metrics. This evidence rejects
+assuming numerical transfer from the custom-Wave R3x2 value. The user explicitly
+selected `1e-3` for the no-Wave presentation entry; this does not change the
+separately frozen custom-Wave R3x2 setting.
 
 Retain the compact R3 panel as historical development/transfer context:
 qualitative DICOM, no-wave GRAPPA, the R1-selected Wavelet transfer result,
@@ -596,7 +627,11 @@ and ranking rules before generating presentation figures.
 
 ## 12. Final repository and output cleanup
 
-Do this only after the experiments and presentation outputs are frozen.
+The experiments and requested presentation outputs are now frozen, and this is
+the next authorized work for a fresh session. Begin with a non-mutating
+inventory and proposal. Do not move, archive, merge, or delete outputs until
+their manifests, hashes, canonical consumers, and downstream references have
+been checked.
 
 - Reorganize the tool into clear public entry points, reusable `utils`,
   configuration/examples, focused tests, and `archive` material.
@@ -611,6 +646,28 @@ Do this only after the experiments and presentation outputs are frozen.
   been checked.
 
 ## 13. Immediate next step
+
+Perform Section 12 in a fresh session. No further reconstruction, sweep,
+evaluation, or presentation generation is pending. The first cleanup turn must
+read the applicable `AGENTS.md` files and `HANDOVER.md`, inspect the dirty
+worktree without resetting it, and classify private outputs before proposing
+changes. Prefer reversible archive moves and obtain approval before any
+irreversible deletion.
+
+The synthetic-Wave R3x1 experiment is complete on the same exact R1 source and
+1 mm grid. It reused the accepted full-Wave encoding, branched only the R3x1
+sampling target, passed the lambda-zero visual gate, ran the coarse Wavelet and
+corrected-LLR sweeps, and refined Wavelet at
+`1.6e-2, 1.8e-2, 2.2e-2, 2.5e-2, 3e-2, 4e-2`. All reconstructions used GPU BART
+and retained magnitude and phase.
+
+The user explicitly selected Wavelet `lambda=2.2e-2`; no automatic selection
+was performed. Its brain NRMSE is `0.0275119`, 3D SSIM is `0.985167`, brain NCC
+is `0.996493`, gradient NCC is `0.995822`, and edge ratio is `1.004955` on the
+unchanged direct-FFT grid with the approved fixed BET mask. The selection is
+hash-bound in the R3x1 refinement evaluation tree. The presentation collection
+contains the solver-matched FISTA lambda-zero control and selected Wavelet case,
+with magnitude NIfTIs, three central-orientation TIFFs each, and metric rows.
 
 The R1 review was explicitly approved on 2026-08-21 and its separate approval
 record binds both figures and the review manifest. The path-agnostic analysis
@@ -628,42 +685,52 @@ and `0.06552`; and mean axial SSIM is `0.9265`, `0.9280`, and `0.9150`.
 Directional losses occur on the expected changed axes. These are descriptive
 tradeoffs, not a selected winner.
 
+After the separate matched-grid Wavelet and corrected-LLR sweeps, the user made
+three explicit presentation choices: lower-X Wavelet `lambda=1e-2`, lower-Y
+Wavelet `lambda=5e-3`, and balanced unregularized FISTA `lambda=0`. The private
+selection record hash-binds those cases. These are per-grid regularization
+choices and do not select a preferred retrospective resolution.
+
 The presentation collection, metric table, and orthogonal TIFF exports are
-current. The no-Wave GRAPPA slot remains a placeholder. Decide whether to keep
-that branch pending or authorize its reconstruction before freezing the
-presentation collection and starting the non-destructive redundant-sweep
-audit.
-Only after the presentation collection is complete and frozen should the
-non-destructive redundant-sweep audit and later cleanup begin. Independent
-confirmation remains deferred, and no preferred retrospective resolution is
-inferred automatically.
+current and jointly validated: 28 NIfTIs, 28 metric rows, no placeholders, and
+84 TIFFs. The no-Wave presentation-specific Wavelet entry now uses the explicit
+user choice `1e-3`. This PICS-specific decision does not reopen the frozen
+custom-Wave R3x2 setting. Independent confirmation remains deferred, and no
+preferred retrospective resolution is inferred automatically.
 
 ## 14. Remaining work and deferred branches
 
-1. **R1 retrospective visual review — complete:** the generalized review and
+1. **Retrospective Wavelet sweep — complete:** all 27 lambda/resolution
+   combinations and the fresh matched-grid evaluation are available. The
+   attempted native-grid evaluator is superseded diagnostics for this task.
+2. **Retrospective corrected-LLR sweep — complete:** the reconstruction sweep,
+   low-lambda extension, combined matched-grid evaluation, and block-specific
+   metric plots are available.
+3. **R1 retrospective visual review — complete:** the generalized review and
    hash-bound explicit approval are recorded.
-2. **R1 retrospective descriptive analysis — complete:** native and matched
+4. **R1 retrospective descriptive analysis — complete:** native and matched
    metrics are manifested, with no automatic resolution selection.
-3. **Independent confirmation scan — deferred:** at the user's request, no
+5. **Independent confirmation scan — deferred:** at the user's request, no
    separate confirmation scan is being pursued now. Do not call the selected
    parameter independently confirmed.
-4. **DICOM ranking — disabled:** the direct FFT RSS is the active R1 reference.
+6. **DICOM ranking — disabled:** the direct FFT RSS is the active R1 reference.
    Retain DICOM for metadata and qualitative context only unless a future
    dataset is explicitly qualified for intensity ranking.
-5. **Reconstruction branches:** the presentation-only no-Wave R3x1 PICS sweep
+7. **Reconstruction branches:** the presentation-only no-Wave R3x1 PICS sweep
    and previous non-BART Wave PCG-SENSE reconstruction and phase exports are
-   complete. No-Wave R3x1 GRAPPA and older partial-readout R1 fallbacks remain
-   placeholders/out of scope.
-6. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
+   complete. The no-Wave R3x1 GRAPPA reconstruction, phase export, and metrics
+   are also complete. Older partial-readout R1 fallbacks remain out of scope.
+8. **Acceptance gates — retain:** preserve PSF/no-Wave identity,
    full-sampling Wave consistency, mask-after-Wave ordering, exact acquired
    sample preservation, lambda-zero scaling, norm restoration, orientation,
    GPU `-g`, provenance, and resumability checks. The two source-operator gates
    are now productionized and passed on every R1 virtual coil.
-7. **Presentation package — active:** the manifested collection has 19 NIfTIs,
-   one GRAPPA placeholder, an ordered metric CSV, and 57 orthogonal TIFFs.
-   Retain the GRAPPA placeholder until that reconstruction is separately
-   authorized.
-8. **Redundant sweep cleanup — gated:** after presentation is frozen, audit
-   hashes and downstream references, choose canonical runs, merge indexes and
-   organization, and archive superseded sweep folders before considering any
-   deletion.
+9. **Presentation package — complete:** the manifested collection has 28
+   available magnitude NIfTIs, an ordered 28-row metric CSV, and 84 orthogonal
+   TIFFs. Their manifests are hash-bound to the refreshed collection; no-Wave
+   Wavelet uses `1e-3`, and synthetic-Wave R3x1 includes FISTA lambda zero and
+   selected Wavelet `2.2e-2`.
+10. **Repository/output cleanup — next:** audit the dirty worktree, hashes, and
+   downstream references; choose canonical runs; merge indexes and redundant
+   sweep organization; archive superseded material; and consider deletion only
+   after an explicit reviewed proposal.

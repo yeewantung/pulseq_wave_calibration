@@ -18,6 +18,7 @@ from run_bart_wave_lambda0 import (  # noqa: E402
     _build_parser,
     _completed_reconstruction_reusable,
     _resolve_run,
+    _validated_explicit_dataset,
     build_ecalib_command,
     build_wave_command,
 )
@@ -190,6 +191,50 @@ class ManifestResolutionTests(unittest.TestCase):
 
             self.assertIsNone(resolved["dataset"])
             self.assertEqual(resolved["calibration_base"], root / "calibration")
+
+    def test_explicit_branch_recovers_matching_source_dataset_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            example_path = (
+                Path(__file__).resolve().parents[1]
+                / "configs"
+                / "incoming_r1_dataset.example.json"
+            )
+            payload = json.loads(example_path.read_text(encoding="utf-8"))
+            payload["outputs"]["root"] = "outputs"
+            twix = root / "source.dat"
+            sequence = root / "wave.seq"
+            twix.touch()
+            sequence.touch()
+            payload["inputs"]["twix"] = str(twix)
+            payload["inputs"]["wave_sequence"] = str(sequence)
+            manifest_path = root / "dataset.json"
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            dataset = load_dataset_manifest(manifest_path)
+            dataset.inspection_report.parent.mkdir(parents=True)
+            dataset.inspection_report.write_text(
+                json.dumps(
+                    {
+                        "dataset_manifest": dataset.provenance(),
+                        "contract_checks": {"all_passed": True},
+                        "twix": {"selected_measurement_index": 1},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            recovered = _validated_explicit_dataset(
+                dataset.provenance(),
+                twix=twix,
+                sequence=sequence,
+                measurement_index=1,
+                subject=dataset.subject,
+                matrix=tuple(payload["geometry"]["matrix"]),
+                fov_mm=tuple(payload["geometry"]["fov_mm"]),
+                virtual_coils=payload["reconstruction"]["virtual_coils"],
+            )
+
+            self.assertEqual(recovered.sha256, dataset.sha256)
 
 
 class ResumeValidationTests(unittest.TestCase):

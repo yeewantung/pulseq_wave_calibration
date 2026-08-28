@@ -81,6 +81,16 @@ achieved resolution, matrix, FOV, BART inputs, commands, norms, and canonical
 outputs are recorded in manifests. Existing non-empty output trees are refused
 unless `--resume` finds matching case metadata.
 
+For solver-only comparisons on the same target grids, set
+`prepared_cases_root` to a completed `retrospective_low_resolution` workflow.
+The pipeline verifies the prior batch, case geometry, source provenance, and
+BART-input hashes, then links those immutable inputs into the new output tree
+instead of synthesizing them again. The completed preparation's finite PSF and
+source-operator gates are reused with that hash-bound batch, avoiding repeated
+full-volume operator checks during solver sweeps. Wavelet mode permits `lambda: 0` so the
+effective GPU command uses BART Wave FISTA (`-w -f -r 0 -g`) as an
+unregularized solver control.
+
 ## Commands
 
 Activate the appropriate Python environment and BART build first. Keep the

@@ -93,6 +93,41 @@ class PresentationCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not canonical RAS"):
                 run(config, refresh=False)
 
+    def test_refresh_removes_only_hash_valid_stale_owned_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.nii.gz"
+            nib.save(
+                nib.Nifti1Image(np.ones((2, 2, 2), dtype=np.float32), np.eye(4)),
+                source,
+            )
+            config = root / "config.json"
+            output = root / "collection"
+            payload = {
+                "format_version": 1,
+                "output_dir": str(output),
+                "entries": [
+                    {
+                        "display_order": 1,
+                        "key": "old-key",
+                        "label": "Old",
+                        "status": "available",
+                        "source_nifti": str(source),
+                    }
+                ],
+            }
+            config.write_text(json.dumps(payload), encoding="utf-8")
+            run(config, refresh=False)
+            self.assertTrue((output / "old-key.nii.gz").is_file())
+
+            payload["entries"][0]["key"] = "new-key"
+            payload["entries"][0]["label"] = "New"
+            config.write_text(json.dumps(payload), encoding="utf-8")
+            run(config, refresh=True)
+
+            self.assertFalse((output / "old-key.nii.gz").exists())
+            self.assertTrue((output / "new-key.nii.gz").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

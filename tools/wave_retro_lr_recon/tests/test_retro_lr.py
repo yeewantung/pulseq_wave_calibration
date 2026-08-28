@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,7 @@ import numpy as np
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
-from wave_retro_lr.bart_io import create_cfl, open_cfl, read_shape
+from wave_retro_lr.bart_io import cfl_record, create_cfl, open_cfl, read_shape
 from wave_retro_lr.core import (
     CaseSpec,
     Geometry,
@@ -25,7 +26,12 @@ from wave_retro_lr.core import (
     psf_identity_metrics,
     resolve_case,
 )
-from wave_retro_lr.pipeline import _write_target_calibration, _write_target_maps
+from wave_retro_lr.pipeline import (
+    _prepared_validation_metrics,
+    _reuse_prepared_case,
+    _write_target_calibration,
+    _write_target_maps,
+)
 
 
 def geometry() -> Geometry:
@@ -120,8 +126,36 @@ class PsfAndOperatorTests(unittest.TestCase):
 
 
 class BartContractTests(unittest.TestCase):
+    def test_completed_prepared_batch_reuses_finite_operator_gates(self) -> None:
+        psf, operator = _prepared_validation_metrics(
+            {
+                "psf_source_identity": {
+                    "relative_complex_l2": 1e-7,
+                    "maximum_complex_error": 2e-7,
+                },
+                "native_wave_operator_identity": {
+                    "relative_complex_l2": 3e-7,
+                    "maximum_complex_error": 4e-7,
+                },
+            }
+        )
+        self.assertEqual(psf["relative_complex_l2"], 1e-7)
+        self.assertEqual(operator["maximum_complex_error"], 4e-7)
+        with self.assertRaisesRegex(ValueError, "non-finite"):
+            _prepared_validation_metrics(
+                {
+                    "psf_source_identity": {"relative_complex_l2": float("nan")},
+                    "native_wave_operator_identity": {"relative_complex_l2": 1e-7},
+                }
+            )
+
     def test_all_reconstruction_options_require_gpu(self) -> None:
-        for regularizer, value in (("none", None), ("wavelet", 1e-4), ("llr", 2e-5)):
+        for regularizer, value in (
+            ("none", None),
+            ("wavelet", 0.0),
+            ("wavelet", 1e-4),
+            ("llr", 2e-5),
+        ):
             options = build_wave_options(
                 regularizer,
                 value,
@@ -131,10 +165,71 @@ class BartContractTests(unittest.TestCase):
                 maximum_eigenvalue=None,
             )
             self.assertIn("-g", options)
+        fista_zero = build_wave_options(
+            "wavelet",
+            0.0,
+            block_size=8,
+            iterations=100,
+            tolerance=1e-6,
+            maximum_eigenvalue=None,
+        )
+        self.assertEqual(
+            fista_zero,
+            ["-w", "-f", "-r", "0", "-i", "100", "-t", "1e-06", "-g"],
+        )
         llr = build_wave_options(
             "llr", 2e-5, block_size=8, iterations=100, tolerance=1e-6, maximum_eigenvalue=None
         )
         self.assertIn("-v", llr)
+
+    def test_completed_prepared_inputs_can_be_reused_without_copying(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source_case = root / "source"
+            source_inputs = source_case / "bart_inputs"
+            source_inputs.mkdir(parents=True)
+            for name in ("wave_kspace", "psf", "coil_sens", "kspace_calib"):
+                data = create_cfl(source_inputs / name, (4, 4, 4, 1))
+                data[:] = 1
+                data.flush()
+                del data
+            (source_inputs / "manifest.json").write_text("{}\n", encoding="utf-8")
+
+            case = resolve_case(
+                CaseSpec((1.5, 1.25, 1.0), (1, 1)),
+                Geometry((6, 5, 4), (4, 5, 6)),
+            )
+            provenance = {"source": "test"}
+            source_payload = {
+                "format_version": 1,
+                "status": "complete",
+                "case": case.to_json(),
+                "source": provenance,
+                "operator_order": ["test"],
+                "readout_cropped": False,
+                "sampling_mask_saved": False,
+                "sampled_coordinate_count": 1,
+                "sampling_fraction": 1.0,
+                "bart_inputs": {
+                    name: cfl_record(source_inputs / name)
+                    for name in ("wave_kspace", "psf", "coil_sens", "kspace_calib")
+                },
+            }
+            (source_case / "case_manifest.json").write_text(
+                json.dumps(source_payload), encoding="utf-8"
+            )
+            target_case = root / "target"
+            target_case.mkdir()
+
+            result = _reuse_prepared_case(
+                case, source_case, target_case, provenance, "config-hash"
+            )
+
+            self.assertEqual(result["status"], "prepared")
+            self.assertTrue((target_case / "bart_inputs").is_symlink())
+            self.assertEqual(
+                (target_case / "bart_inputs").resolve(), source_inputs.resolve()
+            )
 
     def test_cfl_round_trip_and_target_pe_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

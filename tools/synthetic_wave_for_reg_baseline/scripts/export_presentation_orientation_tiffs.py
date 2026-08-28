@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export fixed-index orthogonal presentation slices as 16-bit TIFF images."""
+"""Export fixed or volume-center orthogonal slices as 16-bit TIFF images."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from bart_cfl import sha256_file
 
 
 ORIENTATIONS = ("sagittal", "coronal", "axial")
+ORIENTATION_AXES = {"sagittal": 0, "coronal": 1, "axial": 2}
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -27,14 +28,44 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def orientation_slices(volume: np.ndarray, index: int) -> dict[str, np.ndarray]:
+def slice_indices(
+    shape: Sequence[int], default_index: int, *, use_center: bool
+) -> dict[str, int]:
+    """Resolve one array index per physical RAS orientation."""
+    if len(shape) != 3:
+        raise ValueError(f"Expected a three-dimensional shape, got {tuple(shape)}")
+    indices = {
+        orientation: (int(shape[axis]) // 2 if use_center else int(default_index))
+        for orientation, axis in ORIENTATION_AXES.items()
+    }
+    for orientation, index in indices.items():
+        axis = ORIENTATION_AXES[orientation]
+        if not 0 <= index < int(shape[axis]):
+            raise ValueError(
+                f"Slice index {index} is outside {orientation} axis size {shape[axis]}"
+            )
+    return indices
+
+
+def orientation_slices(
+    volume: np.ndarray, indices: int | dict[str, int]
+) -> dict[str, np.ndarray]:
     """Return neurological RAS display slices with superior/anterior at top."""
-    if volume.ndim != 3 or any(index < 0 or index >= size for size in volume.shape):
-        raise ValueError(f"Slice index {index} is outside volume shape {volume.shape}")
+    if isinstance(indices, int):
+        resolved = slice_indices(volume.shape, indices, use_center=False)
+    else:
+        resolved = {name: int(indices[name]) for name in ORIENTATIONS}
+        for orientation, index in resolved.items():
+            axis = ORIENTATION_AXES[orientation]
+            if not 0 <= index < volume.shape[axis]:
+                raise ValueError(
+                    f"Slice index {index} is outside {orientation} axis size "
+                    f"{volume.shape[axis]}"
+                )
     return {
-        "sagittal": np.flip(volume[index, :, :].T, axis=0),
-        "coronal": np.flip(volume[:, index, :].T, axis=0),
-        "axial": np.flip(volume[:, :, index].T, axis=0),
+        "sagittal": np.flip(volume[resolved["sagittal"], :, :].T, axis=0),
+        "coronal": np.flip(volume[:, resolved["coronal"], :].T, axis=0),
+        "axial": np.flip(volume[:, :, resolved["axial"]].T, axis=0),
     }
 
 
@@ -70,8 +101,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise FileExistsError("TIFF outputs exist; use --refresh.")
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    center_keys = set(args.center_keys)
+    available_keys = {
+        str(entry["key"])
+        for entry in collection["entries"]
+        if entry["status"] == "available"
+    }
+    unknown_center_keys = center_keys - available_keys
+    if unknown_center_keys:
+        raise ValueError(
+            "Center-slice keys are not available collection entries: "
+            + ", ".join(sorted(unknown_center_keys))
+        )
+
+    previous_owned_files: set[str] = set()
+    if manifest_path.is_file():
+        previous = _load_json(manifest_path)
+        for entry in previous.get("entries", []):
+            for record in entry.get("outputs", {}).values():
+                name = str(record.get("file", ""))
+                if Path(name).name != name or not name.endswith(".tiff"):
+                    raise ValueError("Prior TIFF manifest contains an unsafe output path")
+                previous_owned_files.add(name)
+
     collection_dir = collection_path.parent
     records = []
+    current_owned_files: set[str] = set()
     for entry in sorted(collection["entries"], key=lambda item: item["display_order"]):
         if entry["status"] != "available":
             continue
@@ -91,16 +146,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not np.isfinite(display_max) or display_max <= 0:
             raise ValueError(f"Invalid display maximum for {source}")
 
+        use_center = entry["key"] in center_keys
+        indices = slice_indices(volume.shape, args.index, use_center=use_center)
         output_files = {}
-        for orientation, slice_data in orientation_slices(volume, args.index).items():
+        for orientation, slice_data in orientation_slices(volume, indices).items():
+            index = indices[orientation]
             destination = output_dir / (
-                f"{entry['key']}_{orientation}_index-{args.index}.tiff"
+                f"{entry['key']}_{orientation}_index-{index}.tiff"
             )
             _save_tiff_atomic(destination, _to_uint16(slice_data, display_max))
+            current_owned_files.add(destination.name)
             output_files[orientation] = {
                 "file": destination.name,
                 "sha256": sha256_file(destination),
                 "pixel_shape": [int(value) for value in slice_data.shape],
+                "source_array_axis": ORIENTATION_AXES[orientation],
+                "source_array_index": index,
             }
         records.append(
             {
@@ -110,7 +171,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "source_nifti": str(source),
                 "source_sha256": entry["collection_sha256"],
                 "source_shape": [int(value) for value in image.shape],
-                "slice_index_each_array_axis": int(args.index),
+                "slice_selection": (
+                    "volume_center_each_orientation"
+                    if use_center
+                    else "fixed_index_each_orientation"
+                ),
+                "slice_indices_by_orientation": indices,
                 "display_scaling": {
                     "method": "per-volume positive-finite percentile to uint16",
                     "percentile": float(args.display_percentile),
@@ -130,12 +196,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     payload = {
         "format_version": 1,
         "status": "complete",
-        "purpose": "fixed-index orthogonal TIFF slices for presentation",
+        "purpose": "fixed-or-center orthogonal TIFF slices for presentation",
         "collection_manifest": {
             "path": str(collection_path),
             "sha256": sha256_file(collection_path),
         },
-        "slice_index_each_array_axis": int(args.index),
+        "default_slice_index_each_orientation": int(args.index),
+        "volume_center_entry_keys": sorted(center_keys),
         "display_percentile": float(args.display_percentile),
         "entry_count": len(records),
         "tiff_count": len(records) * len(ORIENTATIONS),
@@ -145,6 +212,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     temporary = Path(str(manifest_path) + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, manifest_path)
+    stale_owned_files = sorted(previous_owned_files - current_owned_files)
+    for name in stale_owned_files:
+        (output_dir / name).unlink(missing_ok=True)
+    if stale_owned_files:
+        print(f"Removed stale owned TIFFs: {len(stale_owned_files)}", flush=True)
     print(f"Orientation TIFF manifest: {manifest_path}")
     return payload
 
@@ -154,6 +226,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--collection-manifest", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--index", type=int, default=128)
+    parser.add_argument(
+        "--center-keys",
+        nargs="*",
+        default=(),
+        help="Collection keys that use the center index of each orientation axis.",
+    )
     parser.add_argument("--display-percentile", type=float, default=99.5)
     parser.add_argument("--refresh", action="store_true")
     return parser

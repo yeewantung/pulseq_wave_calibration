@@ -64,6 +64,49 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_r1_retrospective_low_resolutio
     --resume
 ```
 
+For the follow-up retrospective-resolution Wavelet sweep, copy
+`requirements/retrospective_low_resolution_wavelet_sweep.example.json` and
+`scripts/run_r1_retrospective_wavelet_sweep.example.sh` to their ignored
+`.local.*` names. That reconstruction launcher calls the existing
+retrospective pipeline for each new lambda and reuses declared completed
+lambda-zero and `1.5e-2` controls.
+
+Evaluate the completed sweep separately with the original retrospective
+matched-grid calculation:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_r1_retrospective_wavelet_sweep_matched_grid_evaluation.local.sh
+```
+
+This evaluation-only launcher linearly resamples every candidate to the
+original 1 mm RAS grid and reuses the exact hash-bound full-resolution
+FISTA-lambda-zero/direct-FFT references and fixed BET brain/edge masks from the
+accepted retrospective analysis. It does not call reconstruction or create a
+native-grid reference. The evaluator reports separate per-metric leaders for
+each resolution and does not collapse them into one automatic selection.
+
+The retrospective corrected-LLR follow-up has separate reconstruction and
+evaluation launchers. The default configurable grid tests block 4 at
+`2e-3, 5e-3, 6e-3, 1e-2` and blocks 8/16 at
+`2e-3, 5e-3, 1e-2, 2e-2`, for 36 reconstructions across three geometries.
+Every reconstruction calls the same retrospective pipeline with BART
+`wave -l -v -b <block> -f -r <lambda> -g` and saves magnitude and phase.
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_r1_retrospective_llr_sweep.local.sh
+```
+
+After that sweep completes, run the independent matched-grid evaluator:
+
+```bash
+tools/synthetic_wave_for_reg_baseline/scripts/run_r1_retrospective_llr_sweep_matched_grid_evaluation.local.sh
+```
+
+The evaluator never calls reconstruction. It uses the same original 1 mm
+references and fixed BET brain/edge masks as the Wavelet evaluation, includes
+the completed retrospective FISTA-lambda-zero cases as controls, and produces
+one metric CSV plus separate block-4, block-8, and block-16 plots.
+
 MID00198 has passed manifest-backed qualification, source preparation,
 synthetic-Wave reconstruction, refinement, and fixed-reference evaluation.
 Wavelet `lambda=1.5e-2` is frozen and its qualitative R3 transfer is approved.
@@ -99,6 +142,47 @@ tools/synthetic_wave_for_reg_baseline/scripts/run_synthetic_wave_dataset.sh \
     "$R1_SYNTHETIC_WAVE_ROOT/dataset_manifest.json" \
     --confirm-full-wave-reviewed
 ```
+
+To create a second synthetic-Wave R3x1 target from that accepted full-Wave
+encoding, use the four matching `.example.sh`/ignored `.local.sh` launchers.
+The operations are deliberately separated so the lambda-zero image and maps
+are visually assessed before spending GPU time on the sweep:
+
+```bash
+scripts/prepare_synthetic_wave_r3x1_target.local.sh
+scripts/run_synthetic_wave_r3x1_lambda0.local.sh
+# Review the central-slice image and ESPIRiT-map montages here.
+scripts/run_synthetic_wave_r3x1_regularization_sweep.local.sh
+scripts/evaluate_synthetic_wave_r3x1_regularization.local.sh
+```
+
+Preparation branches only the post-Wave mask (`R3x1`, residue `[1,0]`, the
+same full-PE2 24-line ACS); it does not rerun full-Wave synthesis. Lambda zero
+uses the existing BART CG acceptance runner. The sweep uses the existing GPU
+BART Wavelet/corrected-LLR case runner and first gates split-complex LLR lambda
+zero. Evaluation is a separate exact-grid calculation against the approved
+direct-FFT RSS and fixed metrics-only BET mask, with no registration,
+interpolation, or automatic parameter choice.
+
+The completed R3x1 coarse evaluation places the Wavelet NRMSE/SSIM optimum at
+`2e-2`, with the next upper sample only at `5e-2`. Refine that interval without
+rerunning the existing controls using:
+
+```bash
+scripts/run_synthetic_wave_r3x1_wavelet_refinement.local.sh
+scripts/evaluate_synthetic_wave_r3x1_wavelet_refinement.local.sh
+```
+
+The first launcher adds only `1.6e-2, 1.8e-2, 2.2e-2, 2.5e-2, 3e-2, 4e-2`.
+The second combines those cases with the original sweep and remains pinned to
+the same approved direct-FFT/BET package.
+
+The refinement is complete. The explicit user choice is Wavelet
+`lambda=2.2e-2`, which has the lowest refined brain NRMSE while remaining
+effectively tied for the best 3D SSIM. `record_regularization_selection.py`
+binds that decision to the metric table, selected reconstruction, and
+solver-matched FISTA lambda-zero control; it records the decision as explicit,
+not automatic.
 
 After approving the crop-`0.6` ESPIRiT maps and lambda zero, the resumable
 GPU-FISTA Wavelet sweep is:
@@ -167,6 +251,8 @@ The current production path is:
 5. `validate_full_sampling_wave_operator.py` gates the real source with a
    `PSF=1` no-Wave identity and an all-coil full-sampling Wave inverse check.
 6. `export_bart_wave_inputs.py` masks and exports the synthetic Wave data.
+   `export_bart_wave_target_branch.py` reuses this masking/export logic when a
+   second acceleration target is branched from an accepted full-Wave encoding.
 7. `export_bart_calibration_acs.py` exports measured no-wave ACS for one
    reusable BART ESPIRiT calibration. Its manifest route explicitly selects
    direct fully sampled image data or a measured refscan.
@@ -387,6 +473,18 @@ Fresh cases export both canonical-RAS magnitude and phase NIfTIs. On an older
 completed case, `--resume` backfills a missing phase from the hash-validated
 complex BART image without rerunning PICS or replacing the accepted magnitude.
 
+`run_no_wave_r3x1_grappa.py` prepares the matching retrospective GRAPPA
+comparison from that same fully sampled no-Wave source and R3x1-plus-ACS mask.
+It reuses the accepted local joint-coil 5x5x5, Ncc=12 implementation and frozen
+regularization `0.01`; it does not define a new GRAPPA algorithm. Calibration
+and reconstruction are chunked and resumable, acquired samples are checked
+bit-for-bit, and the conventional coil-RSS magnitude is paired with a
+sensitivity-aligned phase. The accepted maps provide only the phase reference,
+not missing-sample reconstruction or magnitude weighting. The case manifest
+saves exact-grid direct-FFT metrics and both canonical-RAS NIfTI components.
+Use the matching ignored `.local.sh` launcher for the tmux run; unlike the PICS
+runner this NumPy/SciPy GRAPPA path does not invoke BART.
+
 `run_previous_non_bart_wave_cg_sense.py` is a presentation comparison adapter,
 not a new reconstruction algorithm. It calls the existing Torch PCG-SENSE
 operator in `external/wave-mprage`, reuses the accepted maps and R3x2 inputs,
@@ -403,10 +501,21 @@ See [`docs/presentation_nifti_collection.md`](docs/presentation_nifti_collection
 `build_presentation_metrics_csv.py` writes a presentation-ordered metric table
 and provenance manifest beside the collection. It keeps exact-grid metrics and
 matched-grid retrospective-resolution metrics explicitly labelled and leaves
-DICOM rows qualitative-only. `export_presentation_orientation_tiffs.py`
-exports sagittal, coronal, and axial 16-bit TIFFs at a fixed array index using
-per-volume display scaling. Copy its `.example.sh` launcher to the ignored
-`.local.sh` form so private collection paths remain local.
+DICOM rows qualitative-only. Repeat `--regularization-metrics` to combine
+hash-bound tables from multiple reconstruction experiments without dropping
+existing presentation metrics. `export_presentation_orientation_tiffs.py`
+exports sagittal, coronal, and axial 16-bit TIFFs using per-volume display
+scaling. Standard 256-cubed cases use index 128. Retrospective-resolution cases
+use the center index of each physical RAS orientation independently, so reduced
+axes do not inherit an off-center index. Copy its `.example.sh` launcher to the
+ignored `.local.sh` form so private collection paths remain local.
+
+`evaluate_no_wave_r3x1_sweep.py` validates the hash-bound case metrics and
+plots Wavelet metric curves against the fully sampled direct-FFT RSS reference,
+with CG-SENSE and GRAPPA controls. It reports per-metric leaders without making
+an automatic lambda selection. The current evaluation shows `1e-3` leading
+brain NRMSE, 3D SSIM, and edge-ratio closeness among tested values, while
+`1e-4` leads edge-gradient NCC; `1.5e-2` is worse on all four plotted metrics.
 
 Wave-MPRAGE is pinned as a submodule because the current scripts import its
 BART CFL and TWIX-to-NIfTI utilities at runtime. Wave-GRE remains an optional

@@ -71,6 +71,74 @@ def _load_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
+def _merge_regularization_metrics(paths: Sequence[Path]) -> list[dict[str, str]]:
+    """Merge metric tables while rejecting conflicting hash-bound records."""
+    rows_by_hash: dict[str, dict[str, str]] = {}
+    rows_without_hash: list[dict[str, str]] = []
+    for path in paths:
+        for row in _load_csv(path):
+            source_hash = row.get("source_nifti_sha256", "")
+            if not source_hash:
+                rows_without_hash.append(row)
+                continue
+            existing = rows_by_hash.get(source_hash)
+            if existing is not None and existing != row:
+                raise ValueError(
+                    "Conflicting regularization metrics for source NIfTI hash "
+                    f"{source_hash}"
+                )
+            rows_by_hash[source_hash] = row
+    return [*rows_by_hash.values(), *rows_without_hash]
+
+
+def _resolve_config_path(config_path: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else config_path.parent / path).resolve()
+
+
+def _load_retrospective_supplement(
+    config_path: Path,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Load exact collection-key mappings for an additional retro metric package."""
+    config_path = config_path.expanduser().resolve()
+    config = _load_json(config_path)
+    if config.get("format_version") != 1:
+        raise ValueError(f"Unsupported retrospective supplement: {config_path}")
+    matched_path = _resolve_config_path(config_path, str(config["matched_metrics"]))
+    native_path = _resolve_config_path(config_path, str(config["native_metrics"]))
+    matched_rows = {
+        row["candidate"]: row
+        for row in _load_csv(matched_path)
+        if row.get("reference") == "direct_fft_rss"
+    }
+    native_rows = {row["case"]: row for row in _load_csv(native_path)}
+    mapped: dict[str, dict[str, Any]] = {}
+    for entry in config.get("entries", []):
+        key = str(entry["key"])
+        case = str(entry["case"])
+        if key in mapped or case not in matched_rows or case not in native_rows:
+            raise ValueError(f"Invalid retrospective supplement mapping: {key} -> {case}")
+        mapped[key] = {
+            "matched": matched_rows[case],
+            "native": native_rows[case],
+            "metric_source": str(config_path),
+        }
+    if not mapped:
+        raise ValueError(f"Retrospective supplement contains no entries: {config_path}")
+    provenance = {
+        "config": {"path": str(config_path), "sha256": sha256_file(config_path)},
+        "matched_metrics": {
+            "path": str(matched_path),
+            "sha256": sha256_file(matched_path),
+        },
+        "native_metrics": {
+            "path": str(native_path),
+            "sha256": sha256_file(native_path),
+        },
+    }
+    return mapped, provenance
+
+
 def _empty_row(entry: dict[str, Any]) -> dict[str, Any]:
     row = {field: "" for field in OUTPUT_FIELDS}
     row.update(
@@ -132,6 +200,7 @@ def build_rows(
     regularization_rows: list[dict[str, str]],
     retrospective_matched_rows: list[dict[str, str]],
     retrospective_native_rows: list[dict[str, str]],
+    supplemental_retrospective: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return presentation-ordered rows with metric scope kept explicit."""
     regularization_by_hash = {
@@ -147,6 +216,7 @@ def build_rows(
     native_by_case = {
         item["case"]: item for item in retrospective_native_rows if item.get("case")
     }
+    supplemental_retrospective = supplemental_retrospective or {}
 
     output = []
     for entry in sorted(collection["entries"], key=lambda item: item["display_order"]):
@@ -188,6 +258,22 @@ def build_rows(
                 }
             )
             _copy_standard_metrics(row, regularization)
+            output.append(row)
+            continue
+
+        supplemental = supplemental_retrospective.get(entry["key"])
+        if supplemental is not None:
+            row.update(
+                {
+                    "metric_status": "complete_descriptive_retrospective",
+                    "reference": "direct_fft_rss",
+                    "comparison_grid": "matched_full_resolution_grid",
+                    "metric_source": supplemental["metric_source"],
+                }
+            )
+            _copy_retrospective_metrics(
+                row, supplemental["matched"], supplemental["native"]
+            )
             output.append(row)
             continue
 
@@ -241,12 +327,14 @@ def _write_csv_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     collection_path = args.collection_manifest.expanduser().resolve()
-    regularization_path = args.regularization_metrics.expanduser().resolve()
+    regularization_paths = [
+        path.expanduser().resolve() for path in args.regularization_metrics
+    ]
     matched_path = args.retrospective_matched_metrics.expanduser().resolve()
     native_path = args.retrospective_native_metrics.expanduser().resolve()
     output_path = args.output.expanduser().resolve()
     manifest_path = output_path.with_name("presentation_metrics_manifest.json")
-    for path in (collection_path, regularization_path, matched_path, native_path):
+    for path in (collection_path, *regularization_paths, matched_path, native_path):
         if not path.is_file():
             raise FileNotFoundError(path)
     if (output_path.exists() or manifest_path.exists()) and not args.refresh:
@@ -255,11 +343,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     collection = _load_json(collection_path)
     if collection.get("status") not in {"complete", "complete_with_placeholders"}:
         raise ValueError("Presentation collection manifest is not complete")
+    supplemental: dict[str, dict[str, Any]] = {}
+    supplemental_provenance = []
+    for path in args.retrospective_supplement:
+        mapped, provenance = _load_retrospective_supplement(path)
+        overlap = supplemental.keys() & mapped.keys()
+        if overlap:
+            raise ValueError(
+                "Duplicate supplemental retrospective keys: "
+                + ", ".join(sorted(overlap))
+            )
+        supplemental.update(mapped)
+        supplemental_provenance.append(provenance)
     rows = build_rows(
         collection,
-        _load_csv(regularization_path),
+        _merge_regularization_metrics(regularization_paths),
         _load_csv(matched_path),
         _load_csv(native_path),
+        supplemental,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _write_csv_atomic(output_path, rows)
@@ -277,10 +378,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "path": str(collection_path),
                 "sha256": sha256_file(collection_path),
             },
-            "regularization_metrics": {
-                "path": str(regularization_path),
-                "sha256": sha256_file(regularization_path),
-            },
+            "regularization_metrics": [
+                {"path": str(path), "sha256": sha256_file(path)}
+                for path in regularization_paths
+            ],
             "retrospective_matched_metrics": {
                 "path": str(matched_path),
                 "sha256": sha256_file(matched_path),
@@ -289,6 +390,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "path": str(native_path),
                 "sha256": sha256_file(native_path),
             },
+            "retrospective_supplements": supplemental_provenance,
         },
         "scope_notes": [
             "DICOM rows are qualitative only and intentionally have no metrics.",
@@ -308,9 +410,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collection-manifest", required=True, type=Path)
-    parser.add_argument("--regularization-metrics", required=True, type=Path)
+    parser.add_argument(
+        "--regularization-metrics",
+        required=True,
+        action="append",
+        type=Path,
+        help="Repeat for each hash-bound regularization metric table.",
+    )
     parser.add_argument("--retrospective-matched-metrics", required=True, type=Path)
     parser.add_argument("--retrospective-native-metrics", required=True, type=Path)
+    parser.add_argument(
+        "--retrospective-supplement", action="append", default=[], type=Path
+    )
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--refresh", action="store_true")
     return parser

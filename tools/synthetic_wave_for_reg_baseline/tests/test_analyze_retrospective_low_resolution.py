@@ -17,6 +17,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from analyze_retrospective_low_resolution import (  # noqa: E402
+    _reference_edge_components,
     gradient_components_per_mm,
     map_fixed_mask_to_reconstruction,
     matched_fidelity_metrics,
@@ -45,6 +46,17 @@ def _registration(translation: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> 
 
 
 class MetricPrimitiveTests(unittest.TestCase):
+    def test_fidelity_edge_support_does_not_require_air_background(self) -> None:
+        rng = np.random.default_rng(8)
+        reference = rng.random((48, 48, 48), dtype=np.float32) + 0.1
+        coordinates = np.indices(reference.shape, dtype=np.float32) - 23.5
+        brain = np.sum(coordinates * coordinates, axis=0) <= 18.0**2
+        _normalized, _gradient, edge, threshold = _reference_edge_components(
+            reference, brain, (1.0, 1.0, 1.0)
+        )
+        self.assertGreater(int(edge.sum()), 1000)
+        self.assertGreater(threshold, 0.0)
+
     def test_gradient_uses_physical_spacing(self) -> None:
         fine = np.indices((16, 8, 8), dtype=np.float32)[0]
         coarse = 2.0 * np.indices((8, 8, 8), dtype=np.float32)[0]
@@ -222,6 +234,24 @@ class AnalysisRunTests(unittest.TestCase):
                 configured["inputs"]["visual_approval"]["record"]["status"],
                 "approved",
             )
+
+            optional_approval_config = json.loads(config_path.read_text())
+            optional_approval_config["visual_approval_record"] = None
+            optional_approval_config["output_dir"] = str(root / "analysis_without_approval")
+            optional_config_path = root / "analysis_without_approval.local.json"
+            optional_config_path.write_text(
+                json.dumps(optional_approval_config), encoding="utf-8"
+            )
+            without_approval = run(
+                argparse.Namespace(
+                    config=optional_config_path,
+                    review_manifest=None,
+                    approved_bet_mask=None,
+                    shared_registration=None,
+                    output_dir=None,
+                )
+            )
+            self.assertIsNone(without_approval["inputs"]["visual_approval"])
 
 
 if __name__ == "__main__":

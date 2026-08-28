@@ -502,6 +502,61 @@ def _resolve_run(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _validated_explicit_dataset(
+    record: Any,
+    *,
+    twix: Path,
+    sequence: Path,
+    measurement_index: int,
+    subject: str,
+    matrix: tuple[int, int, int],
+    fov_mm: tuple[float, float, float],
+    virtual_coils: int,
+) -> Any:
+    """Recover source-dataset provenance carried by branched BART inputs."""
+    if not isinstance(record, dict):
+        return None
+    manifest_path = Path(record.get("path", "")).expanduser().resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError("BART inputs reference a missing dataset manifest.")
+    dataset = load_dataset_manifest(manifest_path)
+    inspection = load_passed_inspection(dataset)
+    if dataset.sha256 != record.get("sha256"):
+        raise ValueError("BART inputs reference a stale dataset manifest.")
+    checks = (
+        (dataset.input_path("twix") == twix, "TWIX"),
+        (dataset.input_path("wave_sequence") == sequence, "sequence"),
+        (dataset.subject == subject, "subject"),
+        (
+            tuple(int(value) for value in dataset.payload["geometry"]["matrix"])
+            == matrix,
+            "matrix",
+        ),
+        (
+            tuple(float(value) for value in dataset.payload["geometry"]["fov_mm"])
+            == fov_mm,
+            "FOV",
+        ),
+        (
+            int(dataset.payload["reconstruction"]["virtual_coils"])
+            == virtual_coils,
+            "virtual-coil count",
+        ),
+        (
+            int(inspection["twix"]["selected_measurement_index"])
+            == measurement_index,
+            "TWIX measurement index",
+        ),
+    )
+    mismatches = [label for passed, label in checks if not passed]
+    if mismatches:
+        raise ValueError(
+            "Explicit lambda-zero inputs differ from their source dataset: "
+            + ", ".join(mismatches)
+        )
+    return dataset
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Calibrate ESPIRiT maps, run lambda-zero Wave CG, and export review files."""
     resolved = _resolve_run(args)
@@ -532,6 +587,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     bart_input_manifest = json.loads(
         bart_input_manifest_path.read_text(encoding="utf-8")
     )
+    if dataset is None:
+        dataset = _validated_explicit_dataset(
+            bart_input_manifest.get("dataset_manifest"),
+            twix=twix,
+            sequence=sequence,
+            measurement_index=resolved["measurement_index"],
+            subject=resolved["subject"],
+            matrix=matrix,
+            fov_mm=resolved["fov_mm"],
+            virtual_coils=ncc,
+        )
+        if dataset is not None and not output_dir.is_relative_to(dataset.output_root):
+            raise ValueError(
+                "A provenance-bound explicit output must remain below the dataset root."
+            )
     bart_input_status = bart_input_manifest.get("status")
     if dataset is not None:
         if bart_input_status != "calibration_kspace_ready_for_ecalib":

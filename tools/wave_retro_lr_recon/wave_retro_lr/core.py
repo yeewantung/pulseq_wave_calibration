@@ -352,8 +352,8 @@ def build_wave_options(
         if lambda_value not in (None, 0, 0.0):
             raise ValueError("Lambda must be absent or zero without regularization.")
     else:
-        if lambda_value is None or not np.isfinite(lambda_value) or lambda_value <= 0:
-            raise ValueError("Regularized BART Wave requires a positive finite lambda.")
+        if lambda_value is None or not np.isfinite(lambda_value) or lambda_value < 0:
+            raise ValueError("BART Wave FISTA requires a nonnegative finite lambda.")
         if regularizer == "wavelet":
             options.append("-w")
         else:

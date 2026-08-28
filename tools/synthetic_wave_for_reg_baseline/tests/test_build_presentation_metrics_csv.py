@@ -12,7 +12,10 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from bart_cfl import sha256_file  # noqa: E402
-from build_presentation_metrics_csv import build_rows  # noqa: E402
+from build_presentation_metrics_csv import (  # noqa: E402
+    _merge_regularization_metrics,
+    build_rows,
+)
 
 
 class PresentationMetricsCsvTests(unittest.TestCase):
@@ -83,6 +86,14 @@ class PresentationMetricsCsvTests(unittest.TestCase):
                 },
                 {
                     "display_order": 6,
+                    "key": "retro_fista_zero",
+                    "label": "Retro FISTA zero",
+                    "status": "available",
+                    "collection_file": "retro_fista_zero.nii.gz",
+                    "source_manifest": retrospective,
+                },
+                {
+                    "display_order": 7,
                     "key": "pending",
                     "label": "Pending",
                     "status": "placeholder",
@@ -117,15 +128,47 @@ class PresentationMetricsCsvTests(unittest.TestCase):
                         "smooth_region_signal_to_residual_proxy": "12.5",
                     }
                 ],
+                {
+                    "retro_fista_zero": {
+                        "matched": {
+                            "nrmse_brain": "0.25",
+                            "ssim_axial_brain_bbox_mean": "0.85",
+                        },
+                        "native": {
+                            "smooth_region_signal_to_residual_proxy": "13.5"
+                        },
+                        "metric_source": "supplement.json",
+                    }
+                },
             )
-        self.assertEqual([row["display_order"] for row in rows], list(range(1, 7)))
+        self.assertEqual([row["display_order"] for row in rows], list(range(1, 8)))
         self.assertEqual(rows[0]["metric_status"], "not_evaluated_qualitative_only")
         self.assertEqual(rows[1]["metric_status"], "reference_identity")
         self.assertEqual(rows[2]["nrmse_brain"], 0.1)
         self.assertEqual(rows[3]["nrmse_brain"], "0.2")
         self.assertEqual(rows[4]["comparison_grid"], "matched_full_resolution_grid")
         self.assertEqual(rows[4]["ssim_axial_brain_mean"], "0.8")
-        self.assertEqual(rows[5]["metric_status"], "pending_reconstruction")
+        self.assertEqual(rows[5]["nrmse_brain"], "0.25")
+        self.assertEqual(rows[5]["metric_source"], "supplement.json")
+        self.assertEqual(rows[6]["metric_status"], "pending_reconstruction")
+
+    def test_merges_multiple_regularization_tables_by_source_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first.csv"
+            second = root / "second.csv"
+            first.write_text(
+                "source_nifti_sha256,nrmse_brain\nfirst,0.1\n",
+                encoding="utf-8",
+            )
+            second.write_text(
+                "source_nifti_sha256,nrmse_brain\nsecond,0.2\n",
+                encoding="utf-8",
+            )
+            rows = _merge_regularization_metrics([first, second])
+        self.assertEqual(
+            {row["source_nifti_sha256"] for row in rows}, {"first", "second"}
+        )
 
 
 if __name__ == "__main__":

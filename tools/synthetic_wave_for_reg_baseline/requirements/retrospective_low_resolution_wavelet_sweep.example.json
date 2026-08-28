@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "base_reconstruction_config": "/path/to/retrospective_low_resolution_r1.local.json",
+  "prepared_cases_root": "/path/to/completed_wavelet_batch/retrospective_low_resolution",
+  "output_root": "/path/to/new/retrospective_low_resolution_wavelet_lambda_sweep",
+  "metrics_reference_manifest": "/path/to/direct_fft_reference/metrics_reference_manifest.json",
+  "subject": "mprage-r1-retro-low-resolution-wavelet-sweep",
+  "wavelet_lambdas": [
+    0.0,
+    0.0001,
+    0.0003,
+    0.001,
+    0.003,
+    0.01,
+    0.015,
+    0.02,
+    0.05
+  ],
+  "existing_runs": {
+    "0": "/path/to/completed_fista_lambda0/retrospective_low_resolution",
+    "0.015": "/path/to/completed_wavelet_lambda_1p5e-2/retrospective_low_resolution"
+  },
+  "fft_workers": 4
+}

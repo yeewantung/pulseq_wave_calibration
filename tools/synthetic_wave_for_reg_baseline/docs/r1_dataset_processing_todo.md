@@ -294,6 +294,25 @@ separately and only after full Wave encoding.
   mask only for metrics, avoid true-SNR/CNR claims, and perform no composite
   ranking or automatic resolution selection.
 
+## Presentation follow-up and cleanup handoff
+
+- [x] Complete the retrospective Wavelet and corrected-LLR sweeps and their
+  separate matched-grid evaluations without changing the accepted metric mask.
+- [x] Record the explicit retrospective presentation choices: lower-X Wavelet
+  `lambda=1e-2`, lower-Y Wavelet `lambda=5e-3`, and balanced unregularized
+  FISTA `lambda=0`.
+- [x] Generate and visually approve the synthetic-Wave R3x1 target, run the
+  Wavelet/LLR sweep and Wavelet refinement, and record Wavelet
+  `lambda=2.2e-2` as the explicit user choice.
+- [x] Refresh the manifested presentation package with the requested
+  synthetic-Wave R3x1 FISTA-zero and selected-Wavelet magnitude NIfTIs,
+  central triplanar TIFFs, and exact-grid metric rows. The frozen package has
+  28 available NIfTIs, 28 metric rows, no placeholders, and 84 TIFFs.
+- [ ] In a fresh session, perform the final repository/output cleanup described
+  in `EXPERIMENT_PLAN.md`. Begin with a read-only inventory, preserve the dirty
+  worktree, verify hashes and downstream consumers before archive moves, and
+  obtain approval before any irreversible deletion.
+
 ## Repository privacy and reproducibility
 
 - [x] Record the decision that R3 is rerun for qualitative visual transfer
