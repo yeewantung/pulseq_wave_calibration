@@ -2,7 +2,11 @@
 
 This repository tool prepares measured Wave data for BART reconstruction. The
 current supported user workflow is sagittal integrated Wave-MPRAGE; GRE is
-intentionally deferred until MPRAGE has passed real-data validation.
+not yet implemented while its reviewed axial multi-echo adapter is planned.
+The confirmed future GRE contract uses native-grid normal R3x1 plus
+native-grid and LIN-cropped retrospective R3x2, with explicit unregularized
+FISTA (`-w -f -r 0`) for every case. These statements describe planned support
+and do not make the current GRE placeholder runnable.
 
 The user-facing input is a Wave-encoded Siemens TWIX file plus its matching
 Pulseq sequence. Python validates and prepares BART inputs. The sample Bash
@@ -62,6 +66,13 @@ R3x2 cases:
 | LR-X | `1.5 x 1.0 x source-Z` mm | unregularized FISTA |
 | LR-Y | `1.0 x 1.5 x source-Z` mm | unregularized FISTA |
 | LR-XY | `1.25 x 1.25 x source-Z` mm | unregularized FISTA |
+
+These are the currently runnable defaults, not frozen final optima. A
+corrected pure-image-lattice synthetic R3x1/R3x2 rerun is in progress. After
+all five source/native/LR cases complete evaluation, visual review, and
+explicit selection, the selected solver family, lambda, and any LLR block size
+will be updated together. Historical ACS-union selections are not carried
+forward automatically.
 
 LR CSMs are derived from the one accepted native ecalib map set by centered
 Fourier resampling in PE at unchanged FOV, followed by coil-RSS

@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-08-30, America/New_York
+Updated: 2026-08-31, America/New_York
 
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
@@ -8,38 +8,34 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Start the final **source-repository cleanup** in a fresh session. The separate
-R1 and R3 private-output cleanups are complete, indexed, checksum-validated,
-and outside the remaining task. Do not move, delete, relink, regenerate, or
-otherwise normalize those output trees while cleaning the repository. Do not
-launch reconstruction, sweep, evaluation, presentation, or other production
-jobs. The experiment and presentation deliverables are frozen.
+The corrected pure-image-lattice regularization rerun is active in a separate
+session. Wait for all five cases—native R3x1, native R3x2, LR-X R3x2, LR-Y
+R3x2, and LR-XY R3x2—to complete evaluation and user visual review. Then
+record the explicitly approved solver family, lambda, and LLR block size for
+each case and update the `wave_retro_lr_recon` defaults, tests, README, source
+cleanup plan, and this handover together. Do not promote an incomplete sweep,
+an automatic metric leader, or the historical ACS-union selections.
 
-Begin the repository task read-only:
+The existing case-matched CSMs and calibrated PSFs remain the reconstruction
+inputs for this rerun, and the approved BET brain mask remains evaluation-only.
+Do not rerun ecalib, PSF calibration, or BET merely to select defaults.
 
-1. read the applicable `AGENTS.md` files, this handover,
-   `EXPERIMENT_PLAN.md`, `docs/r1_dataset_processing_todo.md`, and the private
-   cleanup summary;
-2. inspect the complete repository structure, tracked scripts, tests,
-   documentation, references, Git state, and ignored `.local.*` files;
-3. identify redundant entry points and implementation, historical or
-   diagnostic code, stale documentation, and every downstream test, import,
-   launcher, and documentation consumer;
-4. present a concrete repository-only move/archive/removal map before changing
-   structure or deleting files; and
-5. after approved implementation, update imports, compatibility entry points,
-   tests, README/script maps, and this handover; run both test suites,
-   `git diff --check`, and tracked/staged private-path audits.
+MPRAGE source cleanup and real-data validation are complete. GRE remains
+unsupported in the tool, but its read-only architecture inventory is recorded
+in the private plan `gre_retro_lr_recon_plan.md`. That plan recommends a pinned
+Wave-GRE external dependency for GRE-specific axial, multi-echo, PSF, and
+NIfTI behavior while retaining the tool's concise BART-only orchestration. Its
+confirmed cases are normal native-grid R3x1, retrospective native-grid R3x2,
+and retrospective LIN-cropped R3x2 near `0.9 x 1.5 x 2.5 mm`; the retro cases
+keep the PAR grid/resolution and add factor-two PAR sampling. Every GRE case
+uses explicit unregularized FISTA (`-w -f -r 0`). Submodule addition and GRE
+implementation remain explicit review gates.
 
-The previously proposed direction is to move workflow example JSON into
-`configs/`, keep matching machine-local JSON ignored, factor shared sweep and
-matched-grid evaluation engines behind thin compatible CLIs, archive truly
-superseded pilot/evaluator code with its tests and provenance, and clearly
-separate retained diagnostics from active entry points. Treat this as the
-starting proposal, not permission to remove a file without checking all
-consumers. Do not reset or discard changes, commit without review, or push
-unless explicitly requested. Actual machine paths must remain only in ignored
-`.local.sh`/`.local.json` files or private generated manifests.
+The separate R1 and R3 private-output cleanups remain complete, indexed,
+checksum-validated, frozen, and outside source work. Do not reset or discard
+the shared worktree, and do not commit or push without review. Actual machine
+paths must remain only in ignored `.local.sh`/`.local.json` files or private
+generated manifests.
 
 ## Completed private-output cleanup
 
@@ -368,20 +364,21 @@ Repository:
 $REPOSITORY_ROOT
 ```
 
-Before this handover-only edit, the tracked worktree and index were clean at:
+The accepted Wave-MPRAGE cleanup is recorded by:
 
 ```text
-ef14968 Complete retrospective sweeps and R3x1 presentation
+3355fe5 refactor(tools): streamline Wave MPRAGE reconstruction
+cad8191 fix(tools): correct MPRAGE export orientation
+c61b302 Add separate MPRAGE NIfTI masking workflow
 ```
 
-The local `origin/main` tracking ref also pointed to `ef14968`; no fetch was
-performed to verify the server, and no push was performed during output
-cleanup. This `HANDOVER.md` update is the only intended tracked change for the
-next session. Check `git status --short --branch` before working and do not
-assume any additional modification or untracked file is disposable. Inventory
-the complete diff and form cleanup commits without resetting the tree. The
-historical tracker is under `docs/archive/`, and the active plan is
-`EXPERIMENT_PLAN.md`.
+At the 2026-08-31 documentation check, `HEAD` and the local `origin/main`
+tracking ref pointed to `c61b302`; no fetch was performed. The shared worktree
+also contained the separate synthetic pure-mask implementation/rerun changes.
+Check `git status --short --branch` before every edit and do not assume any
+modified or untracked synthetic file is disposable. The historical tracker is
+under `docs/archive/`; `EXPERIMENT_PLAN.md`, the source cleanup plan, the
+pure-mask rerun plan, and the GRE plan together record current work.
 
 ## Dataset roles and baseline status
 
