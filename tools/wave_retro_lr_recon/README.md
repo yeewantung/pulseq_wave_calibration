@@ -127,13 +127,15 @@ cases are written beneath `OUTPUT_ROOT/retro/`.
 ## Implementation map
 
 - `wave_retro_lr/mprage.py`: measured MPRAGE preparation and orchestration;
-- `wave_retro_lr/sampling.py`: MDH sampling classification;
+- `wave_retro_lr/sampling.py`: MDH sampling classification and the canonical
+  pure Cartesian image-lattice mask/validation contract;
 - `wave_retro_lr/psf.py`: direct calibrated PSF evaluation;
 - `wave_retro_lr/retrospective.py`: measured-Wave crop, CSM resampling, and the
   explicitly named synthetic no-Wave utility;
 - `wave_retro_lr/gre.py`: non-runnable GRE adapter placeholder pending
   real-data MPRAGE validation;
-- `wave_retro_lr/bart_io.py`: bounded BART CFL I/O;
+- `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
+  split-complex output recombination;
 - `wave_retro_lr/core.py`: geometry, grids, FFT, masks, and compatibility
   primitives.
 

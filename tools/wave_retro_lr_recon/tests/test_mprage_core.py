@@ -22,13 +22,70 @@ from wave_retro_lr.retrospective import (  # noqa: E402
     synthesize_wave_from_no_wave_crop,
     write_measured_wave_crop,
 )
-from wave_retro_lr.sampling import classify_mprage_sampling  # noqa: E402
+from wave_retro_lr.sampling import (  # noqa: E402
+    classify_mprage_sampling,
+    pure_cartesian_image_lattice_mask,
+    validate_pure_cartesian_image_lattice,
+)
 from wave_retro_lr.mprage import _embed_image_stream  # noqa: E402
 from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
 
 
 class SamplingTests(unittest.TestCase):
+    def test_pure_cartesian_masks_have_exact_counts_and_hashes(self) -> None:
+        """Verify all five rerun masks are exact image lattices without ACS.
+
+        Returns:
+            None.
+        """
+        expected = {
+            ((256, 256), (3, 1), (1, 0)): (
+                21760,
+                "ea4e03688efd6458eab1470c6a422ea08d2f7ffc377a4f86c72bbaf6c5e1418b",
+            ),
+            ((256, 256), (3, 2), (1, 0)): (
+                10880,
+                "22c680851a8799e602ef3bdf8c0e0edc0eace80cc766a0210a8bc31fdca3926e",
+            ),
+            ((256, 172), (3, 2), (1, 0)): (
+                7310,
+                "aaa8dc49115a6c9baeb7b5f18e43d4b89e968e4d3270496b8ea815f0ca3c63d4",
+            ),
+            ((172, 256), (3, 2), (1, 0)): (
+                7296,
+                "2ffc344bb02f01f5b0d77019a380d33abd3f4228461824575e4c52eae81e3774",
+            ),
+            ((204, 204), (3, 2), (2, 0)): (
+                6936,
+                "908e4cfa7161aabcb6cc20c1f41c9cabaacc99e6dc5a1b3637ab122349736e04",
+            ),
+        }
+        for (shape, acceleration, residue), (count, digest) in expected.items():
+            mask, metadata = pure_cartesian_image_lattice_mask(
+                shape,
+                acceleration_lin_par=acceleration,
+                residue_lin_par=residue,
+            )
+            self.assertEqual(int(mask.sum()), count)
+            self.assertEqual(metadata["logical_sha256"], digest)
+            self.assertFalse(metadata["acs_coordinates_included"])
+            self.assertEqual(validate_pure_cartesian_image_lattice(mask, metadata), metadata)
+
+    def test_pure_mask_rejects_historical_acs_union(self) -> None:
+        """Verify an old lattice-plus-central-band contract fails hard.
+
+        Returns:
+            None.
+        """
+        mask, metadata = pure_cartesian_image_lattice_mask(
+            (8, 8), acceleration_lin_par=(3, 2), residue_lin_par=(1, 0)
+        )
+        metadata["mask_kind"] = "cartesian_with_full_pe1_acs"
+        mask[3, :] = True
+        with self.assertRaisesRegex(ValueError, "Historical ACS-union"):
+            validate_pure_cartesian_image_lattice(mask, metadata)
+
     def test_accepts_only_r1_or_regular_lin_r3x1(self) -> None:
         """Verify the two supported image-stream sampling classes.
 

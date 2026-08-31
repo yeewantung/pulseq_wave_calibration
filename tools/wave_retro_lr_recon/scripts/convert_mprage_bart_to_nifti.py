@@ -17,6 +17,11 @@ sys.path.insert(0, str(TOOL_ROOT))
 from wave_retro_lr.bart_io import open_cfl  # noqa: E402
 from wave_retro_lr.mprage import load_wave_mprage_helpers  # noqa: E402
 
+# BART images use logical (RO, LIN, PAR) axes with physical roles
+# (SI, AP, LR) for sagittal MPRAGE. Relative to the prior (True, False, False)
+# convention, DICOM comparison retained AP and reversed only SI and LR.
+MPRAGE_BART_ARRAY_AXIS_FLIPS = (False, False, True)
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse CLI arguments and export one BART image as two NIfTI parts.
@@ -157,6 +162,10 @@ def convert(
         "BARTWaveKspaceNormRestored": kspace_norm,
         "BARTInternalNormalizationRestored": True,
         "BARTOutputAlreadyReadoutDeoversampled": True,
+        "MPRAGEBARTOrientationCorrection": (
+            "original AP direction retained; physical SI and LR directions "
+            "reversed after real-data DICOM comparison"
+        ),
         "PreparedInputManifest": str(inputs / "manifest.json"),
         **_recorded_commands(inputs, image_path, manifest),
     }
@@ -179,7 +188,7 @@ def convert(
         crop_readout_os=1,
         save_phase=True,
         twix_array_axis_roles=("phase", "readout", "slice"),
-        twix_array_axis_flips=(True, False, False),
+        twix_array_axis_flips=MPRAGE_BART_ARRAY_AXIS_FLIPS,
         metadata=metadata,
     )
 

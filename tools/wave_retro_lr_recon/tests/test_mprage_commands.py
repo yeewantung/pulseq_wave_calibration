@@ -88,6 +88,20 @@ class SampleCommandTests(unittest.TestCase):
             self.assertNotIn("subprocess", source, path.name)
             self.assertNotIn("Popen", source, path.name)
 
+    def test_mprage_converter_keeps_dicom_validated_orientation(self) -> None:
+        """Verify the exporter retains the DICOM-validated SI/LR correction.
+
+        Returns:
+            None.
+        """
+        source = (SCRIPTS / "convert_mprage_bart_to_nifti.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("MPRAGE_BART_ARRAY_AXIS_FLIPS = (False, False, True)", source)
+        self.assertIn(
+            "twix_array_axis_flips=MPRAGE_BART_ARRAY_AXIS_FLIPS", source
+        )
+
     def test_gre_placeholder_cannot_launch_reconstruction(self) -> None:
         """Verify the deferred GRE adapter is explicitly non-runnable.
 
