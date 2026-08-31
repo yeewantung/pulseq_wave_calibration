@@ -58,11 +58,24 @@ class SourceContract:
 
 
 def _utc_now() -> str:
+    """Return the current UTC time as an ISO-8601 string.
+
+    Returns:
+        A timezone-aware timestamp.
+    """
     return datetime.now(timezone.utc).isoformat()
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    """Atomically replace a manifest so partial runs never look complete."""
+    """Atomically replace a manifest so partial runs never look complete.
+
+    Args:
+        path: Destination JSON file.
+        payload: Mapping to serialize.
+
+    Returns:
+        None.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(str(path) + ".tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -70,6 +83,14 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    """Load a JSON object from disk.
+
+    Args:
+        path: JSON file to read.
+
+    Returns:
+        The decoded top-level object.
+    """
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a JSON object: {path}")
@@ -77,6 +98,16 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _resolve_path(value: Any, base: Path, label: str) -> Path:
+    """Resolve a configured path relative to its configuration directory.
+
+    Args:
+        value: Configured path value.
+        base: Base directory for relative paths.
+        label: Field label used in validation errors.
+
+    Returns:
+        The expanded absolute path.
+    """
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Configuration field {label} must be a path string.")
     path = Path(os.path.expandvars(os.path.expanduser(value)))
@@ -84,12 +115,31 @@ def _resolve_path(value: Any, base: Path, label: str) -> Path:
 
 
 def _require_file(path: Path, label: str) -> Path:
+    """Require a path to identify an existing file.
+
+    Args:
+        path: Path to validate.
+        label: Human-readable role used in errors.
+
+    Returns:
+        The validated path.
+    """
     if not path.is_file():
         raise FileNotFoundError(f"{label} not found: {path}")
     return path
 
 
 def _manifest_path(value: Any, manifest: Mapping[str, Any], base: Path) -> Path:
+    """Resolve a sampling-mask path from config or source manifest.
+
+    Args:
+        value: Optional explicit configuration value.
+        manifest: Source BART manifest.
+        base: Directory used for relative manifest paths.
+
+    Returns:
+        The resolved sampling-mask path.
+    """
     if isinstance(value, str) and value:
         return _resolve_path(value, base, "source.sampling_mask")
     mask = manifest.get("sampling_mask")
@@ -102,6 +152,15 @@ def _manifest_path(value: Any, manifest: Mapping[str, Any], base: Path) -> Path:
 def _source_acceleration(
     source_config: Mapping[str, Any], manifest: Mapping[str, Any]
 ) -> tuple[int, int]:
+    """Read the source PE acceleration from config or manifest metadata.
+
+    Args:
+        source_config: Source configuration object.
+        manifest: Source BART manifest.
+
+    Returns:
+        The ``(Ry, Rz)`` acceleration factors.
+    """
     configured = source_config.get("acceleration_ry_rz")
     if isinstance(configured, list) and len(configured) == 2:
         return int(configured[0]), int(configured[1])
@@ -118,7 +177,15 @@ def _source_acceleration(
 
 
 def load_source_contract(config: Mapping[str, Any], config_dir: Path) -> tuple[SourceContract, dict[str, Any]]:
-    """Resolve the explicit source/companion inputs without recursive discovery."""
+    """Resolve the explicit source/companion inputs without recursive discovery.
+
+    Args:
+        config: Complete legacy pipeline configuration.
+        config_dir: Directory containing that configuration.
+
+    Returns:
+        The validated source contract and source BART manifest.
+    """
     source_config = config.get("source")
     if not isinstance(source_config, Mapping):
         raise ValueError("Configuration must contain a source object.")
@@ -191,6 +258,15 @@ def load_source_contract(config: Mapping[str, Any], config_dir: Path) -> tuple[S
 
 
 def _read_geometry(sequence: Path, logical_shape: tuple[int, int, int]) -> Geometry:
+    """Read sagittal logical geometry and readout oversampling from Pulseq.
+
+    Args:
+        sequence: Pulseq sequence path.
+        logical_shape: Source logical ``(RO, LIN, PAR)`` matrix.
+
+    Returns:
+        The physical geometry and integer readout oversampling factor.
+    """
     import pypulseq as pp
 
     seq = pp.Sequence()
@@ -214,6 +290,14 @@ def _read_geometry(sequence: Path, logical_shape: tuple[int, int, int]) -> Geome
 
 
 def _case_specs(config: Mapping[str, Any]) -> list[CaseSpec]:
+    """Parse requested retrospective cases from legacy configuration.
+
+    Args:
+        config: Complete legacy pipeline configuration.
+
+    Returns:
+        Validated case specifications in configuration order.
+    """
     raw_cases = config.get("cases")
     if not isinstance(raw_cases, list) or not raw_cases:
         raise ValueError("Configuration must contain a non-empty cases list.")
@@ -240,7 +324,15 @@ def _case_specs(config: Mapping[str, Any]) -> list[CaseSpec]:
 def validate_contract(
     contract: SourceContract, config: Mapping[str, Any]
 ) -> tuple[Geometry, list[ResolvedCase], dict[str, Any]]:
-    """Validate all shapes and resolve cases without reading full CFL payloads."""
+    """Validate all shapes and resolve cases without reading full CFL payloads.
+
+    Args:
+        contract: Resolved source-input contract.
+        config: Complete legacy pipeline configuration.
+
+    Returns:
+        Geometry, resolved cases, and recorded shape-validation metadata.
+    """
     configured_policy = config.get("pe_matrix_policy")
     expected_policy = f"nearest multiple of {PE_MATRIX_MULTIPLE}"
     if configured_policy not in (None, expected_policy):
@@ -295,7 +387,15 @@ def validate_contract(
 
 
 def _source_provenance(contract: SourceContract, manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """Record source manifests and authoritative hashes without duplicating large data."""
+    """Record source manifests and authoritative hashes without duplicating data.
+
+    Args:
+        contract: Resolved source-input contract.
+        manifest: Source BART manifest.
+
+    Returns:
+        Serializable source-provenance metadata.
+    """
     mask_metadata = manifest.get("sampling_mask") if isinstance(manifest.get("sampling_mask"), Mapping) else {}
     return {
         "bart_input_manifest": str(contract.bart_manifest),
@@ -323,6 +423,15 @@ def _source_provenance(contract: SourceContract, manifest: Mapping[str, Any]) ->
 
 
 def _validate_psf(source_psf: np.ndarray, runtime: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float]]:
+    """Factor and validate the source PSF phase-plane representation.
+
+    Args:
+        source_psf: Source complex Wave PSF array.
+        runtime: Runtime settings containing an optional chunk size.
+
+    Returns:
+        Three phase vectors and PSF identity metrics.
+    """
     chunk = int(runtime.get("readout_chunk", 8))
     alpha, beta, gamma = extract_psf_phase_planes(source_psf, readout_chunk=chunk)
     metrics = psf_identity_metrics(
@@ -343,7 +452,17 @@ def _validate_source_operator(
     *,
     fft_workers: int,
 ) -> dict[str, float]:
-    """Prove crop-first synthesis reproduces the supplied native Wave input."""
+    """Prove crop-first synthesis reproduces the supplied native Wave input.
+
+    Args:
+        contract: Resolved source-input contract.
+        source_psf: Source complex Wave PSF.
+        mask: Source sampling mask.
+        fft_workers: Number of FFT worker threads.
+
+    Returns:
+        Relative and maximum complex-error metrics.
+    """
     no_wave = np.load(contract.no_wave_kspace, mmap_mode="r", allow_pickle=False)
     reference = open_cfl(contract.wave_kspace)
     ro_os, _, _, coils = reference.shape[:4]
@@ -374,7 +493,14 @@ def _validate_source_operator(
 def _prepared_validation_metrics(
     batch: Mapping[str, Any],
 ) -> tuple[dict[str, float], dict[str, float]]:
-    """Reuse finite operator gates from a hash-matched completed preparation."""
+    """Reuse finite operator gates from a hash-matched completed preparation.
+
+    Args:
+        batch: Completed preparation batch manifest.
+
+    Returns:
+        The PSF and native-Wave operator identity metrics.
+    """
     records: list[dict[str, float]] = []
     for key in ("psf_source_identity", "native_wave_operator_identity"):
         value = batch.get(key)
@@ -397,6 +523,20 @@ def _write_target_psf(
     *,
     readout_chunk: int,
 ) -> None:
+    """Evaluate and write a calibrated PSF on a target PE grid.
+
+    Args:
+        output_base: Destination BART base path.
+        alpha: Readout-dependent LIN phase coefficient.
+        beta: Readout-dependent PAR phase coefficient.
+        gamma: Readout-dependent constant phase coefficient.
+        target_lin: Target LIN size.
+        target_par: Target PAR size.
+        readout_chunk: Number of readout planes evaluated per chunk.
+
+    Returns:
+        None.
+    """
     output = create_cfl(output_base, (alpha.size, target_lin, target_par, 1, 1))
     for start in range(0, alpha.size, readout_chunk):
         stop = min(start + readout_chunk, alpha.size)
@@ -408,6 +548,15 @@ def _write_target_psf(
 
 
 def _fit_spatial_shape(array: np.ndarray, target: tuple[int, int, int]) -> np.ndarray:
+    """Center-crop or zero-pad a spatial array to an exact target shape.
+
+    Args:
+        array: Three-dimensional source array.
+        target: Requested three-dimensional shape.
+
+    Returns:
+        An array centered on the requested shape.
+    """
     if array.shape == target:
         return array
     output = np.zeros(target, dtype=array.dtype)
@@ -424,6 +573,16 @@ def _fit_spatial_shape(array: np.ndarray, target: tuple[int, int, int]) -> np.nd
 
 
 def _write_target_maps(source_base: Path, output_base: Path, target_shape: tuple[int, int, int]) -> None:
+    """Interpolate and RSS-normalize sensitivity maps on a target PE grid.
+
+    Args:
+        source_base: Source BART sensitivity-map base path.
+        output_base: Destination BART base path.
+        target_shape: Target logical ``(RO, LIN, PAR)`` shape.
+
+    Returns:
+        None.
+    """
     source = open_cfl(source_base)
     ro, source_lin, source_par, coils = source.shape[:4]
     target_ro, target_lin, target_par = target_shape
@@ -456,6 +615,16 @@ def _write_target_maps(source_base: Path, output_base: Path, target_shape: tuple
 def _write_target_calibration(
     source_base: Path, output_base: Path, case: ResolvedCase
 ) -> None:
+    """Center-crop calibration k-space for a resolved target case.
+
+    Args:
+        source_base: Source BART calibration-k-space base path.
+        output_base: Destination BART base path.
+        case: Resolved crop geometry.
+
+    Returns:
+        None.
+    """
     source = open_cfl(source_base)
     ro, _, _, coils = source.shape[:4]
     _, target_lin, target_par = case.target_logical_matrix_ro_lin_par
@@ -477,6 +646,19 @@ def _write_target_wave_kspace(
     *,
     fft_workers: int,
 ) -> float:
+    """Synthesize target-grid Wave k-space from legacy no-Wave data.
+
+    Args:
+        contract: Resolved source-input contract.
+        output_base: Destination Wave-k-space BART base path.
+        target_psf_base: Target calibrated-PSF BART base path.
+        case: Resolved target geometry.
+        case_mask: Target retrospective sampling mask.
+        fft_workers: Number of FFT worker threads.
+
+    Returns:
+        The complex L2 norm of the written Wave k-space.
+    """
     no_wave = np.load(contract.no_wave_kspace, mmap_mode="r", allow_pickle=False)
     source_wave_shape = read_shape(contract.wave_kspace)
     ro_os, _, _, coils = source_wave_shape[:4]
@@ -509,6 +691,17 @@ def _target_manifest(
     kspace_norm: float,
     source: SourceContract,
 ) -> dict[str, Any]:
+    """Build a BART-input manifest for one legacy retrospective case.
+
+    Args:
+        case: Resolved target geometry.
+        bart_input_dir: Directory containing prepared BART arrays.
+        kspace_norm: Complex L2 norm of target Wave k-space.
+        source: Resolved source-input contract.
+
+    Returns:
+        The serializable BART-input manifest.
+    """
     wave_shape = read_shape(bart_input_dir / "wave_kspace")
     psf_shape = read_shape(bart_input_dir / "psf")
     return {
@@ -549,6 +742,24 @@ def _prepare_case(
     *,
     recover: bool = False,
 ) -> dict[str, Any]:
+    """Prepare all legacy BART inputs for one retrospective case.
+
+    Args:
+        case: Resolved target geometry.
+        contract: Resolved source-input contract.
+        source_mask: Source sampling mask.
+        alpha: Source PSF LIN phase coefficient.
+        beta: Source PSF PAR phase coefficient.
+        gamma: Source PSF constant phase coefficient.
+        case_dir: Destination case directory.
+        runtime: Runtime chunking settings.
+        source_provenance: Recorded source identity.
+        config_sha256: SHA-256 digest of the run configuration.
+        recover: Replace an incomplete prepared-input directory.
+
+    Returns:
+        The prepared case manifest.
+    """
     bart_inputs = case_dir / "bart_inputs"
     if bart_inputs.exists():
         if not recover:
@@ -625,7 +836,19 @@ def _reuse_prepared_case(
     *,
     recover: bool = False,
 ) -> dict[str, Any]:
-    """Link a hash-validated prior case's BART inputs into a new solver run."""
+    """Link a hash-validated prior case's BART inputs into a new solver run.
+
+    Args:
+        case: Resolved target geometry.
+        source_case_dir: Previously completed case directory.
+        case_dir: New solver-run case directory.
+        source_provenance: Expected source identity.
+        config_sha256: SHA-256 digest of the new configuration.
+        recover: Replace an incomplete prior symbolic link.
+
+    Returns:
+        The new prepared case manifest.
+    """
     source_manifest_path = source_case_dir / "case_manifest.json"
     source_payload = _load_json(
         _require_file(source_manifest_path, "Prepared case manifest")
@@ -682,6 +905,15 @@ def _reuse_prepared_case(
 
 
 def _stream_command(command: Sequence[str], log_path: Path) -> float:
+    """Run a command while mirroring combined output to a log file.
+
+    Args:
+        command: Executable and argument sequence.
+        log_path: Destination text log.
+
+    Returns:
+        Elapsed wall-clock seconds.
+    """
     print("Running:", " ".join(command), flush=True)
     started = time.perf_counter()
     lines: list[str] = []
@@ -700,6 +932,15 @@ def _stream_command(command: Sequence[str], log_path: Path) -> float:
 
 
 def _load_bart_image(image_base: Path, regularizer: str) -> tuple[np.ndarray, dict[str, Any]]:
+    """Load and validate a standard or split-complex BART image.
+
+    Args:
+        image_base: Reconstructed BART image base path.
+        regularizer: Declared regularizer name.
+
+    Returns:
+        The complex image and split-complex decoding metadata.
+    """
     image = open_cfl(image_base)
     shape = image.shape + (1,) * max(0, 9 - image.ndim)
     if regularizer == "llr":
@@ -725,6 +966,14 @@ def _load_bart_image(image_base: Path, regularizer: str) -> tuple[np.ndarray, di
 
 
 def _load_upstream_exporter(repo_root: Path):
+    """Load the pinned Wave-MPRAGE NIfTI exporter as a library module.
+
+    Args:
+        repo_root: Root of the enclosing source repository.
+
+    Returns:
+        The imported upstream exporter module.
+    """
     script = repo_root / "external" / "wave-mprage" / "recon" / "recon_wave_mprage_from_twix_integrated_nifti.py"
     if not script.is_file():
         raise FileNotFoundError(f"Pinned Wave-MPRAGE exporter not found: {script}")
@@ -742,7 +991,14 @@ def _load_upstream_exporter(repo_root: Path):
 def _reconstruction_settings(
     config: Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], str, list[str]]:
-    """Return the declared regularizer and its validated BART Wave options."""
+    """Return the declared regularizer and its validated BART Wave options.
+
+    Args:
+        config: Complete legacy pipeline configuration.
+
+    Returns:
+        Reconstruction settings, regularizer name, and BART Wave options.
+    """
     reconstruction = config.get("reconstruction")
     if not isinstance(reconstruction, Mapping):
         raise ValueError("Configuration must contain a reconstruction object.")
@@ -774,6 +1030,19 @@ def _run_reconstruction(
     *,
     recover: bool = False,
 ) -> dict[str, Any]:
+    """Run BART Wave and export magnitude and phase NIfTI outputs.
+
+    Args:
+        case: Resolved target geometry.
+        case_dir: Prepared case directory.
+        contract: Resolved source-input contract.
+        config: Complete legacy pipeline configuration.
+        repo_root: Root of the enclosing source repository.
+        recover: Replace incomplete reconstruction outputs.
+
+    Returns:
+        Reconstruction command, timing, BART output, and NIfTI metadata.
+    """
     reconstruction, regularizer, options = _reconstruction_settings(config)
     bart_value = str(reconstruction.get("bart", os.environ.get("BART_BIN", "bart")))
     bart_executable = shutil.which(bart_value)
@@ -863,7 +1132,18 @@ def run_config(
     prepare_only: bool = False,
     resume: bool = False,
 ) -> dict[str, Any]:
-    """Validate, prepare, and optionally reconstruct all configured cases."""
+    """Validate, prepare, and optionally reconstruct all configured cases.
+
+    Args:
+        config_path: Legacy pipeline JSON configuration.
+        repo_root: Root of the enclosing source repository.
+        validate_only: Validate inputs without creating workflow outputs.
+        prepare_only: Prepare BART inputs without launching BART reconstruction.
+        resume: Resume an incomplete recorded workflow.
+
+    Returns:
+        The validation summary or final batch manifest.
+    """
     config_path = Path(config_path).expanduser().resolve()
     repo_root = Path(repo_root).expanduser().resolve()
     config = _load_json(_require_file(config_path, "Configuration"))

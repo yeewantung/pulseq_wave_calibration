@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run config-driven retrospective PE low-resolution Wave-MPRAGE cases."""
+"""Legacy no-Wave config runner retained for synthetic-tool compatibility."""
 
 from __future__ import annotations
 
@@ -16,6 +16,11 @@ from wave_retro_lr.pipeline import run_config  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
+    """Build the legacy synthetic compatibility command-line interface.
+
+    Returns:
+        Parser for one JSON configuration and mutually exclusive run modes.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -34,6 +39,14 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the legacy no-Wave pipeline from command-line arguments.
+
+    Args:
+        argv: Optional argument vector; ``None`` reads the process arguments.
+
+    Returns:
+        Zero after validation, preparation, or reconstruction completes.
+    """
     args = _parser().parse_args(argv)
     run_config(
         args.config,

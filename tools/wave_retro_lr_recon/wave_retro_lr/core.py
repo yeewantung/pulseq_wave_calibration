@@ -24,11 +24,21 @@ class Geometry:
 
     @property
     def physical_matrix_xyz(self) -> tuple[int, int, int]:
+        """Map logical MPRAGE dimensions to physical XYZ matrix order.
+
+        Returns:
+            Physical ``(X, Y, Z)`` matrix dimensions.
+        """
         ro, lin, par = self.logical_matrix_ro_lin_par
         return par, lin, ro
 
     @property
     def physical_resolution_mm_xyz(self) -> tuple[float, float, float]:
+        """Calculate voxel spacing from physical FOV and matrix dimensions.
+
+        Returns:
+            Physical ``(X, Y, Z)`` voxel spacing in millimeters.
+        """
         return tuple(
             fov / matrix
             for fov, matrix in zip(
@@ -58,7 +68,11 @@ class ResolvedCase:
     label: str | None = None
 
     def to_json(self) -> dict[str, object]:
-        """Return stable JSON-native values for manifest/resume comparison."""
+        """Convert a resolved case to stable JSON-native values.
+
+        Returns:
+            Manifest mapping used for provenance and resume comparison.
+        """
         return {
             "requested_resolution_mm_xyz": list(self.requested_resolution_mm_xyz),
             "achieved_resolution_mm_xyz": list(self.achieved_resolution_mm_xyz),
@@ -79,7 +93,15 @@ class ResolvedCase:
 
 
 def center_crop_bounds(source_size: int, target_size: int) -> tuple[int, int]:
-    """Return a half-open crop that preserves the Python center index."""
+    """Calculate a half-open crop preserving the Python center index.
+
+    Args:
+        source_size: Size of the source axis.
+        target_size: Requested size not exceeding the source.
+
+    Returns:
+        Half-open ``(start, stop)`` crop bounds.
+    """
     if not 1 <= target_size <= source_size:
         raise ValueError(
             f"Target size must satisfy 1 <= target <= source; got {target_size} and {source_size}."
@@ -92,6 +114,15 @@ def center_crop_bounds(source_size: int, target_size: int) -> tuple[int, int]:
 
 
 def _rounded_matrix(fov_mm: float, resolution_mm: float) -> int:
+    """Round an ideal PE matrix to the required multiple.
+
+    Args:
+        fov_mm: Physical field of view in millimeters.
+        resolution_mm: Requested voxel spacing in millimeters.
+
+    Returns:
+        Nearest positive matrix size divisible by ``PE_MATRIX_MULTIPLE``.
+    """
     if not np.isfinite(resolution_mm) or resolution_mm <= 0:
         raise ValueError(f"Resolution must be positive and finite; got {resolution_mm}.")
     ideal_matrix = fov_mm / resolution_mm
@@ -101,19 +132,43 @@ def _rounded_matrix(fov_mm: float, resolution_mm: float) -> int:
 
 
 def _format_number(value: float) -> str:
+    """Format a numeric case-name component without trailing zeros.
+
+    Args:
+        value: Numeric value to round to two decimal places.
+
+    Returns:
+        Compact decimal string.
+    """
     return f"{round(float(value), 2):.2f}".rstrip("0").rstrip(".")
 
 
 def format_case_name(
     achieved_resolution_mm_xyz: Sequence[float], acceleration_ry_rz: tuple[int, int]
 ) -> str:
-    """Build a stable result name from achieved resolution and acceleration."""
+    """Build a stable result name from resolution and acceleration.
+
+    Args:
+        achieved_resolution_mm_xyz: Achieved physical XYZ spacing in millimeters.
+        acceleration_ry_rz: Logical LIN/PAR acceleration factors.
+
+    Returns:
+        Dataset-independent case directory name.
+    """
     resolution = "x".join(_format_number(value) for value in achieved_resolution_mm_xyz)
     return f"res{resolution}mm_R{acceleration_ry_rz[0]}x{acceleration_ry_rz[1]}"
 
 
 def resolve_case(spec: CaseSpec, geometry: Geometry) -> ResolvedCase:
-    """Map a physical-XYZ request onto a sagittal logical PE crop."""
+    """Map a physical-XYZ request onto a sagittal logical PE crop.
+
+    Args:
+        spec: Requested spacing, acceleration, and optional label.
+        geometry: Source physical FOV and logical matrix contract.
+
+    Returns:
+        Fully resolved crop bounds, matrices, and achieved resolution.
+    """
     fov_x, fov_y, fov_z = geometry.physical_fov_mm_xyz
     source_ro, source_lin, source_par = geometry.logical_matrix_ro_lin_par
     source_res_z = fov_z / source_ro
@@ -154,10 +209,19 @@ def build_case_mask(
     case: ResolvedCase,
     source_acceleration_ry_rz: tuple[int, int],
 ) -> np.ndarray:
-    """Crop the acquired mask and optionally add acceleration on full axes.
+    """Crop a legacy mask and add a uniform centered lattice on full axes.
 
-    Fully sampled ACS rows present in the source mask remain fully sampled when
-    adding Rz. Existing accelerated axes cannot be changed retrospectively.
+    This compatibility helper never guesses which fully sampled rows are ACS.
+    Calibration must remain a separate input rather than being merged into a
+    Wave reconstruction mask.
+
+    Args:
+        source_mask: Boolean source sampling mask in logical LIN/PAR order.
+        case: Resolved target crop and acceleration request.
+        source_acceleration_ry_rz: Known source LIN/PAR acceleration.
+
+    Returns:
+        Cropped boolean reconstruction mask without inferred calibration rows.
     """
     mask = np.asarray(source_mask, dtype=bool)
     source_lin, source_par = case.source_logical_matrix_ro_lin_par[1:]
@@ -182,11 +246,10 @@ def build_case_mask(
         lin_keep = ((np.arange(target_lin) - target_lin // 2) % target_ry) == 0
         cropped &= lin_keep[:, None]
     if source_rz == 1 and target_rz > 1:
-        fully_sampled_rows = np.all(cropped, axis=1)
         par_keep = ((np.arange(target_par) - target_par // 2) % target_rz) == 0
-        cropped = (cropped & par_keep[None, :]) | fully_sampled_rows[:, None]
-    if not cropped[target_lin // 2, target_par // 2]:
-        raise ValueError("The final retrospective mask does not contain k-space center.")
+        cropped &= par_keep[None, :]
+    if not np.any(cropped):
+        raise ValueError("The final retrospective sampling mask is empty.")
     return cropped
 
 
@@ -198,6 +261,13 @@ def extract_psf_phase_planes(
     Adjacent complex ratios avoid direct wrapped phase-plane fitting. The PSF
     must be unit magnitude because BART Wave calibration is represented here as
     a pure phase modulation.
+
+    Args:
+        psf: Complex PSF with shape ``(RO_os, LIN, PAR)``.
+        readout_chunk: Number of readout samples processed per block.
+
+    Returns:
+        Per-readout LIN slope, PAR slope, and constant phase vectors.
     """
     if psf.ndim != 3:
         raise ValueError(f"PSF must have shape (RO_os, LIN, PAR); got {psf.shape}.")
@@ -247,7 +317,18 @@ def evaluate_psf_phase_planes(
     nlin: int,
     npar: int,
 ) -> np.ndarray:
-    """Evaluate extracted Wave phase planes on a requested PE grid."""
+    """Evaluate extracted Wave phase planes on a requested PE grid.
+
+    Args:
+        alpha: Per-readout normalized LIN phase slopes.
+        beta: Per-readout normalized PAR phase slopes.
+        gamma: Per-readout constant phase offsets.
+        nlin: Target logical LIN dimension.
+        npar: Target logical PAR dimension.
+
+    Returns:
+        Unit-magnitude complex64 PSF with shape ``(RO_os, LIN, PAR)``.
+    """
     alpha = np.asarray(alpha, dtype=np.float64).reshape(-1)
     beta = np.asarray(beta, dtype=np.float64).reshape(-1)
     gamma = np.asarray(gamma, dtype=np.float64).reshape(-1)
@@ -271,7 +352,18 @@ def psf_identity_metrics(
     *,
     readout_chunk: int = 8,
 ) -> dict[str, float]:
-    """Measure exactness of phase-plane regeneration on the source grid."""
+    """Measure phase-plane regeneration accuracy on the source grid.
+
+    Args:
+        source_psf: Reference complex PSF.
+        alpha: Extracted LIN phase slopes.
+        beta: Extracted PAR phase slopes.
+        gamma: Extracted constant phase offsets.
+        readout_chunk: Number of readout samples evaluated per block.
+
+    Returns:
+        Relative complex error, maximum error, and phase RMS metrics.
+    """
     nro, nlin, npar = source_psf.shape
     error_squared = 0.0
     source_squared = 0.0
@@ -301,7 +393,17 @@ def psf_identity_metrics(
 def centered_fftn(
     array: np.ndarray, *, axes: Sequence[int], inverse: bool = False, workers: int = 1
 ) -> np.ndarray:
-    """Apply the project-standard centered orthonormal FFT."""
+    """Apply the project-standard centered orthonormal FFT.
+
+    Args:
+        array: Input array to transform.
+        axes: Axes transformed in one operation.
+        inverse: Use inverse transforms when true.
+        workers: Maximum SciPy FFT workers.
+
+    Returns:
+        Centered complex64 transformed array.
+    """
     axes = tuple(int(axis) for axis in axes)
     shifted = np.fft.ifftshift(np.asarray(array), axes=axes)
     transform = fft.ifftn if inverse else fft.fftn
@@ -316,7 +418,17 @@ def apply_wave_forward(
     readout_oversampled: int,
     fft_workers: int = 1,
 ) -> np.ndarray:
-    """Crop-first Wave synthesis for one coil on a fixed physical FOV."""
+    """Apply crop-first Wave synthesis for one coil at fixed FOV.
+
+    Args:
+        no_wave_kspace: Logical no-Wave k-space with shape ``(RO, LIN, PAR)``.
+        psf: Target-grid Wave PSF with oversampled readout.
+        readout_oversampled: Extended Wave readout dimension.
+        fft_workers: Maximum SciPy FFT workers.
+
+    Returns:
+        Complex64 Wave-encoded k-space with shape ``(RO_os, LIN, PAR)``.
+    """
     kspace = np.asarray(no_wave_kspace, dtype=np.complex64)
     if kspace.ndim != 3 or psf.shape[1:] != kspace.shape[1:]:
         raise ValueError(
@@ -342,7 +454,19 @@ def build_wave_options(
     tolerance: float,
     maximum_eigenvalue: float | None,
 ) -> list[str]:
-    """Build a validated BART option list with mandatory GPU execution."""
+    """Build validated BART Wave options with mandatory GPU execution.
+
+    Args:
+        regularizer: One of ``none``, ``wavelet``, or ``llr``.
+        lambda_value: Regularization weight, or zero/``None`` for no penalty.
+        block_size: LLR block size when that regularizer is selected.
+        iterations: Positive FISTA iteration count.
+        tolerance: Positive stopping tolerance.
+        maximum_eigenvalue: Optional positive operator eigenvalue bound.
+
+    Returns:
+        Command arguments suitable for appending to ``bart wave``.
+    """
     if regularizer not in {"none", "wavelet", "llr"}:
         raise ValueError(f"Unsupported regularizer: {regularizer}.")
     if iterations < 1 or not np.isfinite(tolerance) or tolerance <= 0:

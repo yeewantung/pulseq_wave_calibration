@@ -1,0 +1,412 @@
+"""Focused scientific-contract tests for Wave retrospective preparation."""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+
+TOOL_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(TOOL_ROOT))
+
+from wave_retro_lr.bart_io import create_cfl, open_cfl, read_shape  # noqa: E402
+from wave_retro_lr.core import CaseSpec, Geometry, build_wave_options, resolve_case  # noqa: E402
+from wave_retro_lr.core import build_case_mask  # noqa: E402
+from wave_retro_lr.psf import evaluate_calibrated_psf  # noqa: E402
+from wave_retro_lr.retrospective import (  # noqa: E402
+    resample_sensitivity_maps,
+    synthesize_wave_from_no_wave_crop,
+    write_measured_wave_crop,
+)
+from wave_retro_lr.sampling import classify_mprage_sampling  # noqa: E402
+from wave_retro_lr.mprage import _embed_image_stream  # noqa: E402
+from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
+from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
+
+
+class SamplingTests(unittest.TestCase):
+    def test_accepts_only_r1_or_regular_lin_r3x1(self) -> None:
+        """Verify the two supported image-stream sampling classes.
+
+        Returns:
+            None.
+        """
+        r1_coordinates = [(line, par) for par in range(4) for line in range(8)]
+        r1 = classify_mprage_sampling(
+            [item[0] for item in r1_coordinates],
+            [item[1] for item in r1_coordinates],
+            matrix_lin_par=(8, 4),
+        )
+        self.assertEqual(r1.name, "R1")
+        self.assertEqual(r1.acceleration_lin_par, (1, 1))
+
+        r3_coordinates = [(line, par) for par in range(4) for line in (1, 4, 7)]
+        r3 = classify_mprage_sampling(
+            [item[0] for item in r3_coordinates],
+            [item[1] for item in r3_coordinates],
+            matrix_lin_par=(8, 4),
+        )
+        self.assertEqual(r3.name, "R3x1")
+        self.assertEqual(r3.lin_residue, 1)
+        self.assertEqual(int(r3.mask().sum()), 12)
+
+    def test_rejects_duplicate_and_irregular_coordinates(self) -> None:
+        """Verify ambiguous or non-Cartesian MDH coordinate sets fail.
+
+        Returns:
+            None.
+        """
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            classify_mprage_sampling([0, 0], [0, 0], matrix_lin_par=(4, 4))
+        with self.assertRaisesRegex(ValueError, "factor-three"):
+            classify_mprage_sampling(
+                [0, 2, 0, 2], [0, 0, 1, 1], matrix_lin_par=(4, 2)
+            )
+
+    def test_r3_image_residue_need_not_contain_center_when_acs_is_separate(self) -> None:
+        """Verify valid R3 image sampling may omit the separately calibrated center.
+
+        Returns:
+            None.
+        """
+        coordinates = [(line, par) for par in range(4) for line in (1, 4)]
+        pattern = classify_mprage_sampling(
+            [item[0] for item in coordinates],
+            [item[1] for item in coordinates],
+            matrix_lin_par=(6, 4),
+        )
+        self.assertEqual(pattern.name, "R3x1")
+        self.assertEqual(pattern.lin_residue, 1)
+        self.assertFalse(pattern.to_json()["image_kspace_center_acquired"])
+
+    def test_compact_mapvbvd_payload_uses_mdh_skip_and_mask(self) -> None:
+        """Verify a bounded mapVBVD payload is embedded on its logical grid.
+
+        Returns:
+            None.
+        """
+        pattern = classify_mprage_sampling(
+            [1, 4, 7] * 4,
+            [partition for partition in range(4) for _ in range(3)],
+            matrix_lin_par=(8, 4),
+            skip_lin_par=(1, 0),
+        )
+        compact = np.zeros((2, 7, 4, 2), dtype=np.complex64)
+        compact[:, (0, 3, 6), :, :] = 1
+        full = _embed_image_stream(
+            compact, pattern, readout_oversampled=2, physical_coils=2
+        ).numpy()
+        self.assertEqual(full.shape, (2, 8, 4, 2))
+        self.assertTrue(np.all(full[:, pattern.mask(), :] == 1))
+        self.assertTrue(np.all(full[:, ~pattern.mask(), :] == 0))
+
+
+class PsfAndGeometryTests(unittest.TestCase):
+    def test_target_matrices_are_nearest_multiple_of_four(self) -> None:
+        """Verify requested LR spacings resolve to compatible PE matrices.
+
+        Returns:
+            None.
+        """
+        geometry = Geometry((256.0, 256.0, 256.0), (256, 256, 256))
+        expected = {
+            (1.5, 1.0, 1.0): (256, 256, 172),
+            (1.0, 1.5, 1.0): (256, 172, 256),
+            (1.25, 1.25, 1.0): (256, 204, 204),
+        }
+        for resolution, shape in expected.items():
+            case = resolve_case(CaseSpec(resolution, (3, 2)), geometry)
+            self.assertEqual(case.target_logical_matrix_ro_lin_par, shape)
+            self.assertEqual(shape[1] % 4, 0)
+            self.assertEqual(shape[2] % 4, 0)
+
+    def test_psf_uses_trajectory_and_coefficients_on_requested_grid(self) -> None:
+        """Verify direct PSF evaluation preserves shape and unit magnitude.
+
+        Returns:
+            None.
+        """
+        delta_lin = np.array([0.0, 0.25])
+        delta_par = np.array([0.0, -0.5])
+        a_fit = np.array([0.0, 0.1])
+        b_fit = np.array([0.0, -0.2])
+        c_fit = np.array([0.3, -0.4])
+        psf = evaluate_calibrated_psf(
+            delta_lin, delta_par, a_fit, b_fit, c_fit, nlin=4, npar=8
+        )
+        self.assertEqual(psf.shape, (2, 4, 8))
+        np.testing.assert_allclose(np.abs(psf), 1.0, atol=2e-7)
+        self.assertAlmostEqual(float(np.angle(psf[0, 2, 4])), 0.3, places=6)
+
+
+class BartInputTests(unittest.TestCase):
+    def test_measured_wave_crop_does_not_forward_simulate(self) -> None:
+        """Verify measured-Wave LR preparation is a direct centered crop.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = create_cfl(root / "wave", (4, 8, 8, 1, 1))
+            values = np.arange(4 * 8 * 8, dtype=np.float32).reshape((4, 8, 8), order="F")
+            source[:, :, :, 0, 0] = values
+            source.flush()
+            del source
+            geometry = Geometry((8.0, 8.0, 4.0), (4, 8, 8))
+            case = resolve_case(CaseSpec((2.0, 1.0, 1.0), (1, 1)), geometry)
+            metrics = write_measured_wave_crop(
+                root / "wave", root / "cropped", case, np.ones((8, 8), bool), (1, 1)
+            )
+            result = np.asarray(open_cfl(root / "cropped"))[:, :, :, 0, 0]
+            np.testing.assert_array_equal(result, values[:, :, 2:6])
+            self.assertGreater(float(metrics["wave_kspace_norm"]), 0.0)
+
+    def test_measured_wave_crop_preserves_r3_residue_and_adds_par_two(self) -> None:
+        """Verify measured LIN residue is retained while PARx2 is added.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = create_cfl(root / "wave", (4, 8, 8, 1, 1))
+            source[...] = 0
+            source[:, (0, 3, 6), :, 0, 0] = 1
+            source.flush()
+            del source
+            geometry = Geometry((8.0, 8.0, 4.0), (4, 8, 8))
+            case = resolve_case(CaseSpec((1.0, 1.0, 1.0), (3, 2)), geometry)
+            source_mask = np.zeros((8, 8), dtype=bool)
+            source_mask[(0, 3, 6), :] = True
+            metrics = write_measured_wave_crop(
+                root / "wave", root / "r3x2", case, source_mask, (3, 1)
+            )
+            result = np.asarray(open_cfl(root / "r3x2"))[:, :, :, 0, 0]
+            expected = np.zeros((8, 8), dtype=bool)
+            expected[np.ix_([0, 3, 6], [0, 2, 4, 6])] = True
+            np.testing.assert_array_equal(np.any(result != 0, axis=0), expected)
+            self.assertEqual(metrics["sampled_coordinate_count"], 12)
+            self.assertFalse(metrics["image_kspace_center_acquired"])
+
+    def test_legacy_mask_does_not_infer_acs_from_fully_sampled_rows(self) -> None:
+        """Verify legacy masking never treats full image rows as ACS.
+
+        Returns:
+            None.
+        """
+        geometry = Geometry((8.0, 8.0, 4.0), (4, 8, 8))
+        case = resolve_case(CaseSpec((1.0, 1.0, 1.0), (3, 2)), geometry)
+        result = build_case_mask(np.ones((8, 8), bool), case, (1, 1))
+        expected = np.zeros((8, 8), dtype=bool)
+        expected[np.ix_([1, 4, 7], [0, 2, 4, 6])] = True
+        np.testing.assert_array_equal(result, expected)
+
+    def test_lr_maps_keep_readout_and_are_rss_normalized(self) -> None:
+        """Verify same-FOV CSM resizing changes PE only and normalizes coils.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bart_shape = (4, 8, 8, 2, 1) + (1,) * 11
+            maps = create_cfl(root / "maps", bart_shape)
+            maps[...] = np.complex64(1 / np.sqrt(2))
+            maps.flush()
+            del maps
+            resample_sensitivity_maps(root / "maps", root / "small", target_lin_par=(4, 4))
+            self.assertEqual(read_shape(root / "small"), (4, 4, 4, 2, 1))
+            result = np.asarray(open_cfl(root / "small"))[:, :, :, :, 0]
+            rss = np.sqrt(np.sum(np.abs(result) ** 2, axis=3))
+            np.testing.assert_allclose(rss, 1.0, atol=1e-6)
+
+    def test_no_wave_operation_is_explicitly_separate(self) -> None:
+        """Verify synthetic no-Wave encoding remains an explicit utility.
+
+        Returns:
+            None.
+        """
+        no_wave = np.ones((4, 4, 4), dtype=np.complex64)
+        psf = np.ones((4, 4, 4), dtype=np.complex64)
+        result = synthesize_wave_from_no_wave_crop(
+            no_wave, psf, readout_oversampled=4, target_mask=np.eye(4, dtype=bool)
+        )
+        self.assertEqual(result.shape, (4, 4, 4))
+        self.assertTrue(np.all(result[:, ~np.eye(4, dtype=bool)] == 0))
+
+    def test_legacy_bart_options_still_require_gpu(self) -> None:
+        """Verify compatibility BART Wave options retain GPU execution.
+
+        Returns:
+            None.
+        """
+        options = build_wave_options(
+            "wavelet", 0.0, block_size=8, iterations=100, tolerance=1e-6, maximum_eigenvalue=None
+        )
+        self.assertEqual(options, ["-w", "-f", "-r", "0", "-i", "100", "-t", "1e-06", "-g"])
+
+
+class PreparationIntegrationTests(unittest.TestCase):
+    def test_mock_twix_preparation_writes_native_and_four_retro_contracts(self) -> None:
+        """Verify mocked raw preparation writes all required BART contracts.
+
+        Returns:
+            None.
+        """
+        import torch
+
+        class Helpers:
+            @staticmethod
+            def _resolve_mprage_wave_mode(*args, **kwargs):
+                """Return the expected Wave acquisition mode for the mock.
+
+                Args:
+                    *args: Ignored positional upstream arguments.
+                    **kwargs: Ignored keyword upstream arguments.
+
+                Returns:
+                    The literal ``"wave"`` mode.
+                """
+                return "wave"
+
+            @staticmethod
+            def load_img(path):
+                """Return a finite full-grid mock image stream.
+
+                Args:
+                    path: Ignored mock TWIX path.
+
+                Returns:
+                    A finite complex image-stream tensor.
+                """
+                return torch.ones((8, 16, 16, 12), dtype=torch.complex64)
+
+            @staticmethod
+            def load_ref(path):
+                """Return a five-set mock integrated reference stream.
+
+                Args:
+                    path: Ignored mock TWIX path.
+
+                Returns:
+                    A finite five-set complex reference tensor.
+                """
+                return torch.ones((8, 4, 4, 5, 12), dtype=torch.complex64)
+
+            @staticmethod
+            def _check_integrated_refscan_shape(reference, **kwargs):
+                """Validate the expected mock integrated-reference shape.
+
+                Args:
+                    reference: Mock integrated-reference tensor.
+                    **kwargs: Ignored upstream validation settings.
+
+                Returns:
+                    None.
+                """
+                if tuple(reference.shape) != (8, 4, 4, 5, 12):
+                    raise ValueError("bad mock reference")
+
+            @staticmethod
+            def estimate_cc_matrix_coillast(*args, **kwargs):
+                """Return an identity mock coil-compression basis and spectra.
+
+                Args:
+                    *args: Ignored positional upstream arguments.
+                    **kwargs: Ignored keyword upstream arguments.
+
+                Returns:
+                    Identity basis, singular values, and retained-energy arrays.
+                """
+                return (
+                    np.eye(12, dtype=np.complex64),
+                    np.ones(12, dtype=np.float64),
+                    np.ones(12, dtype=np.float64),
+                )
+
+            @staticmethod
+            def apply_cc_coillast_torch(kspace, basis, x_chunk=8):
+                """Apply the supplied mock coil-compression matrix.
+
+                Args:
+                    kspace: Input complex k-space tensor.
+                    basis: Coil-compression matrix.
+                    x_chunk: Ignored upstream chunk size.
+
+                Returns:
+                    The coil-compressed tensor.
+                """
+                return kspace @ torch.as_tensor(basis)
+
+        pattern = SamplingPattern(
+            name="R1",
+            acceleration_lin_par=(1, 1),
+            lin_residue=None,
+            matrix_lin_par=(16, 16),
+            acquired_lin=tuple(range(16)),
+            acquired_par=tuple(range(16)),
+            measurement_index=0,
+        )
+        definitions = {
+            "ReadoutOversamplingFactor": 2,
+            "Calibration_Ncalib1": 4,
+            "Calibration_Nacs": 4,
+        }
+        upstream_geometry = {
+            "Nro": 4,
+            "Nlin": 16,
+            "Npar": 16,
+            "FOVxyz": (0.016, 0.016, 0.004),
+        }
+        zero_vectors = tuple(np.zeros(8, dtype=np.float64) for _ in range(5))
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"mock twix")
+            sequence.write_text("mock sequence\n", encoding="utf-8")
+            output = root / "output"
+            with (
+                patch("wave_retro_lr.mprage.load_wave_mprage_helpers", return_value=Helpers()),
+                patch(
+                    "wave_retro_lr.mprage._read_sequence",
+                    return_value=(definitions, upstream_geometry),
+                ),
+                patch(
+                    "wave_retro_lr.mprage.inspect_twix_sampling",
+                    return_value=(pattern, object()),
+                ),
+                patch(
+                    "wave_retro_lr.mprage._calibrated_psf_inputs",
+                    return_value=zero_vectors,
+                ),
+            ):
+                manifest = prepare_normal_mprage(twix, output, sequence)
+                retro = prepare_retro_mprage(twix, output, sequence)
+
+            normal = output / "normal" / "bart_inputs"
+            self.assertEqual(manifest["sampling"]["name"], "R1")
+            self.assertEqual(read_shape(normal / "wave_kspace"), (8, 16, 16, 12, 1))
+            self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 12))
+            self.assertEqual(read_shape(normal / "psf"), (8, 16, 16, 1, 1))
+            self.assertEqual(len(retro), 4)
+            for case in retro:
+                shape = tuple(case["case"]["target_logical_matrix_ro_lin_par"])
+                self.assertEqual(shape[1] % 4, 0)
+                self.assertEqual(shape[2] % 4, 0)
+                case_inputs = output / "retro" / case["case_directory"] / "bart_inputs"
+                self.assertEqual(
+                    read_shape(case_inputs / "wave_kspace")[:3],
+                    (8, shape[1], shape[2]),
+                )
+                self.assertEqual(read_shape(case_inputs / "psf")[:3], (8, shape[1], shape[2]))
+
+
+if __name__ == "__main__":
+    unittest.main()

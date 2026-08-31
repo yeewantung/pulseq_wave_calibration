@@ -1,139 +1,157 @@
-# Retrospective low-resolution Wave-MPRAGE reconstruction
+# Wave retrospective reconstruction
 
-This tool creates lower phase-encoding resolution Wave-MPRAGE cases from an
-explicit source manifest. It is integrated into the parent repository and uses
-the pinned `external/wave-mprage` NIfTI exporter. The imported two-commit
-history remains available in Git; the legacy internal-NPY/Torch-CG program has
-been replaced by this BART workflow.
+This repository tool prepares measured Wave data for BART reconstruction. The
+current supported user workflow is sagittal integrated Wave-MPRAGE; GRE is
+intentionally deferred until MPRAGE has passed real-data validation.
 
-## Scientific contract
+The user-facing input is a Wave-encoded Siemens TWIX file plus its matching
+Pulseq sequence. Python validates and prepares BART inputs. The sample Bash
+scripts show every `bart ecalib` and `bart wave` command explicitly; Python
+does not launch BART in the new MPRAGE workflow.
 
-For validated sagittal MPRAGE, logical `(RO, LIN, PAR)` maps to physical
-`(Z, Y, X)`. The tool changes LIN and/or PAR only. It never crops readout.
+## Data and operator contract
 
-Each case performs these operations in order:
+For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical
+`(Z, Y, X)`. Readout and physical-Z resolution are never cropped.
 
-1. center-crop the full no-wave k-space in LIN/PAR;
-2. inverse FFT on the requested target matrix at unchanged physical FOV;
-3. preserve and center-embed the original readout in the oversampled Wave FOV;
-4. rebuild the final source PSF phase planes on the target PE grid;
-5. apply Wave encoding and transform PE back to k-space; and
-6. apply the cropped acquisition/ACS mask.
+Accepted measured sampling is determined from TWIX MDH coordinates:
 
-The program deliberately does not center-crop already Wave-encoded k-space.
-The included operator test demonstrates that the two orderings are generally
-not equivalent.
+- duplicate-free fully sampled `R1`; or
+- a complete regular factor-three logical-LIN lattice for every PAR partition
+  (`R3x1`).
 
-Before preparing any target case, two gates must pass:
+Other, ambiguous, duplicated, incomplete, or out-of-range sampling is
+rejected. A valid factor-three image lattice may omit the exact logical center
+when the separate integrated ACS contains it; its measured LIN residue is
+preserved. The sequence trajectory must contain both Wave axes.
 
-- extracted PSF phase planes must regenerate the source PSF within strict
-  complex-error tolerances; and
-- crop-first Wave synthesis on the native grid must reproduce the supplied
-  source Wave k-space.
+Native and retrospective PSFs are calculated directly on their requested PE
+grid from:
 
-## Reconstruction and export
+- the two sequence-derived Wave trajectory displacements; and
+- the integrated calibration phase-plane coefficients `a`, `b`, and `c`.
 
-Sensitivity maps are interpolated only in PE and RSS-renormalized. Calibration
-k-space is center-cropped only in PE and retained in each case's BART input
-contract. The primary backend is `bart wave`; every reconstruction command
-always includes GPU option `-g`. LLR uses BART's split-complex `-v` form and is
-recombined using the previously validated rule.
+LR PSFs are neither cropped nor interpolated. Measured-Wave LR k-space is
+created by direct centered LIN/PAR cropping, preservation of the measured LIN
+residue, and explicit factor-two selection on PAR, without interpolation,
+forward simulation, or inferred ACS rows. The nearest PE matrices divisible
+by four are used, and manifests record the achieved resolution.
 
-After BART reconstruction, the actual retrospective Wave-k-space norm is
-restored. The pinned Wave-MPRAGE exporter writes normalized magnitude and
-phase directly in canonical RAS with target achieved voxel sizes.
+The older crop-first operation for a no-Wave dataset remains available as
+`wave_retro_lr.retrospective.synthesize_wave_from_no_wave_crop`. It is an
+explicit utility for `synthetic_wave_for_reg_baseline`, not a user-facing
+measured-data mode.
 
-## Configuration
+## Reconstruction defaults
 
-Use one JSON file containing explicit source, companion, output, case, and
-reconstruction settings. See
-[`configs/retrospective_low_resolution.example.json`](configs/retrospective_low_resolution.example.json).
-Source discovery is intentionally shallow: the source BART `manifest.json` is
-authoritative for Wave k-space and PSF basenames, while maps, calibration
-k-space, no-wave k-space, sequence, and TWIX are explicit companion inputs.
+The normal MPRAGE sample performs one BART `ecalib` with crop `0.6` by default.
+For measured R3x1 it uses Wavelet/FISTA with lambda `2.2e-2`; the crop and R3
+lambda may be overridden on the command line. R1 uses unregularized FISTA
+(`-w -f -r 0`).
 
-Requested resolution uses physical `[X, Y, Z]` millimetres. Each target PE
-matrix is rounded to its nearest multiple of four; readout remains unchanged.
-Requested and matrix-achieved resolutions are both stored. Output folders use
-the achieved resolution and acceleration, for example:
+The pinned `macha` BART `ecalib` command does not provide a `-g` option, so its
+explicit command is `bart ecalib -m 1 -c ...`. BART `wave` does support GPU,
+and every reconstruction command requires `-g`.
 
-| Requested XYZ resolution (mm) | Logical RO, LIN, PAR matrix | Achieved XYZ resolution (mm) |
+The retrospective sample estimates native CSMs once and runs four sequential
+R3x2 cases:
+
+| Case | Requested physical XYZ resolution | BART Wave solver |
 | --- | --- | --- |
-| 1.5 x 1.0 x 1.0 | 256 x 256 x 172 | 1.488372 x 1.0 x 1.0 |
-| 1.0 x 1.5 x 1.0 | 256 x 172 x 256 | 1.0 x 1.488372 x 1.0 |
-| 1.25 x 1.25 x 1.0 | 256 x 204 x 204 | 1.254902 x 1.254902 x 1.0 |
+| native | source resolution | Wavelet/FISTA, locked `1.5e-2` |
+| LR-X | `1.5 x 1.0 x source-Z` mm | unregularized FISTA |
+| LR-Y | `1.0 x 1.5 x source-Z` mm | unregularized FISTA |
+| LR-XY | `1.25 x 1.25 x source-Z` mm | unregularized FISTA |
 
-```text
-retrospective_low_resolution/
-├── batch_manifest.json
-├── res1.49x1x1mm_R3x2/
-│   ├── case_manifest.json
-│   ├── bart_inputs/
-│   ├── bart_output/
-│   ├── bart_wave.log
-│   └── nifti/
-└── res1.25x1.25x1mm_R3x2/
-```
+LR CSMs are derived from the one accepted native ecalib map set by centered
+Fourier resampling in PE at unchanged FOV, followed by coil-RSS
+renormalization. Readout maps are not resized. Every reconstruction exports
+magnitude and phase NIfTI files. Exact shell-escaped `ecalib` and `wave`
+commands are retained beside the BART outputs and copied into the NIfTI JSON
+sidecars; an existing CSM is reused only when its command record matches.
 
-Sampling masks are used in memory and are not copied into result trees.
-Source and companion manifest hashes, geometry, crop bounds, requested and
-achieved resolution, matrix, FOV, BART inputs, commands, norms, and canonical
-outputs are recorded in manifests. Existing non-empty output trees are refused
-unless `--resume` finds matching case metadata.
+## Environment
 
-For solver-only comparisons on the same target grids, set
-`prepared_cases_root` to a completed `retrospective_low_resolution` workflow.
-The pipeline verifies the prior batch, case geometry, source provenance, and
-BART-input hashes, then links those immutable inputs into the new output tree
-instead of synthesizing them again. The completed preparation's finite PSF and
-source-operator gates are reused with that hash-bound batch, avoiding repeated
-full-volume operator checks during solver sweeps. Wavelet mode permits `lambda: 0` so the
-effective GPU command uses BART Wave FISTA (`-w -f -r 0 -g`) as an
-unregularized solver control.
-
-## Commands
-
-Activate the appropriate Python environment and BART build first. Keep the
-machine-specific startup locations in an ignored local launcher:
+Activate the repository environment and the host-compatible BART build. Keep
+their actual locations in an ignored local launcher, for example:
 
 ```bash
 source "$CONDA_SETUP"
-conda activate "$WAVE_RECON_CONDA_ENV"
+conda activate "$WAVE_RECON_ENV"
 source "$BART_STARTUP"
 ```
 
-Structural validation reads JSON, sequence metadata, NPY headers, and CFL
-headers only; it creates no output:
+The scripts resolve `python` and `bart` from `PATH`. Do not record a
+machine-specific executable or dataset path in a tracked file; use an ignored
+`.local.sh` launcher when desired.
+
+## Normal measured-data command
+
+Choose a new output root, then run:
 
 ```bash
-python tools/wave_retro_lr_recon/scripts/run_retro_lr.py \
-    --config /path/to/config.json \
-    --validate-only
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq
 ```
 
-Prepare BART inputs and run the source-operator gates without reconstruction:
+Optional numerical overrides are:
 
 ```bash
-python tools/wave_retro_lr_recon/scripts/run_retro_lr.py \
-    --config /path/to/config.json \
-    --prepare-only
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq \
+    --ecalib-crop 0.55 \
+    --r3-lambda 1.8e-2
 ```
 
-Run or resume the complete GPU workflow:
+Outputs are grouped under `OUTPUT_ROOT/normal/{bart_inputs,bart_output,nifti}`.
+
+## Retrospective R3x2 and LR command
+
+Use the same TWIX, output root, and sequence values as the normal command:
 
 ```bash
-python tools/wave_retro_lr_recon/scripts/run_retro_lr.py \
-    --config /path/to/config.json \
-    --resume
+tools/wave_retro_lr_recon/scripts/sample_mprage_retro_lr_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq
 ```
+
+If compatible normal inputs or maps already exist, they are reused. Otherwise
+the script prepares normal inputs from TWIX and runs ecalib once. The four
+cases are written beneath `OUTPUT_ROOT/retro/`.
+
+## Implementation map
+
+- `wave_retro_lr/mprage.py`: measured MPRAGE preparation and orchestration;
+- `wave_retro_lr/sampling.py`: MDH sampling classification;
+- `wave_retro_lr/psf.py`: direct calibrated PSF evaluation;
+- `wave_retro_lr/retrospective.py`: measured-Wave crop, CSM resampling, and the
+  explicitly named synthetic no-Wave utility;
+- `wave_retro_lr/gre.py`: non-runnable GRE adapter placeholder pending
+  real-data MPRAGE validation;
+- `wave_retro_lr/bart_io.py`: bounded BART CFL I/O;
+- `wave_retro_lr/core.py`: geometry, grids, FFT, masks, and compatibility
+  primitives.
+
+`wave_retro_lr/pipeline.py` and `scripts/run_retro_lr.py` temporarily preserve
+the old config-driven no-Wave interface used by the synthetic tool. They are
+not the measured-data MPRAGE entry points and remain only until the synthetic
+cleanup migrates its consumers.
+
+The small `pyproject.toml` is retained as a dependency and Python-version
+contract for this tool; it does not make the directory an independent nested
+repository.
 
 ## Tests
 
-From this tool directory:
+From the parent repository:
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py'
+python -m unittest discover \
+    -s tools/wave_retro_lr_recon/tests \
+    -p 'test_*.py'
 ```
-
-The historical `wave-retro-lr-us-TODO.md` records the design analysis that led
-to the current manifest/BART implementation; it is not the active run guide.

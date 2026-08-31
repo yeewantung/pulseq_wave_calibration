@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-08-28, America/New_York
+Updated: 2026-08-30, America/New_York
 
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
@@ -8,31 +8,65 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-Start the final repository/output cleanup in a fresh session. Do not launch
-another reconstruction, sweep, evaluation, presentation refresh, or archive
-operation before the cleanup audit. The experiment and requested presentation
-package are frozen.
+Start the final **source-repository cleanup** in a fresh session. The separate
+R1 and R3 private-output cleanups are complete, indexed, checksum-validated,
+and outside the remaining task. Do not move, delete, relink, regenerate, or
+otherwise normalize those output trees while cleaning the repository. Do not
+launch reconstruction, sweep, evaluation, presentation, or other production
+jobs. The experiment and presentation deliverables are frozen.
 
-The cleanup session must begin read-only:
+Begin the repository task read-only:
 
-1. read the applicable `AGENTS.md` files, this handover, and
-   `EXPERIMENT_PLAN.md`;
-2. inventory the dirty worktree and separate the accumulated in-scope tool
-   changes from unrelated user work—do not reset, discard, or overwrite any
-   existing change;
-3. inventory the private output tree by manifest and hash, classifying each
-   directory as canonical, retained diagnostic/historical, duplicate sweep, or
-   rebuildable intermediate;
-4. propose the repository consolidation, output-index merge, archive moves,
-   and any deletion candidates before moving or deleting material; and
-5. after implementation, update all downstream paths/manifests, run both tool
-   test suites, run `git diff --check`, and audit every tracked/staged file for
-   private paths.
+1. read the applicable `AGENTS.md` files, this handover,
+   `EXPERIMENT_PLAN.md`, `docs/r1_dataset_processing_todo.md`, and the private
+   cleanup summary;
+2. inspect the complete repository structure, tracked scripts, tests,
+   documentation, references, Git state, and ignored `.local.*` files;
+3. identify redundant entry points and implementation, historical or
+   diagnostic code, stale documentation, and every downstream test, import,
+   launcher, and documentation consumer;
+4. present a concrete repository-only move/archive/removal map before changing
+   structure or deleting files; and
+5. after approved implementation, update imports, compatibility entry points,
+   tests, README/script maps, and this handover; run both test suites,
+   `git diff --check`, and tracked/staged private-path audits.
 
-No large output should be deleted merely because it appears redundant. Verify
-canonical consumers and hashes first, prefer reversible archive moves, and ask
-before any irreversible deletion. Actual machine paths must remain only in
-ignored `.local.sh`/`.local.json` files or private generated manifests.
+The previously proposed direction is to move workflow example JSON into
+`configs/`, keep matching machine-local JSON ignored, factor shared sweep and
+matched-grid evaluation engines behind thin compatible CLIs, archive truly
+superseded pilot/evaluator code with its tests and provenance, and clearly
+separate retained diagnostics from active entry points. Treat this as the
+starting proposal, not permission to remove a file without checking all
+consumers. Do not reset or discard changes, commit without review, or push
+unless explicitly requested. Actual machine paths must remain only in ignored
+`.local.sh`/`.local.json` files or private generated manifests.
+
+## Completed private-output cleanup
+
+Both private dataset roots now have a current root `OUTPUTS_INDEX.md` that is
+the authority for retained paths, classifications, relocations, tombstones,
+and recovery records.
+
+- R1 cleanup consolidated outputs into the no-Wave R3x1, synthetic-Wave R3x1,
+  synthetic-Wave R3x2, and low-resolution R3x2 project trees. Approved NIfTIs,
+  PSFs, CSMs, masks, sampling masks, the canonical full-grid calibration, and
+  compact provenance were retained. Approved rebuildable intermediates,
+  diagnostics, rejected masks, and unnecessary JSON were deleted.
+- R3 cleanup retained the fixed raw/DICOM and BART workspaces, organized the
+  remaining projects under the same project-oriented scheme, converted all
+  retained internal links to relative links, and preserved the current
+  presentation deliverable without creating new NIfTI links.
+- The superseded theoretical R3x1 output project was removed completely at the
+  user's direction. Its binaries were not archived and require reconstruction
+  if ever needed again; its inventory, deletion ledger, and provenance remain
+  in the private cleanup archive.
+- The final R3 deletion removed 373 regular files and one symlink. The measured
+  net allocated-space reduction was 82,512,261,120 bytes. The retained R3
+  scientific tree passed full-file hashing with 1,680 regular files and 516
+  relative, resolving symlinks.
+- The R3 recovery archive is `_archive/cleanup_20260830/` below the private
+  output root. The complete cross-dataset decision record is the private
+  `clean_up_summary.md`; do not copy its machine paths into tracked files.
 
 ## Frozen completion state
 
@@ -52,7 +86,9 @@ presentation follow-up remains.
 
 The retrospective-resolution Wavelet and corrected-LLR sweeps and their fresh
 matched-grid evaluations are complete. The superseded native-grid Wavelet
-evaluator remains diagnostic only and must not be promoted during cleanup.
+evaluation output was deleted during the approved R1 cleanup; its tracked
+evaluator code remains a repository-cleanup classification candidate and must
+not be mistaken for the current matched-grid path.
 The explicit presentation choices are recorded in
 `retrospective_low_resolution_selected_cases/selection_decision.json`:
 
@@ -269,17 +305,17 @@ to CPU; stop and document any command-specific incompatibility.
 The approved metrics-only reference mask uses FSL BET's robust center
 estimation with fractional threshold `0.59`, followed by a one-voxel outward
 dilation. The user visually approved this boundary and its L/R orientation.
-The `0.55` expanded candidate was too large, the `0.60` expanded candidate was
-slightly too small, and both are retained only as rejected diagnostics. Do not
+The `0.55` expanded candidate was too large and the `0.60` expanded candidate
+was slightly too small. Their rejection decisions remain recorded, while the
+rejected diagnostic payloads were removed in the completed R1 cleanup. Do not
 use BET for reconstruction or display.
 
 ## R3 presentation-optimization continuation state
 
-The isolated output tree is:
+After output cleanup, the isolated project is organized as:
 
 ```text
-$R3_PRODUCT_ROOT/
-  synthetic_wave_grappa_5x5x5_ncc12_r3x2_presentation_optimization
+$R3_PRODUCT_ROOT/synthetic_wave_r3x2/presentation_optimization
 ```
 
 It references the accepted R3x2 BART inputs and lambda-zero reconstruction by
@@ -292,8 +328,8 @@ BART's complex-decomposition forward operator. BART commit `60dceb33` replaces
 that loop with device-aware multidimensional primitives. The production
 lambda-zero FISTA equivalence gate then passed: recombined split-complex versus
 native-complex relative L2 was `1.36985e-6`, below the frozen `1e-5` limit.
-The failed pre-fix CG attempt is retained under the presentation tree's `diagnostics/`
-directory.
+The failed pre-fix CG attempt's rejection remains in provenance, but its large
+diagnostic payload was deleted during the approved R3 cleanup.
 
 `run_r3_presentation_optimization.sh` is resumable and always passes `-g`. It runs three
 Wavelet values (`1e-6`, `1e-5`, `1e-4`) and the focused corrected block-8 LLR
@@ -309,20 +345,20 @@ with both IDEA DICOM variants and the existing no-wave GRAPPA/SENSE and Wave
 outputs. Those existing reconstructions are comparison references only, not a
 true baseline, and the pilot does not select a regularization parameter. The
 measured ACS comes explicitly from the parent full-Wave BART inputs; the R3x2
-directory supplies the masked reconstruction k-space and linked PSF without
-duplicating the 1.5 GB calibration CFL. The default output tree is:
+directory supplied the masked reconstruction k-space and linked PSF without
+duplicating the 1.5 GB calibration CFL. The retained compact negative-result
+provenance is organized under:
 
 ```text
-$R3_PRODUCT_ROOT/
-  ecalib_intensity_c050_wave_lambda0
+$R3_PRODUCT_ROOT/synthetic_wave_r3x1/ecalib_intensity_diagnostic
 ```
 
 The user rejected `ecalib -I` as a solution to the profile mismatch. The
 brain-core-to-shell ratio changed from `0.966` for the prior Wave lambda-zero
 case to `0.895` with `-I`; no-wave GRAPPA and SENSE were both approximately
-`0.975`. Retain this tree as a manifested negative result. Do not use its maps
-for production or use either raw or normalized DICOM intensities to rank the
-provisional regularization sweep.
+`0.975`. Its large rejected diagnostic intermediates were deleted during the
+approved R3 cleanup. Do not use its maps for production or use either raw or
+normalized DICOM intensities to rank the provisional regularization sweep.
 
 ## Repository state
 
@@ -332,19 +368,20 @@ Repository:
 $REPOSITORY_ROOT
 ```
 
-The branch tip is synchronized with `origin/main` at the start of this
-handover refresh, but the working tree is intentionally dirty with accumulated
-implementation, test, documentation, and retrospective-library changes from
-the completed follow-up work. Do not assume any modified or untracked file is
-disposable. The current tip before cleanup is:
+Before this handover-only edit, the tracked worktree and index were clean at:
 
 ```text
-ce0dab8 Package presentation metrics and orientation TIFFs
+ef14968 Complete retrospective sweeps and R3x1 presentation
 ```
 
-Check `git status --short --branch` before working, inventory the complete diff,
-and form cleanup commits without resetting the tree. The historical tracker is
-under `docs/archive/`, and the active plan is `EXPERIMENT_PLAN.md`.
+The local `origin/main` tracking ref also pointed to `ef14968`; no fetch was
+performed to verify the server, and no push was performed during output
+cleanup. This `HANDOVER.md` update is the only intended tracked change for the
+next session. Check `git status --short --branch` before working and do not
+assume any additional modification or untracked file is disposable. Inventory
+the complete diff and form cleanup commits without resetting the tree. The
+historical tracker is under `docs/archive/`, and the active plan is
+`EXPERIMENT_PLAN.md`.
 
 ## Dataset roles and baseline status
 
@@ -538,11 +575,10 @@ full-resolution grid. Display uses independent positive p99.5 scaling and is
 not an intensity/SNR comparison. BET and DICOM are not used.
 
 This review caught the historical full-resolution LLR NIfTI orientation. The
-old review is retained under
-`diagnostics/rejected_visual_review_historical_orientation_reference`. The
-launcher re-exported the existing BART CFL through the corrected shared NIfTI
-producer without reconstructing and stores that canonical reference under
-`full_resolution_reference/`. The review code requires
+rejected review payload was deleted during the approved R1 cleanup after its
+decision was recorded. The launcher re-exported the existing BART CFL through
+the corrected shared NIfTI producer without reconstructing and stores that
+canonical reference under `full_resolution_reference/`. The review code requires
 `NIfTICanonicalRAS=true` and affine flips `[true,false,true]` in every Wave
 export sidecar, preventing reuse of the historical file.
 
@@ -568,10 +604,11 @@ in the lower-Y case, and X/Y `0.953/0.946` in the balanced case. These are
 descriptive tradeoffs, not a selected winner.
 
 The first background-based apparent-SNR summary was scientifically rejected
-because BART's reconstructed air background is nearly zero. It is preserved
-under `diagnostics/rejected_resolution_analysis_background_noise_proxy`.
-Background statistics remain QC only; the accepted summary uses a fixed
-smooth-brain signal/local-residual proxy and explicitly does not call it SNR.
+because BART's reconstructed air background is nearly zero. Its decision is
+recorded, while its diagnostic payload was deleted during the approved R1
+cleanup. Background statistics remain QC only; the accepted summary uses a
+fixed smooth-brain signal/local-residual proxy and explicitly does not call it
+SNR.
 
 The fully sampled R1 retrospective batch uses the same target matrices but the
 frozen Wavelet `lambda=1.5e-2` configuration instead of the historical
@@ -579,43 +616,32 @@ corrected LLR setting. All three cases, the generalized review, explicit visual
 approval, and descriptive analysis are complete. Backward compatibility is
 preserved and private paths remain in ignored local files.
 
-## Accepted historical R3 outputs
+## Current R3 output organization
 
-Accepted R3x1 5x5x5-derived synthetic Wave tree:
-
-```text
-$R3_PRODUCT_ROOT/synthetic_wave_grappa_5x5x5_ncc12
-```
-
-Accepted R3x2 sweep/evaluation:
+The R3 root is frozen after cleanup. Its project-oriented scientific areas are:
 
 ```text
-$R3_PRODUCT_ROOT/synthetic_wave_grappa_5x5x5_ncc12_r3x2
+$R3_PRODUCT_ROOT/synthetic_no_wave_r3x1
+$R3_PRODUCT_ROOT/synthetic_wave_r3x1
+$R3_PRODUCT_ROOT/synthetic_wave_r3x2
+$R3_PRODUCT_ROOT/synthetic_wave_r3x2_LR
+$R3_PRODUCT_ROOT/presentation
 ```
 
-The complete 25-case R3x2 evaluation is retained as a historical pilot. Its
-LLR interpretation is limited by the missing `-v`, and its DICOM predates the
-normalized reference. Do not overwrite it.
-
-Canonical accepted GRAPPA 5x5x5 results after cleanup:
-
-```text
-$R3_PRODUCT_ROOT/grappa_5x5x5_ncc12
-```
-
-The dataset-level canonical/historical inventory and deletion record is:
+The complete 25-case R3x2 evaluation remains under the historical-pilot
+project. Its LLR interpretation is limited by the missing `-v`, and its DICOM
+predates the normalized reference. The accepted GRAPPA, presentation
+optimization, regularization-transfer, low-resolution, and compact diagnostic
+provenance are classified by the current root index:
 
 ```text
 $R3_PRODUCT_ROOT/OUTPUTS_INDEX.md
 ```
 
-The old manifest path below is retained as a compatibility symlink:
-
-```text
-.../synthetic_wave_theoretical_ncc12/grappa_diagnostics
-```
-
-Do not alter `mprage_bart` or `gre_bart`.
+The superseded theoretical R3x1 project and its compatibility symlink no longer
+exist. Do not recreate them during repository cleanup. Do not alter the root
+raw `.dat`/`.dcm` material, product DICOM directories, `mprage_bart`, or
+`gre_bart`.
 
 ## Verification commands
 

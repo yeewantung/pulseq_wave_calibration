@@ -1,14 +1,18 @@
 [project]
 name = "wave-retro-lr-recon"
-version = "0.2.0"
-description = "Manifest-driven retrospective PE low-resolution Wave-MPRAGE reconstruction"
+version = "0.3.0"
+description = "Measured Wave-MPRAGE BART input preparation and retrospective PE cropping"
 requires-python = ">=3.11,<3.14"
 dependencies = [
+    "joblib>=1.5.3,<2",
+    "matplotlib>=3.8",
     "nibabel>=5.2",
     "numpy>=1.26,<3",
     "pymapvbvd>=0.6.1",
     "pypulseq>=1.4.2",
-    "scipy>=1.11"
+    "scipy>=1.11",
+    "sigpy>=0.1.27",
+    "torch>=2.2"
 ]
 
 [tool.uv]
