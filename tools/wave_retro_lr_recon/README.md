@@ -70,6 +70,22 @@ magnitude and phase NIfTI files. Exact shell-escaped `ecalib` and `wave`
 commands are retained beside the BART outputs and copied into the NIfTI JSON
 sidecars; an existing CSM is reused only when its command record matches.
 
+Reconstruction and presentation masking are separate workflows. The normal
+and retrospective reconstruction scripts write only canonical NIfTIs. The
+optional collection script creates byte-identical canonical copies and
+whole-head-masked derivatives beneath `OUTPUT_ROOT/nifti_collection`. The
+canonical files under `normal/nifti` and `retro/*/nifti` remain unchanged and
+are the scientific source of record.
+
+The mask is estimated once from the normal canonical magnitude. It supports a
+high-confidence head core with distance-limited low-threshold growth, optional
+physical opening, physical closing, the largest 26-connected 3D component, 3D
+hole filling, and optional physical dilation. BET is not used. On LR grids,
+this same mask is mapped by nearest-neighbor interpolation in NIfTI physical
+space; it is never re-estimated from a noisier R3x2 image. These masked
+derivatives are for viewing and background suppression, not for
+regularization-sweep evaluation.
+
 ## Environment
 
 Activate the repository environment and the host-compatible BART build. Keep
@@ -120,9 +136,52 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_retro_lr_recon.sh \
     /path/to/matching_wave_mprage.seq
 ```
 
-If compatible normal inputs or maps already exist, they are reused. Otherwise
-the script prepares normal inputs from TWIX and runs ecalib once. The four
-cases are written beneath `OUTPUT_ROOT/retro/`.
+Compatible normal inputs and maps are reused. If absent, the inputs are
+prepared from TWIX and ecalib is run once. The four canonical cases are
+written beneath `OUTPUT_ROOT/retro/`.
+
+## Optional whole-head-masked NIfTI collection
+
+After running the normal reconstruction and any desired retrospective cases,
+build the separate presentation collection with:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_nifti_collection.sh \
+    /path/to/output_root \
+    --require-retro
+```
+
+Omit `--require-retro` when only the normal reconstruction should be
+collected. The real-data-validated starting defaults are low threshold `0.02`,
+core threshold `0.05`, maximum core-growth distance `12 mm`, smoothing `1 mm`,
+opening `0 mm`, closing `1.5 mm`, and dilation `0 mm`. Subject-specific
+overrides are accepted by the separate script and recorded in the manifest;
+they never complicate or change the reconstruction command.
+
+The collection layout is:
+
+```text
+OUTPUT_ROOT/
+├── normal/nifti/                         # canonical, unmasked source
+├── retro/<case>/nifti/                   # canonical, unmasked source
+└── nifti_collection/
+    ├── original_nifti/
+    │   ├── normal/
+    │   └── retro/<case>/
+    ├── head_masked_nifti/
+    │   ├── normal/
+    │   └── retro/<case>/
+    ├── masks/
+    └── manifest.json
+```
+
+Here `<case>` is `native_r3x2`, `lr_x_1p5mm_r3x2`,
+`lr_y_1p5mm_r3x2`, or `lr_xy_1p25mm_r3x2`.
+
+This script never runs k-space preparation, ecalib, or Wave reconstruction.
+Its optional parameters are listed by
+`scripts/build_mprage_nifti_collection.py --help`. Actual subject paths and
+preferred overrides may be kept in an ignored `.local.sh` wrapper.
 
 ## Implementation map
 
@@ -136,6 +195,8 @@ cases are written beneath `OUTPUT_ROOT/retro/`.
   real-data MPRAGE validation;
 - `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
   split-complex output recombination;
+- `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,
+  normal-derived whole-head mask, physical-grid mask mapping, and provenance;
 - `wave_retro_lr/core.py`: geometry, grids, FFT, masks, and compatibility
   primitives.
 
