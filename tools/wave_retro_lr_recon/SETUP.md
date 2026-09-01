@@ -1,0 +1,227 @@
+# Reconstruction environment setup
+
+This tool uses two independent runtime layers:
+
+1. a Python 3.11--3.13 environment for TWIX/sequence preparation, validation,
+   BART CFL I/O, and NIfTI conversion; and
+2. a CUDA-enabled BART executable for every `bart wave -g` reconstruction.
+
+Installing CUDA-enabled PyTorch or CuPy in Python does not make BART
+GPU-enabled. Conversely, a CUDA-enabled BART build does not install the Python
+dependencies. Prepare and validate both layers before using the sample scripts.
+
+## Obtain the source and submodule
+
+From the parent repository root, initialize the pinned Wave-MPRAGE dependency:
+
+```bash
+git submodule update --init external/wave-mprage
+cd tools/wave_retro_lr_recon
+```
+
+The Python adapter imports focused TWIX, calibration, geometry, and NIfTI
+helpers from that exact submodule path. A separately installed `wave-mprage`
+package or an unrelated sibling checkout is not a substitute.
+
+## Create the Python environment
+
+### Recommended: standard venv and pip
+
+Pip 25.1 or newer can install the same standardized dependency group directly
+from `pyproject.toml`:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group recon
+python scripts/prepare_mprage_normal.py --help
+```
+
+Python 3.12 is also supported. Keep the environment inside the tool directory
+or in another user-controlled location; do not commit it.
+
+#### Reactivate the same environment
+
+The `.venv` directory persists after the shell closes. For continued work,
+return to the tool directory and activate that existing environment; do not
+run `python -m venv` or reinstall its packages again:
+
+```bash
+cd tools/wave_retro_lr_recon
+source .venv/bin/activate
+python scripts/prepare_mprage_normal.py --help
+```
+
+If local server instructions require a base module or Conda environment,
+activate that host environment before `source .venv/bin/activate`. Source the
+host's BART startup script after Python activation so that `bart` resolves to
+the build for the current machine.
+
+Confirm that the existing environment is active with:
+
+```bash
+command -v python
+python --version
+```
+
+`command -v python` should resolve inside `wave_retro_lr_recon/.venv/bin`.
+Run `deactivate` when finished. Reinstall the `recon` dependency group only
+when `pyproject.toml` changes.
+
+### Optional: uv
+
+Users who already manage Python environments with `uv` may create the same
+tool-local `.venv` by running:
+
+```bash
+uv sync
+source .venv/bin/activate
+python scripts/prepare_mprage_normal.py --help
+```
+
+The `recon` dependency group in `pyproject.toml` is the default uv group. This
+tool currently has no committed `uv.lock`, so `uv sync` resolves versions that
+satisfy the recorded bounds rather than reproducing an exact lockfile.
+
+Commands can also be run without activating the environment:
+
+```bash
+uv run python scripts/prepare_mprage_normal.py --help
+```
+
+### Managed-cluster environment
+
+On a managed system, follow the server `AGENTS.md` instructions for selecting
+the required base Python environment before creating or reactivating the
+tool-local venv. A machine-local launcher may contain the actual setup paths
+and environment name:
+
+```bash
+source /path/to/conda.sh
+conda activate wave-reconstruction-environment
+source /path/to/wave_retro_lr_recon/.venv/bin/activate
+source /path/to/bart_startup.sh
+```
+
+Save such a launcher as `scripts/environment.local.sh`. That name is ignored by
+the parent repository and is the correct place for machine-specific paths.
+
+## Provide a CUDA-enabled BART build
+
+The supported reconstruction path requires a BART build whose `wave` command
+accepts and successfully executes `-g`. The sample scripts intentionally stop
+if `bart` is absent and never fall back to CPU reconstruction.
+
+### Build BART with CUDA support
+
+Use a reviewed BART revision compatible with this tool; the validated cluster
+workflow currently uses the BART v1.0 command interface. Install the build
+requirements for the target host, including:
+
+- a C/C++ compiler supported by the selected CUDA toolkit;
+- the CUDA compiler, headers, and runtime/development libraries;
+- FFTW, BLAS, and LAPACK/LAPACKE development libraries; and
+- GNU Make and the other prerequisites listed by that BART revision.
+
+In the BART source root, create a host-specific `Makefile.local`. The exact
+compiler paths, CUDA library directory, and GPU architecture must match the
+target machine. A minimal starting template is:
+
+```make
+CC = gcc
+CXX = g++
+
+CUDA = 1
+CUDA_BASE = /path/to/cuda
+CUDA_LIB = lib64
+NVCC = /path/to/cuda/bin/nvcc
+CUDA_CC = gcc
+GPUARCH_FLAGS = -gencode arch=compute_SM,code=sm_SM
+
+OPENBLAS = 1
+OMP = 1
+FFTWTHREADS = 1
+```
+
+Replace both `SM` tokens with the target GPU compute capability without the
+decimal point, for example `89` for compute capability 8.9. Some CUDA layouts
+use `lib` rather than `lib64`. Additional include, linker, rpath, or explicit
+BLAS settings may be required by the host; keep those in the host build rather
+than in this source repository.
+
+Build and activate BART according to its own revision-specific documentation.
+A typical source build is:
+
+```bash
+make clean
+make -j4
+export BART_TOOLBOX_PATH=/path/to/bart-source
+export TOOLBOX_PATH="$BART_TOOLBOX_PATH"
+export PATH="$BART_TOOLBOX_PATH:$PATH"
+```
+
+Never reuse `Makefile.local` blindly across servers. In particular, the target
+GPU architecture and CUDA/host-compiler pairing must be rechecked.
+
+## Validate both layers
+
+Run these checks on a node or allocation where the intended GPU is visible:
+
+```bash
+python --version
+python - <<'PY'
+import nibabel
+import numpy
+import pymapvbvd
+import pypulseq
+import scipy
+import sigpy
+import torch
+print("Python reconstruction imports: OK")
+PY
+
+nvidia-smi
+command -v bart
+bart version
+bart wave -h 2>&1 | grep -- '-g'
+```
+
+On Linux, also confirm that the selected BART executable resolves its CUDA
+libraries and has no missing dependency:
+
+```bash
+ldd "$(command -v bart)" | grep -E 'cuda|cufft|cublas|not found'
+```
+
+If the BART build includes its CUDA FFT test executable, run it on the GPU
+node:
+
+```bash
+if [[ -x "$BART_TOOLBOX_PATH/test_cudafft" ]]; then
+    "$BART_TOOLBOX_PATH/test_cudafft"
+fi
+```
+
+The help text and linked libraries establish that CUDA support was compiled;
+only a CUDA test or actual `-g` operation on a visible GPU validates runtime
+execution. `nvidia-smi` failing in a login shell may simply mean that the GPU
+is available only inside a scheduled allocation.
+
+## Tool-specific BART behavior
+
+- Every `bart wave` command in the sample workflows contains `-g`.
+- The validated BART v1.0 `ecalib` command has no `-g` option, so this tool runs
+  `bart ecalib -m 1 -c ...` on CPU exactly once and reuses its recorded maps.
+- Python prepares inputs and converts outputs but never launches BART. Activate
+  Python and BART in the same shell before calling a sample Bash script.
+- Keep actual environment, CUDA, BART, TWIX, sequence, and output paths only in
+  ignored `*.local.sh` or `*.local.json` files.
+
+After setup, review the dataset-independent commands in `README.md` or run:
+
+```bash
+scripts/sample_mprage_normal_recon.sh --help
+scripts/sample_mprage_retro_lr_recon.sh --help
+scripts/sample_mprage_nifti_collection.sh --help
+```

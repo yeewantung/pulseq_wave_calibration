@@ -401,6 +401,12 @@ or discard later work. The historical tracker is under `docs/archive/`;
 `EXPERIMENT_PLAN.md`, the source cleanup plan, the pure-mask rerun plan, and
 the GRE plan together record current work.
 
+`tools/wave_retro_lr_recon/SETUP.md` separately documents the recommended
+standard-venv workflow (including later reactivation), optional uv usage,
+managed-environment integration, the CUDA-enabled BART build and activation
+contract, and GPU runtime checks. Keep its portable setup instructions
+synchronized when GRE adds or changes dependencies.
+
 ## Dataset roles and baseline status
 
 Original R1 candidates:

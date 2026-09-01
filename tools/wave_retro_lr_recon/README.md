@@ -119,6 +119,10 @@ The scripts resolve `python` and `bart` from `PATH`. Do not record a
 machine-specific executable or dataset path in a tracked file; use an ignored
 `.local.sh` launcher when desired.
 
+See [`SETUP.md`](SETUP.md) for the recommended standard-venv installation and
+reactivation workflow, optional uv usage, CUDA-enabled BART compilation and
+activation, and GPU validation.
+
 ## Normal measured-data command
 
 Choose a new output root, then run:
