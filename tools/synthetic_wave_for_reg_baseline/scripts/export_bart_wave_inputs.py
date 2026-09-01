@@ -18,8 +18,8 @@ from dataset_manifest import (
     load_passed_inspection,
 )
 from sampling_mask import (
+    historical_cartesian_with_full_pe1_acs_mask,
     load_product_mask,
-    retrospective_cartesian_mask,
     write_masked_bart_kspace,
 )
 from wave_synthesis import logical_array_sha256, logical_bart_cfl_sha256, sha256_file
@@ -217,7 +217,7 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
     }
     _write_json(manifest_path, started)
 
-    mask, mask_info = retrospective_cartesian_mask(
+    mask, mask_info = historical_cartesian_with_full_pe1_acs_mask(
         expected_shape[1:3],
         accelerations=(config["pe1_acceleration"], config["pe2_acceleration"]),
         residues=(config["pe1_residue"], config["pe2_residue"]),

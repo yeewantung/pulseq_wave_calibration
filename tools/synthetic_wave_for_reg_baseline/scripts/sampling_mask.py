@@ -10,14 +10,28 @@ from typing import Any, Mapping
 import numpy as np
 
 
-def retrospective_cartesian_mask(
+def historical_cartesian_with_full_pe1_acs_mask(
     shape: tuple[int, int],
     *,
     accelerations: tuple[int, int],
     residues: tuple[int, int],
     fully_sampled_pe1_lines: list[int] | np.ndarray,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    """Build a PE1×PE2 lattice plus a PE1 ACS band spanning every partition."""
+    """Build the historical image-lattice/ACS-union mask for frozen readers.
+
+    This generator must not be used by new synthetic Wave preparation. Its
+    output includes calibration coordinates in reconstruction k-space and is
+    retained only to validate historical manifests and frozen results.
+
+    Args:
+        shape: Logical PE1/PE2 matrix.
+        accelerations: Image-lattice acceleration on both PE axes.
+        residues: Image-lattice residues on both PE axes.
+        fully_sampled_pe1_lines: Historical ACS lines merged into the mask.
+
+    Returns:
+        Historical boolean union mask and its JSON-native metadata.
+    """
     if len(shape) != 2 or any(int(value) < 1 for value in shape):
         raise ValueError("Sampling-mask shape must contain two positive dimensions.")
     npe1, npe2 = (int(value) for value in shape)
@@ -77,6 +91,33 @@ def retrospective_cartesian_mask(
         "unacquired_coordinate_count": int(mask.size - acquired_count),
     }
     return mask, metadata
+
+
+def retrospective_cartesian_mask(
+    shape: tuple[int, int],
+    *,
+    accelerations: tuple[int, int],
+    residues: tuple[int, int],
+    fully_sampled_pe1_lines: list[int] | np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Return the historical ACS-union mask for compatibility only.
+
+    Args:
+        shape: Logical PE1/PE2 matrix.
+        accelerations: Image-lattice acceleration on both PE axes.
+        residues: Image-lattice residues on both PE axes.
+        fully_sampled_pe1_lines: Historical ACS lines merged into the mask.
+
+    Returns:
+        Historical union mask and metadata. New code must use
+        ``wave_retro_lr.sampling.pure_cartesian_image_lattice_mask``.
+    """
+    return historical_cartesian_with_full_pe1_acs_mask(
+        shape,
+        accelerations=accelerations,
+        residues=residues,
+        fully_sampled_pe1_lines=fully_sampled_pe1_lines,
+    )
 
 
 def product_mask_from_report(report: Mapping[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:

@@ -30,6 +30,95 @@ Tracked launchers contain no machine-specific absolute paths. For transfer
 runs, copy the tracked `.example.sh` launcher to the ignored `.local.sh` name
 and put private paths only in that local copy.
 
+## Corrected pure-mask rerun
+
+The corrected rerun is isolated from the frozen R1/R3 output trees. Copy
+`configs/pure_mask_regularization_rerun.example.json` to the ignored
+`configs/pure_mask_regularization_rerun.local.json` name and replace every
+placeholder path, hash, and explicit provenance assertion. The route has
+separate review-gated entry points:
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/prepare_pure_mask_rerun.py --help
+python tools/synthetic_wave_for_reg_baseline/scripts/run_pure_mask_sweeps.py --help
+python tools/synthetic_wave_for_reg_baseline/scripts/evaluate_pure_mask_sweeps.py --help
+python tools/synthetic_wave_for_reg_baseline/scripts/render_pure_mask_shortlist.py --help
+python tools/synthetic_wave_for_reg_baseline/scripts/record_pure_mask_selections.py --help
+```
+
+For server execution, put the confirmed paths in the ignored
+`scripts/run_pure_mask_rerun.local.sh`. From one user-created tmux session,
+invoke exactly one review-gated operation at a time:
+
+```bash
+RUNNER=tools/synthetic_wave_for_reg_baseline/scripts/run_pure_mask_rerun.local.sh
+$RUNNER validate-sources
+$RUNNER materialize-sources
+$RUNNER validate-inputs
+```
+
+The runner does not create or manage tmux sessions and never chains
+preparation, reconstruction, evaluation, or review actions.
+
+The accepted full no-Wave and full synthetic-Wave NPY files were intentionally
+deleted as rebuildable intermediates during the frozen-output cleanup. The
+`validate-sources` action validates the retained raw-data, coil-basis,
+theoretical-PSF, source-report, and cleanup-inventory bindings without writing.
+After review, `materialize-sources` reproduces both arrays inside the new run
+tree and requires their file hashes to exactly match the archived accepted
+hashes before preparation can continue.
+
+Run `--validate-only` first. It checks the accepted full no-Wave/full-Wave
+sources, approved BET mask, case-matched CSMs and theoretical PSFs, exact FOV
+and dimensions, finite values, CSM RSS normalization, PSF unit magnitude,
+artifact hashes, and named provenance assertions without writing outputs.
+Preparation and every later stage additionally require
+`--confirm-output-root` to exactly equal the reviewed local-config root.
+
+The five cases are native R3x1, native R3x2, LR-X R3x2, LR-Y R3x2, and LR-XY
+R3x2. Every mask is `pure_cartesian_image_lattice`; calibration is absent from
+the Wave reconstruction input. The 2026-08-21 synthetic route reuses the
+accepted theoretical sequence PSF because its Wave data are synthesized from
+no-Wave data. Refscan calibration applies to measured-Wave acquisitions and is
+never unioned with image k-space in either route.
+Preparation creates resolution-matched
+direct-FFT references, reuses the accepted case CSM/PSF pairs without ecalib
+or PSF calibration, and verifies bitwise acquired-sample equality plus exact
+zeros outside the mask. The coarse runner creates one FISTA lambda-zero
+control per case, the approved Wavelet grid, and corrected split-complex LLR
+grids for blocks 4, 8, and 16. Fine settings must be explicitly listed after
+coarse evaluation. Evaluation reads only sweep manifests, reports separate
+metric leaders, and never selects a composite or winner automatically.
+Orthogonal review figures apply the same per-candidate, BET-restricted LSQ
+intensity alignment used by the metrics and then use one direct-FFT-derived
+display window. Each Wavelet and LLR-block family also receives separate
+metric-versus-lambda curves. LR curves show native-grid and matched-1-mm
+results as distinct series; native cases show only the native grid. FISTA
+lambda zero is a horizontal control rather than a point on the logarithmic
+lambda axis.
+
+If an evaluation from the earlier display derivation already exists, refresh
+only its manifest-owned CSV, masks, and figures with the explicit dispatcher
+action:
+
+```bash
+$RUNNER refresh-coarse-evaluation
+```
+
+The refresh first verifies the existing sweep binding, recorded hashes, and
+absence of unowned files. It does not run BART or alter any reconstruction.
+After final manual selection, `build_pure_mask_presentation.py` can export a
+manifested package containing the five FISTA controls and five approved
+Wavelet magnitudes as canonical-RAS NIfTIs, three center-slice TIFFs per
+reconstruction, and the corresponding native/matched metric rows. The NIfTIs
+retain raw reconstruction intensity; TIFF comparisons reuse evaluation LSQ
+scales and one resolution-matched direct-FFT window per case.
+After reviewing those metrics, edit only the local `fine_sweep` and
+`manual_shortlist` sections. Those decision-only fields are deliberately
+excluded from the immutable preparation-contract hash. The shortlist renderer
+accepts only manifest-listed candidates, and the final recorder requires an
+explicit visual-review acknowledgement plus one manual selection per case.
+
 ## Current experiment
 
 The current execution target is the fully sampled 2026-08-21 MID00198 R1
@@ -250,9 +339,9 @@ The current production path is:
 4. `synthesize_wave_kspace.py` applies the theoretical sequence PSF.
 5. `validate_full_sampling_wave_operator.py` gates the real source with a
    `PSF=1` no-Wave identity and an all-coil full-sampling Wave inverse check.
-6. `export_bart_wave_inputs.py` masks and exports the synthetic Wave data.
-   `export_bart_wave_target_branch.py` reuses this masking/export logic when a
-   second acceleration target is branched from an accepted full-Wave encoding.
+6. `export_bart_wave_inputs.py` and `export_bart_wave_target_branch.py` are
+   historical ACS-union exporters retained for frozen provenance. They must
+   not prepare the corrected pure-mask rerun.
 7. `export_bart_calibration_acs.py` exports measured no-wave ACS for one
    reusable BART ESPIRiT calibration. Its manifest route explicitly selects
    direct fully sampled image data or a measured refscan.
@@ -419,8 +508,9 @@ the R3x2 directory supplies the retrospectively masked k-space and linked PSF.
 For acceleration comparisons,
 `export_bart_wave_inputs_retrospective.py` reuses the validated full synthetic
 Wave volume and theoretical PSF, builds an explicit Cartesian PE1×PE2 lattice
-plus fully sampled ACS, and exports a separate BART input tree. It does not
-repeat GRAPPA completion or Wave encoding.
+plus fully sampled ACS, and exports a separate historical BART input tree. It
+does not repeat GRAPPA completion or Wave encoding, but its union mask is not a
+valid input for the corrected pure-mask rerun.
 
 `reconstruct_no_wave_grappa_2d.py`, `prepare_no_wave_sense.py`, and
 `run_no_wave_sense.py` are retained diagnostic alternatives, not the selected

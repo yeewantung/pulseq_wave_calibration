@@ -20,4 +20,5 @@ AGENTS.md
 
 # User/server-specific configuration copied from tracked examples.
 /tools/synthetic_wave_for_reg_baseline/requirements/*.local.json
+/tools/synthetic_wave_for_reg_baseline/configs/*.local.json
 /tools/wave_retro_lr_recon/configs/*.local.json

@@ -8,7 +8,7 @@ import hashlib
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -63,6 +63,11 @@ class FullySampledInputs:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the fully sampled source-assembly command interface.
+
+    Returns:
+        Parser for validation and resumable source materialization.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--dataset-manifest",
@@ -75,6 +80,11 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=4,
         help="Number of PE2 partitions read, compressed, and flushed per checkpoint.",
+    )
+    parser.add_argument(
+        "--output-prefix",
+        type=Path,
+        help="Optional destination prefix outside the immutable dataset tree.",
     )
     parser.add_argument(
         "--resume",
@@ -316,8 +326,18 @@ def assemble_fully_sampled_kspace(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any] | None:
-    """Validate the source and optionally create its compressed k-space checkpoint."""
+    """Validate or create a compressed full-grid no-Wave checkpoint.
+
+    Args:
+        args: Parsed manifest, output override, validation, and resume settings.
+
+    Returns:
+        Completed assembly report, or ``None`` for validation-only execution.
+    """
     inputs = resolve_fully_sampled_inputs(args.dataset_manifest)
+    output_prefix = getattr(args, "output_prefix", None)
+    if output_prefix is not None:
+        inputs = replace(inputs, output_prefix=output_prefix.expanduser().resolve())
     if not inputs.twix.is_file():
         raise FileNotFoundError(f"TWIX file not found: {inputs.twix}")
     if not inputs.coil_basis.is_file():

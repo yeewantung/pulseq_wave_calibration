@@ -19,7 +19,10 @@ import numpy as np
 from bart_cfl import sha256_file
 from checkpoint_io import write_json_atomic
 from export_bart_wave_inputs import link_bart_pair
-from sampling_mask import retrospective_cartesian_mask, write_masked_bart_kspace
+from sampling_mask import (
+    historical_cartesian_with_full_pe1_acs_mask,
+    write_masked_bart_kspace,
+)
 from wave_synthesis import logical_array_sha256, logical_bart_cfl_sha256
 
 
@@ -181,7 +184,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if source_calibration.get("pe1_lines_half_open") != requested_acs:
         raise ValueError("The requested target ACS differs from the validated measured ACS.")
 
-    mask, mask_info = retrospective_cartesian_mask(
+    mask, mask_info = historical_cartesian_with_full_pe1_acs_mask(
         full_wave_shape[1:3],
         accelerations=(args.pe1_acceleration, args.pe2_acceleration),
         residues=(args.pe1_residue, args.pe2_residue),

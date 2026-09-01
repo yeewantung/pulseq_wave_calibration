@@ -1,0 +1,329 @@
+{
+  "format_version": 1,
+  "workflow": "synthetic_wave_pure_mask_regularization_rerun",
+  "output_root": "/path/to/new/pure_mask_regularization_rerun",
+  "geometry": {
+    "physical_fov_mm_xyz": [256.0, 256.0, 256.0],
+    "native_logical_matrix_ro_lin_par": [256, 256, 256],
+    "extended_wave_readout": 1024,
+    "virtual_coils": 12
+  },
+  "sampling": {
+    "mask_kind": "pure_cartesian_image_lattice",
+    "native_residue_lin_par": [1, 0]
+  },
+  "source": {
+    "no_wave_kspace": {
+      "path": "/path/to/accepted/full_no_wave_kspace.npy",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "manifest": {
+        "path": "/path/to/accepted/no_wave_source_manifest.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "assertions": [
+          {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+          {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+          {"label": "dimensions", "json_path": ["full_no_wave_kspace", "shape"], "equals": [256, 256, 256, 12]},
+          {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"}
+        ]
+      }
+    },
+    "native_full_wave_kspace": {
+      "path": "/path/to/accepted/full_wave_kspace.npy",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "manifest": {
+        "path": "/path/to/accepted/full_wave_synthesis_manifest.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "assertions": [
+          {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+          {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+          {"label": "dimensions", "json_path": ["full_wave_kspace", "shape"], "equals": [1024, 256, 256, 12]},
+          {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"},
+          {"label": "trajectory", "json_path": ["trajectory", "sequence_sha256"], "equals": "replace-with-accepted-trajectory-sha256"},
+          {"label": "psf_model", "json_path": ["psf", "kind"], "equals": "theoretical_sequence_trajectory_without_calibrated_correction"},
+          {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": "synthetic_from_fully_sampled_no_wave"},
+          {"label": "calibration_samples_merged", "json_path": ["calibration_samples_merged_into_wave_kspace"], "equals": false}
+        ]
+      }
+    },
+    "approved_bet_mask": {
+      "path": "/path/to/approved/bet_brain_mask.nii.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "manifest": {
+        "path": "/path/to/approved/metrics_reference_manifest.json",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "assertions": [
+          {"label": "approval", "json_path": ["brain_mask", "approved"], "equals": true},
+          {"label": "geometry", "json_path": ["brain_mask", "canonical_ras"], "equals": true}
+        ]
+      }
+    }
+  },
+  "cases": {
+    "native_r3x1": {
+      "expected_mask_logical_sha256": "ea4e03688efd6458eab1470c6a422ea08d2f7ffc377a4f86c72bbaf6c5e1418b",
+      "csm": {
+        "base": "/path/to/accepted/native/coil_sens",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/native/csm_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["csm", "shape"], "equals": [256, 256, 256, 12, 1]},
+            {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"},
+            {"label": "calibration_source", "json_path": ["csm", "calibration_source"], "equals": "fully_sampled_image_kspace"}
+          ]
+        }
+      },
+      "psf": {
+        "base": "/path/to/accepted/native/psf",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/native/psf_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["psf", "shape"], "equals": [1024, 256, 256, 1, 1]},
+            {"label": "trajectory", "json_path": ["trajectory", "sequence_sha256"], "equals": "replace-with-accepted-trajectory-sha256"},
+            {"label": "psf_model", "json_path": ["psf", "kind"], "equals": "theoretical_sequence_trajectory_without_calibrated_correction"},
+            {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": "synthetic_from_fully_sampled_no_wave"}
+          ]
+        }
+      }
+    },
+    "native_r3x2": {
+      "expected_mask_logical_sha256": "22c680851a8799e602ef3bdf8c0e0edc0eace80cc766a0210a8bc31fdca3926e",
+      "csm": {
+        "base": "/path/to/accepted/native/coil_sens",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/native/csm_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["csm", "shape"], "equals": [256, 256, 256, 12, 1]},
+            {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"},
+            {"label": "calibration_source", "json_path": ["csm", "calibration_source"], "equals": "fully_sampled_image_kspace"}
+          ]
+        }
+      },
+      "psf": {
+        "base": "/path/to/accepted/native/psf",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/native/psf_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["psf", "shape"], "equals": [1024, 256, 256, 1, 1]},
+            {"label": "trajectory", "json_path": ["trajectory", "sequence_sha256"], "equals": "replace-with-accepted-trajectory-sha256"},
+            {"label": "psf_model", "json_path": ["psf", "kind"], "equals": "theoretical_sequence_trajectory_without_calibrated_correction"},
+            {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": "synthetic_from_fully_sampled_no_wave"}
+          ]
+        }
+      }
+    },
+    "lr_x_r3x2": {
+      "expected_mask_logical_sha256": "aaa8dc49115a6c9baeb7b5f18e43d4b89e968e4d3270496b8ea815f0ca3c63d4",
+      "csm": {
+        "base": "/path/to/accepted/lr_x/coil_sens",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/lr_x/csm_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["csm", "shape"], "equals": [256, 256, 172, 12, 1]},
+            {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"},
+            {"label": "calibration_source", "json_path": ["csm", "calibration_source"], "equals": "fully_sampled_image_kspace"}
+          ]
+        }
+      },
+      "psf": {
+        "base": "/path/to/accepted/lr_x/psf",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/lr_x/psf_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["psf", "shape"], "equals": [1024, 256, 172, 1, 1]},
+            {"label": "trajectory", "json_path": ["trajectory", "sequence_sha256"], "equals": "replace-with-accepted-trajectory-sha256"},
+            {"label": "psf_model", "json_path": ["psf", "kind"], "equals": "theoretical_sequence_trajectory_without_calibrated_correction"},
+            {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": "synthetic_from_fully_sampled_no_wave"}
+          ]
+        }
+      }
+    },
+    "lr_y_r3x2": {
+      "expected_mask_logical_sha256": "2ffc344bb02f01f5b0d77019a380d33abd3f4228461824575e4c52eae81e3774",
+      "csm": {
+        "base": "/path/to/accepted/lr_y/coil_sens",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/lr_y/csm_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["csm", "shape"], "equals": [256, 172, 256, 12, 1]},
+            {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"},
+            {"label": "calibration_source", "json_path": ["csm", "calibration_source"], "equals": "fully_sampled_image_kspace"}
+          ]
+        }
+      },
+      "psf": {
+        "base": "/path/to/accepted/lr_y/psf",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/lr_y/psf_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["psf", "shape"], "equals": [1024, 172, 256, 1, 1]},
+            {"label": "trajectory", "json_path": ["trajectory", "sequence_sha256"], "equals": "replace-with-accepted-trajectory-sha256"},
+            {"label": "psf_model", "json_path": ["psf", "kind"], "equals": "theoretical_sequence_trajectory_without_calibrated_correction"},
+            {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": "synthetic_from_fully_sampled_no_wave"}
+          ]
+        }
+      }
+    },
+    "lr_xy_r3x2": {
+      "expected_mask_logical_sha256": "908e4cfa7161aabcb6cc20c1f41c9cabaacc99e6dc5a1b3637ab122349736e04",
+      "csm": {
+        "base": "/path/to/accepted/lr_xy/coil_sens",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/lr_xy/csm_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["csm", "shape"], "equals": [256, 204, 204, 12, 1]},
+            {"label": "coil_order", "json_path": ["coil_compression", "basis_sha256"], "equals": "replace-with-accepted-coil-order-sha256"},
+            {"label": "calibration_source", "json_path": ["csm", "calibration_source"], "equals": "fully_sampled_image_kspace"}
+          ]
+        }
+      },
+      "psf": {
+        "base": "/path/to/accepted/lr_xy/psf",
+        "header_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "payload_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "manifest": {
+          "path": "/path/to/accepted/lr_xy/psf_manifest.json",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "assertions": [
+            {"label": "dataset", "json_path": ["dataset_manifest", "sha256"], "equals": "replace-with-accepted-dataset-sha256"},
+            {"label": "fov", "json_path": ["geometry", "physical_fov_mm_xyz"], "equals": [256.0, 256.0, 256.0]},
+            {"label": "dimensions", "json_path": ["psf", "shape"], "equals": [1024, 204, 204, 1, 1]},
+            {"label": "trajectory", "json_path": ["trajectory", "sequence_sha256"], "equals": "replace-with-accepted-trajectory-sha256"},
+            {"label": "psf_model", "json_path": ["psf", "kind"], "equals": "theoretical_sequence_trajectory_without_calibrated_correction"},
+            {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": "synthetic_from_fully_sampled_no_wave"}
+          ]
+        }
+      }
+    }
+  },
+  "validation": {
+    "csm_support_threshold": 0.000001,
+    "csm_rss_tolerance": 0.005,
+    "psf_unit_magnitude_tolerance": 0.00002
+  },
+  "runtime": {
+    "bart": "bart",
+    "fft_workers": 4
+  },
+  "evaluation": {
+    "logical_to_canonical_axis_order": [2, 1, 0],
+    "logical_to_canonical_axis_flips": [false, false, true],
+    "orientation_manifest": {
+      "path": "/path/to/accepted/orientation_manifest.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "assertions": [
+        {"label": "orientation", "json_path": ["orientation", "logical_to_canonical_axis_flips"], "equals": [false, false, true]},
+        {"label": "canonical_ras", "json_path": ["orientation", "canonical_ras"], "equals": true}
+      ]
+    },
+    "manual_shortlist": {
+      "native_r3x1": [
+        {"method": "fista_lambda0", "lambda": 0.0, "block_size": null},
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null}
+      ],
+      "native_r3x2": [
+        {"method": "fista_lambda0", "lambda": 0.0, "block_size": null},
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null}
+      ],
+      "lr_x_r3x2": [
+        {"method": "fista_lambda0", "lambda": 0.0, "block_size": null},
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null}
+      ],
+      "lr_y_r3x2": [
+        {"method": "fista_lambda0", "lambda": 0.0, "block_size": null},
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null}
+      ],
+      "lr_xy_r3x2": [
+        {"method": "fista_lambda0", "lambda": 0.0, "block_size": null},
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null}
+      ]
+    },
+    "manual_final_selections": {
+      "native_r3x1": {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+      "native_r3x2": {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+      "lr_x_r3x2": {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+      "lr_y_r3x2": {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+      "lr_xy_r3x2": {"method": "wavelet", "lambda": 0.0115, "block_size": null}
+    }
+  },
+  "fine_sweep": {
+    "coarse_sweep_manifest": "/path/to/new/pure_mask_regularization_rerun/sweeps/coarse/sweep_manifest.json",
+    "coarse_evaluation_manifest": "/path/to/new/pure_mask_regularization_rerun/evaluation/coarse/evaluation_manifest.json",
+    "cases": {
+      "native_r3x1": [
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+        {"method": "llr", "lambda": 0.0125, "block_size": 4},
+        {"method": "llr", "lambda": 0.0125, "block_size": 8},
+        {"method": "llr", "lambda": 0.0125, "block_size": 16}
+      ],
+      "native_r3x2": [
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+        {"method": "llr", "lambda": 0.0125, "block_size": 4},
+        {"method": "llr", "lambda": 0.0125, "block_size": 8},
+        {"method": "llr", "lambda": 0.0125, "block_size": 16}
+      ],
+      "lr_x_r3x2": [
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+        {"method": "llr", "lambda": 0.0125, "block_size": 4},
+        {"method": "llr", "lambda": 0.0125, "block_size": 8},
+        {"method": "llr", "lambda": 0.0125, "block_size": 16}
+      ],
+      "lr_y_r3x2": [
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+        {"method": "llr", "lambda": 0.0125, "block_size": 4},
+        {"method": "llr", "lambda": 0.0125, "block_size": 8},
+        {"method": "llr", "lambda": 0.0125, "block_size": 16}
+      ],
+      "lr_xy_r3x2": [
+        {"method": "wavelet", "lambda": 0.0115, "block_size": null},
+        {"method": "llr", "lambda": 0.0125, "block_size": 4},
+        {"method": "llr", "lambda": 0.0125, "block_size": 8},
+        {"method": "llr", "lambda": 0.0125, "block_size": 16}
+      ]
+    }
+  }
+}
