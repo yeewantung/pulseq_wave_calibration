@@ -106,22 +106,11 @@ regularization-sweep evaluation.
 
 ## Environment
 
-Activate the repository environment and the host-compatible BART build. Keep
-their actual locations in an ignored local launcher, for example:
-
-```bash
-source "$CONDA_SETUP"
-conda activate "$WAVE_RECON_ENV"
-source "$BART_STARTUP"
-```
-
-The scripts resolve `python` and `bart` from `PATH`. Do not record a
-machine-specific executable or dataset path in a tracked file; use an ignored
-`.local.sh` launcher when desired.
-
-See [`SETUP.md`](SETUP.md) for the recommended standard-venv installation and
-reactivation workflow, optional uv usage, CPU-only or CUDA-enabled BART
-compilation, and runtime validation.
+Follow [`SETUP.md`](SETUP.md) for the recommended standard-venv installation,
+the single continued-work reactivation procedure, optional uv usage, CPU-only
+or CUDA-enabled BART compilation, and runtime validation. The sample scripts
+resolve `python` and `bart` from `PATH`; complete that setup before using the
+commands below.
 
 ## Normal measured-data command
 

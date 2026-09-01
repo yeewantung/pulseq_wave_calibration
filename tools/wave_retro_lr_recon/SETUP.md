@@ -46,34 +46,6 @@ supported interpreter when Python 3.11 is unavailable. Keep the environment
 inside the tool directory or in another user-controlled location; do not
 commit it.
 
-#### Reactivate the same environment
-
-The `.venv` directory persists after the shell closes. For continued work,
-return to the tool directory and activate that existing environment; do not
-run `python -m venv` or reinstall its packages again:
-
-```bash
-cd tools/wave_retro_lr_recon
-source .venv/bin/activate
-python scripts/prepare_mprage_normal.py --help
-```
-
-If local server instructions require a base module or Conda environment,
-activate that host environment before `source .venv/bin/activate`. Source the
-host's BART startup script after Python activation so that `bart` resolves to
-the build for the current machine.
-
-Confirm that the existing environment is active with:
-
-```bash
-command -v python
-python --version
-```
-
-`command -v python` should resolve inside `wave_retro_lr_recon/.venv/bin`.
-Run `deactivate` when finished. Reinstall the `recon` dependency group only
-when `pyproject.toml` changes.
-
 ### Optional: uv
 
 Users who already manage Python environments with `uv` may create the same
@@ -94,23 +66,6 @@ Commands can also be run without activating the environment:
 ```bash
 uv run python scripts/prepare_mprage_normal.py --help
 ```
-
-### Managed-cluster environment
-
-On a managed system, follow the server `AGENTS.md` instructions for selecting
-the required base Python environment before creating or reactivating the
-tool-local venv. A machine-local launcher may contain the actual setup paths
-and environment name:
-
-```bash
-source /path/to/conda.sh
-conda activate wave-reconstruction-environment
-source /path/to/wave_retro_lr_recon/.venv/bin/activate
-source /path/to/bart_startup.sh
-```
-
-Save such a launcher as `scripts/environment.local.sh`. That name is ignored by
-the parent repository and is the correct place for machine-specific paths.
 
 ## Build BART with CPU support and optional CUDA
 
@@ -157,19 +112,46 @@ when those defaults are incorrect. Additional include, linker, rpath, or BLAS
 settings may be required by the host; keep them in the host build rather than
 in this source repository.
 
-Build and activate BART according to its own revision-specific documentation.
-A typical source build is:
+Build BART according to its own revision-specific documentation. A typical
+source build is:
 
 ```bash
 make clean
 make -j4
+```
+
+Never reuse `Makefile.local` blindly across servers. For CUDA builds, recheck
+the target GPU architecture and CUDA/host-compiler pairing.
+
+## Reactivate the environment for continued work
+
+The tool-local `.venv` and compiled BART tree persist after the shell closes.
+In every new shell, activate that same venv and then expose the matching BART
+source tree. Do not recreate the venv or reinstall packages for routine use:
+
+```bash
+cd /path/to/pulseq_wave_calibration/tools/wave_retro_lr_recon
+source .venv/bin/activate
+
 export BART_TOOLBOX_PATH=/path/to/bart-source
 export TOOLBOX_PATH="$BART_TOOLBOX_PATH"
 export PATH="$BART_TOOLBOX_PATH:$PATH"
 ```
 
-Never reuse `Makefile.local` blindly across servers. For CUDA builds, recheck
-the target GPU architecture and CUDA/host-compiler pairing.
+Confirm that both executables resolve from the intended locations:
+
+```bash
+command -v python
+command -v bart
+python --version
+bart version
+```
+
+`command -v python` should resolve inside `wave_retro_lr_recon/.venv/bin`.
+Save the activation and BART exports in `scripts/environment.local.sh` when a
+one-command local setup is useful; that machine-specific filename is ignored
+by Git. Run `deactivate` when finished. Reinstall the `recon` dependency group
+only when `pyproject.toml` changes.
 
 ## Validate both layers
 
