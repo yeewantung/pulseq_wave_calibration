@@ -1,12 +1,25 @@
 # R3 presentation optimization, R1 refinement, and retrospective-resolution plan
 
-Updated: 2026-08-28
+Updated: 2026-09-01
 
 This is the active experiment plan. The original R3x1-centered tracker is
 preserved as a historical record in
 `docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md`.
 The dataset-specific execution checklist is
 `docs/r1_dataset_processing_todo.md`.
+
+## Corrected pure-lattice rerun addendum
+
+The five-case corrected pure-image-lattice rerun is complete. Explicit manual
+visual and metric tradeoff review selected Wavelet `3.5e-2` for native R3x1,
+`3.5e-2` for native R3x2, `2.5e-2` for LR-X R3x2, `2.5e-2` for LR-Y R3x2,
+and `2.2e-2` for LR-XY R3x2. The hash-bound selection manifest SHA-256 is
+`07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6`.
+These settings supersede the older ACS-union settings only for the cleaned
+measured-MPRAGE tool defaults. The historical completed-study statements below
+remain records of their original experiments and are not retroactively edited.
+The cleaned tool produces both the FISTA-r0 control and selected Wavelet arm
+for ablation; the approved BET mask remains evaluation-only.
 
 The active execution order is now:
 

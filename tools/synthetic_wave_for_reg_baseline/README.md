@@ -119,6 +119,14 @@ excluded from the immutable preparation-contract hash. The shortlist renderer
 accepts only manifest-listed candidates, and the final recorder requires an
 explicit visual-review acknowledgement plus one manual selection per case.
 
+The corrected rerun is complete. Explicit manual visual/metric review selected
+Wavelet `3.5e-2` for native R3x1 and native R3x2, `2.5e-2` for LR-X and LR-Y
+R3x2, and `2.2e-2` for LR-XY R3x2. Its selection manifest SHA-256 is
+`07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6`.
+The measured-data MPRAGE tool uses these as the positive-Wavelet ablation arm
+while retaining one FISTA-r0 control per case; it does not transfer them to
+R1 normal reconstruction or GRE.
+
 ## Current experiment
 
 The current execution target is the fully sampled 2026-08-21 MID00198 R1

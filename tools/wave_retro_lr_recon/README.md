@@ -49,9 +49,10 @@ measured-data mode.
 ## Reconstruction defaults
 
 The normal MPRAGE sample performs one BART `ecalib` with crop `0.6` by default.
-For measured R3x1 it uses Wavelet/FISTA with lambda `2.2e-2`; the crop and R3
-lambda may be overridden on the command line. R1 uses unregularized FISTA
-(`-w -f -r 0`).
+For measured R3x1 it reconstructs both the unregularized FISTA control
+(`-w -f -r 0`) and the selected Wavelet/FISTA result at lambda `3.5e-2`; the
+crop and R3 Wavelet lambda may be overridden on the command line. R1 remains
+FISTA-r0-only because the five-case rerun did not select an R1 Wavelet value.
 
 The pinned `macha` BART `ecalib` command does not provide a `-g` option, so its
 explicit command is `bart ecalib -m 1 -c ...`. BART `wave` does support GPU,
@@ -60,19 +61,18 @@ and every reconstruction command requires `-g`.
 The retrospective sample estimates native CSMs once and runs four sequential
 R3x2 cases:
 
-| Case | Requested physical XYZ resolution | BART Wave solver |
-| --- | --- | --- |
-| native | source resolution | Wavelet/FISTA, locked `1.5e-2` |
-| LR-X | `1.5 x 1.0 x source-Z` mm | unregularized FISTA |
-| LR-Y | `1.0 x 1.5 x source-Z` mm | unregularized FISTA |
-| LR-XY | `1.25 x 1.25 x source-Z` mm | unregularized FISTA |
+| Case | Requested physical XYZ resolution | FISTA control | Selected Wavelet |
+| --- | --- | --- | --- |
+| native | source resolution | `-w -f -r 0` | `-w -f -r 3.5e-2` |
+| LR-X | `1.5 x 1.0 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.5e-2` |
+| LR-Y | `1.0 x 1.5 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.5e-2` |
+| LR-XY | `1.25 x 1.25 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.2e-2` |
 
-These are the currently runnable defaults, not frozen final optima. A
-corrected pure-image-lattice synthetic R3x1/R3x2 rerun is in progress. After
-all five source/native/LR cases complete evaluation, visual review, and
-explicit selection, the selected solver family, lambda, and any LLR block size
-will be updated together. Historical ACS-union selections are not carried
-forward automatically.
+These values come from the completed corrected pure-image-lattice synthetic
+R3x1/R3x2 rerun and explicit user visual/metric review. The hash-bound
+selection manifest has SHA-256
+`07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6`.
+Historical ACS-union selections are not carried forward.
 
 LR CSMs are derived from the one accepted native ecalib map set by centered
 Fourier resampling in PE at unchanged FOV, followed by coil-RSS
@@ -82,13 +82,16 @@ commands are retained beside the BART outputs and copied into the NIfTI JSON
 sidecars; an existing CSM is reused only when its command record matches.
 
 Reconstruction and presentation masking are separate workflows. The normal
-and retrospective reconstruction scripts write only canonical NIfTIs. The
+and retrospective reconstruction scripts write canonical NIfTIs below the
+`fista_r0` and `optimal_wavelet` branches. The
 optional collection script creates byte-identical canonical copies and
 whole-head-masked derivatives beneath `OUTPUT_ROOT/nifti_collection`. The
-canonical files under `normal/nifti` and `retro/*/nifti` remain unchanged and
-are the scientific source of record.
+canonical files under `normal/nifti/*` and `retro/*/nifti/*` remain unchanged
+and are the scientific source of record.
 
-The mask is estimated once from the normal canonical magnitude. It supports a
+The mask is estimated once from the normal optimal-Wavelet magnitude and is
+applied identically to both reconstruction branches. For the R1-only workflow,
+the normal FISTA-r0 magnitude is the documented fallback source. The mask supports a
 high-confidence head core with distance-limited low-threshold growth, optional
 physical opening, physical closing, the largest 26-connected 3D component, 3D
 hole filling, and optional physical dilation. BET is not used. On LR grids,
@@ -134,7 +137,9 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
     --r3-lambda 1.8e-2
 ```
 
-Outputs are grouped under `OUTPUT_ROOT/normal/{bart_inputs,bart_output,nifti}`.
+The shared inputs and CSM remain directly below `normal/bart_inputs` and
+`normal/bart_output`. Reconstructed images and NIfTIs are separated into
+`fista_r0` and `optimal_wavelet` subdirectories. R1 creates only `fista_r0`.
 
 ## Retrospective R3x2 and LR command
 
@@ -148,8 +153,9 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_retro_lr_recon.sh \
 ```
 
 Compatible normal inputs and maps are reused. If absent, the inputs are
-prepared from TWIX and ecalib is run once. The four canonical cases are
-written beneath `OUTPUT_ROOT/retro/`.
+prepared from TWIX and ecalib is run once. Each of the four canonical cases
+contains `fista_r0` and `optimal_wavelet` reconstruction/NIfTI branches beneath
+`OUTPUT_ROOT/retro/`.
 
 ## Optional whole-head-masked NIfTI collection
 
@@ -173,21 +179,26 @@ The collection layout is:
 
 ```text
 OUTPUT_ROOT/
-├── normal/nifti/                         # canonical, unmasked source
-├── retro/<case>/nifti/                   # canonical, unmasked source
+├── normal/nifti/<branch>/                # canonical, unmasked source
+├── retro/<case>/nifti/<branch>/          # canonical, unmasked source
 └── nifti_collection/
     ├── original_nifti/
-    │   ├── normal/
-    │   └── retro/<case>/
+    │   └── <branch>/
+    │       ├── normal/
+    │       └── retro/<case>/
     ├── head_masked_nifti/
-    │   ├── normal/
-    │   └── retro/<case>/
+    │   └── <branch>/
+    │       ├── normal/
+    │       └── retro/<case>/
     ├── masks/
     └── manifest.json
 ```
 
 Here `<case>` is `native_r3x2`, `lr_x_1p5mm_r3x2`,
 `lr_y_1p5mm_r3x2`, or `lr_xy_1p25mm_r3x2`.
+`<branch>` is `fista_r0` or `optimal_wavelet`. One mask derived from the normal
+optimal-Wavelet magnitude is reused for both branches so masked visual
+comparisons never differ because of candidate-specific support.
 
 This script never runs k-space preparation, ecalib, or Wave reconstruction.
 Its optional parameters are listed by

@@ -29,6 +29,7 @@ from .bart_io import sha256_file
 
 
 COLLECTION_BUILDER = "wave_retro_lr.nifti_collection"
+RECONSTRUCTION_BRANCHES = ("fista_r0", "optimal_wavelet")
 RETRO_CASES = (
     "native_r3x2",
     "lr_x_1p5mm_r3x2",
@@ -81,8 +82,8 @@ def build_mprage_nifti_collection(
     """Create canonical-copy and whole-head-masked MPRAGE NIfTI trees.
 
     Args:
-        output_root: Reconstruction root containing ``normal/nifti`` and,
-            when available, the four ``retro/<case>/nifti`` directories.
+        output_root: Reconstruction root containing branch-specific normal and,
+            when available, retrospective canonical NIfTI directories.
         require_retro: Whether all four retrospective case directories must
             contain complete magnitude/phase NIfTI and JSON pairs.
         parameters: Optional whole-head mask extraction parameters.
@@ -106,8 +107,12 @@ def build_mprage_nifti_collection(
     mask_parameters = parameters or HeadMaskParameters()
     _validate_parameters(mask_parameters)
 
-    case_sources = _discover_case_sources(root, require_retro=require_retro)
-    normal_magnitude = _select_normal_magnitude(case_sources["normal"])
+    sampling_class = _read_sampling_class(root)
+    branch_sources = _discover_case_sources(
+        root, sampling_class=sampling_class, require_retro=require_retro
+    )
+    mask_branch = "optimal_wavelet" if "optimal_wavelet" in branch_sources else "fista_r0"
+    normal_magnitude = _select_normal_magnitude(branch_sources[mask_branch]["normal"])
     normal_image, _ = _load_validated_nifti(normal_magnitude)
     head_mask, mask_details = create_whole_head_mask(normal_image, mask_parameters)
 
@@ -118,11 +123,13 @@ def build_mprage_nifti_collection(
         manifest = _materialize_collection(
             staging,
             root,
-            case_sources,
+            branch_sources,
+            mask_branch,
             normal_magnitude,
             head_mask,
             mask_parameters,
             mask_details,
+            sampling_class,
         )
         _write_json(staging / "manifest.json", manifest)
         _replace_owned_collection(staging, collection)
@@ -301,34 +308,77 @@ def _validate_parameters(parameters: HeadMaskParameters) -> None:
 
 
 def _discover_case_sources(
-    output_root: Path, *, require_retro: bool
-) -> dict[str, list[tuple[Path, Path]]]:
+    output_root: Path, *, sampling_class: str, require_retro: bool
+) -> dict[str, dict[str, list[tuple[Path, Path]]]]:
     """Discover complete canonical NIfTI/JSON pairs for available cases.
 
     Args:
         output_root: Existing reconstruction output root.
+        sampling_class: Validated measured sampling class, ``R1`` or ``R3x1``.
         require_retro: Whether all four retrospective cases are mandatory.
 
     Returns:
-        Mapping from case label to sorted NIfTI and JSON sidecar pairs.
+        Mapping from the sampling-compatible reconstruction branches and case
+        labels to sorted NIfTI and JSON sidecar pairs.
 
     Raises:
-        FileNotFoundError: If normal or required retrospective pairs are absent.
-        ValueError: If a source directory contains an incomplete NIfTI pair.
+        FileNotFoundError: If a required branch/case source is absent.
+        ValueError: If R1 is combined with retro outputs or an unsupported
+            positive-Wavelet branch, or a source pair is incomplete.
     """
-    sources = {"normal": _discover_nifti_pairs(output_root / "normal" / "nifti")}
-    if not sources["normal"]:
-        raise FileNotFoundError(
-            f"No normal canonical NIfTI files found: {output_root / 'normal' / 'nifti'}"
+    if require_retro and sampling_class != "R3x1":
+        raise ValueError("Retrospective R3x2 collection requires R3x1 source sampling.")
+    expected_branches = (
+        RECONSTRUCTION_BRANCHES if sampling_class == "R3x1" else ("fista_r0",)
+    )
+    sources: dict[str, dict[str, list[tuple[Path, Path]]]] = {}
+    for branch in expected_branches:
+        normal_directory = output_root / "normal" / "nifti" / branch
+        normal_pairs = _discover_nifti_pairs(normal_directory)
+        if not normal_pairs:
+            raise FileNotFoundError(
+                f"No normal {branch} canonical NIfTI files found: {normal_directory}"
+            )
+        branch_cases = {"normal": normal_pairs}
+        for case in RETRO_CASES:
+            directory = output_root / "retro" / case / "nifti" / branch
+            pairs = _discover_nifti_pairs(directory)
+            if pairs:
+                branch_cases[case] = pairs
+            elif require_retro:
+                raise FileNotFoundError(
+                    f"No {branch} canonical NIfTI files found for {case}: {directory}"
+                )
+        sources[branch] = branch_cases
+    if sampling_class == "R1":
+        unexpected = _discover_nifti_pairs(
+            output_root / "normal" / "nifti" / "optimal_wavelet"
         )
-    for case in RETRO_CASES:
-        directory = output_root / "retro" / case / "nifti"
-        pairs = _discover_nifti_pairs(directory)
-        if pairs:
-            sources[case] = pairs
-        elif require_retro:
-            raise FileNotFoundError(f"No canonical NIfTI files found for {case}: {directory}")
+        if unexpected:
+            raise ValueError("Normal R1 has no approved optimal-Wavelet branch.")
     return sources
+
+
+def _read_sampling_class(output_root: Path) -> str:
+    """Read the measured sampling class bound to the normal BART inputs.
+
+    Args:
+        output_root: Reconstruction root containing prepared normal inputs.
+
+    Returns:
+        Validated ``R1`` or ``R3x1`` sampling label.
+
+    Raises:
+        FileNotFoundError: If the sampling-class record is absent.
+        ValueError: If the record contains an unsupported label.
+    """
+    path = output_root / "normal" / "bart_inputs" / "sampling_class.txt"
+    if not path.is_file():
+        raise FileNotFoundError(f"Normal sampling-class record does not exist: {path}")
+    sampling_class = path.read_text(encoding="utf-8").strip()
+    if sampling_class not in {"R1", "R3x1"}:
+        raise ValueError(f"Unsupported normal sampling class: {sampling_class!r}")
+    return sampling_class
 
 
 def _discover_nifti_pairs(directory: Path) -> list[tuple[Path, Path]]:
@@ -518,22 +568,29 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
 def _materialize_collection(
     staging: Path,
     output_root: Path,
-    case_sources: dict[str, list[tuple[Path, Path]]],
+    branch_sources: dict[str, dict[str, list[tuple[Path, Path]]]],
+    mask_branch: str,
     normal_magnitude: Path,
     head_mask: nib.Nifti1Image,
     parameters: HeadMaskParameters,
     mask_details: dict[str, Any],
+    sampling_class: str,
 ) -> dict[str, Any]:
     """Write one complete collection into an empty staging directory.
 
     Args:
         staging: Empty temporary collection directory.
         output_root: Source reconstruction root used for relative provenance.
-        case_sources: Available canonical NIfTI/JSON pairs by case.
+        branch_sources: Available canonical NIfTI/JSON pairs by reconstruction
+            branch and case.
+        mask_branch: Normal reconstruction branch used to derive the shared
+            presentation mask.
         normal_magnitude: Normal magnitude path used to derive the head mask.
         head_mask: Binary mask on the normal grid.
         parameters: Mask extraction parameters.
         mask_details: Calculated mask threshold and coverage metadata.
+        sampling_class: Measured normal sampling class controlling available
+            reconstruction branches.
 
     Returns:
         JSON-native manifest describing all copied and masked files.
@@ -548,6 +605,7 @@ def _materialize_collection(
     nib.save(head_mask, str(mask_path))
     mask_record = {
         "source_nifti": str(normal_magnitude.relative_to(output_root)),
+        "source_branch": mask_branch,
         "source_sha256": sha256_file(normal_magnitude),
         "collection_file": str(mask_path.relative_to(staging)),
         "collection_sha256": sha256_file(mask_path),
@@ -562,36 +620,48 @@ def _materialize_collection(
     mask_record["metadata_sha256"] = sha256_file(mask_metadata)
 
     case_records: list[dict[str, Any]] = []
-    for case, pairs in case_sources.items():
-        relative_leaf = Path("normal") if case == "normal" else Path("retro") / case
-        original_dir = staging / "original_nifti" / relative_leaf
-        masked_dir = staging / "head_masked_nifti" / relative_leaf
-        original_dir.mkdir(parents=True)
-        masked_dir.mkdir(parents=True)
-        files = [
-            _materialize_pair(
-                nifti,
-                sidecar,
-                output_root,
-                staging,
-                original_dir,
-                masked_dir,
-                head_mask,
-                mask_record,
+    for branch, case_sources in branch_sources.items():
+        for case, pairs in case_sources.items():
+            case_leaf = Path("normal") if case == "normal" else Path("retro") / case
+            relative_leaf = Path(branch) / case_leaf
+            original_dir = staging / "original_nifti" / relative_leaf
+            masked_dir = staging / "head_masked_nifti" / relative_leaf
+            original_dir.mkdir(parents=True)
+            masked_dir.mkdir(parents=True)
+            files = [
+                _materialize_pair(
+                    nifti,
+                    sidecar,
+                    output_root,
+                    staging,
+                    original_dir,
+                    masked_dir,
+                    head_mask,
+                    mask_record,
+                )
+                for nifti, sidecar in pairs
+            ]
+            case_records.append(
+                {
+                    "branch": branch,
+                    "case": case,
+                    "file_count": len(files),
+                    "files": files,
+                }
             )
-            for nifti, sidecar in pairs
-        ]
-        case_records.append({"case": case, "file_count": len(files), "files": files})
 
     return {
-        "format_version": 1,
+        "format_version": 2,
         "builder": COLLECTION_BUILDER,
         "status": "complete",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "scientific_scope": {
             "canonical_reconstruction_outputs_modified": False,
+            "normal_sampling_class": sampling_class,
             "original_niftis_copied_byte_for_byte": True,
             "whole_head_mask_source": "normal canonical magnitude",
+            "whole_head_mask_source_branch": mask_branch,
+            "same_whole_head_mask_applied_to_all_branches": True,
             "whole_head_mask_backend": "SciPy morphology; no BET",
             "mask_resampling": "nearest-neighbor in NIfTI physical space when grids differ",
             "masked_outputs_for_presentation_only": True,

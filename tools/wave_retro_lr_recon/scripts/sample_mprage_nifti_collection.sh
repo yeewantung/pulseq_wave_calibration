@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build presentation-only canonical copies and whole-head-masked derivatives.
+# Collect both reconstruction branches and apply one shared presentation mask.
 # This workflow never prepares k-space or launches BART reconstruction.
 
 usage() {

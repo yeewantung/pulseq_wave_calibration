@@ -66,7 +66,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "output_root",
         type=Path,
-        help="Reconstruction root containing normal/nifti and optional retro cases.",
+        help=(
+            "Reconstruction root containing branch-specific normal/nifti "
+            "and optional retro cases."
+        ),
     )
     parser.add_argument(
         "--require-retro",

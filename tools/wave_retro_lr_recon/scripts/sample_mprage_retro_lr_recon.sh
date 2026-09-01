@@ -56,32 +56,52 @@ fi
 # Produce same-FOV LR map grids from that single accepted ecalib result.
 python "$SCRIPT_DIR/prepare_mprage_retro_maps.py" "$OUTPUT_ROOT"
 
-# Native 1x1x1-mm-class R3x2 case: locked Wavelet/FISTA lambda 1.5e-2.
-mkdir -p "$RETRO_ROOT/native_r3x2/bart_output" "$RETRO_ROOT/native_r3x2/nifti"
-bart wave -g -w -f -r 1.5e-2 -i 100 -t 1e-6 "$NORMAL_OUTPUT/coil_sens" "$RETRO_ROOT/native_r3x2/bart_inputs/psf" "$RETRO_ROOT/native_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/native_r3x2/bart_output/image_wave"
-printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 1.5e-2 -i 100 -t 1e-6 "$NORMAL_OUTPUT/coil_sens" "$RETRO_ROOT/native_r3x2/bart_inputs/psf" "$RETRO_ROOT/native_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/native_r3x2/bart_output/image_wave"
-printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/native_r3x2/bart_output/wave_command.txt"
-python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/native_r3x2/bart_inputs" --image "$RETRO_ROOT/native_r3x2/bart_output/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/native_r3x2/nifti" --suffix BARTWaveMPRAGENativeR3x2
+# Native 1x1x1-mm-class R3x2: FISTA r=0 control and selected Wavelet 3.5e-2.
+mkdir -p "$RETRO_ROOT/native_r3x2/bart_output/fista_r0" "$RETRO_ROOT/native_r3x2/nifti/fista_r0"
+bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$NORMAL_OUTPUT/coil_sens" "$RETRO_ROOT/native_r3x2/bart_inputs/psf" "$RETRO_ROOT/native_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/native_r3x2/bart_output/fista_r0/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$NORMAL_OUTPUT/coil_sens" "$RETRO_ROOT/native_r3x2/bart_inputs/psf" "$RETRO_ROOT/native_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/native_r3x2/bart_output/fista_r0/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/native_r3x2/bart_output/fista_r0/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/native_r3x2/bart_inputs" --image "$RETRO_ROOT/native_r3x2/bart_output/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/native_r3x2/nifti/fista_r0" --suffix BARTWaveMPRAGENativeR3x2FISTAR0
+mkdir -p "$RETRO_ROOT/native_r3x2/bart_output/optimal_wavelet" "$RETRO_ROOT/native_r3x2/nifti/optimal_wavelet"
+bart wave -g -w -f -r 3.5e-2 -i 100 -t 1e-6 "$NORMAL_OUTPUT/coil_sens" "$RETRO_ROOT/native_r3x2/bart_inputs/psf" "$RETRO_ROOT/native_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/native_r3x2/bart_output/optimal_wavelet/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 3.5e-2 -i 100 -t 1e-6 "$NORMAL_OUTPUT/coil_sens" "$RETRO_ROOT/native_r3x2/bart_inputs/psf" "$RETRO_ROOT/native_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/native_r3x2/bart_output/optimal_wavelet/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/native_r3x2/bart_output/optimal_wavelet/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/native_r3x2/bart_inputs" --image "$RETRO_ROOT/native_r3x2/bart_output/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/native_r3x2/nifti/optimal_wavelet" --suffix BARTWaveMPRAGENativeR3x2OptimalWavelet
 
-# Approximately 1.5x1x1 mm: unregularized FISTA.
-mkdir -p "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output" "$RETRO_ROOT/lr_x_1p5mm_r3x2/nifti"
-bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/image_wave"
-printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/image_wave"
-printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/wave_command.txt"
-python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_x_1p5mm_r3x2/nifti" --suffix BARTWaveMPRAGELRX1p5mmR3x2
+# Approximately 1.5x1x1 mm: FISTA r=0 control and selected Wavelet 2.5e-2.
+mkdir -p "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/fista_r0" "$RETRO_ROOT/lr_x_1p5mm_r3x2/nifti/fista_r0"
+bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/fista_r0/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/fista_r0/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/fista_r0/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_x_1p5mm_r3x2/nifti/fista_r0" --suffix BARTWaveMPRAGELRX1p5mmR3x2FISTAR0
+mkdir -p "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/optimal_wavelet" "$RETRO_ROOT/lr_x_1p5mm_r3x2/nifti/optimal_wavelet"
+bart wave -g -w -f -r 2.5e-2 -i 100 -t 1e-6 "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/optimal_wavelet/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 2.5e-2 -i 100 -t 1e-6 "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/optimal_wavelet/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/optimal_wavelet/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_x_1p5mm_r3x2/bart_output/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_x_1p5mm_r3x2/nifti/optimal_wavelet" --suffix BARTWaveMPRAGELRX1p5mmR3x2OptimalWavelet
 
-# Approximately 1x1.5x1 mm: unregularized FISTA.
-mkdir -p "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output" "$RETRO_ROOT/lr_y_1p5mm_r3x2/nifti"
-bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/image_wave"
-printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/image_wave"
-printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/wave_command.txt"
-python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_y_1p5mm_r3x2/nifti" --suffix BARTWaveMPRAGELRY1p5mmR3x2
+# Approximately 1x1.5x1 mm: FISTA r=0 control and selected Wavelet 2.5e-2.
+mkdir -p "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/fista_r0" "$RETRO_ROOT/lr_y_1p5mm_r3x2/nifti/fista_r0"
+bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/fista_r0/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/fista_r0/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/fista_r0/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_y_1p5mm_r3x2/nifti/fista_r0" --suffix BARTWaveMPRAGELRY1p5mmR3x2FISTAR0
+mkdir -p "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/optimal_wavelet" "$RETRO_ROOT/lr_y_1p5mm_r3x2/nifti/optimal_wavelet"
+bart wave -g -w -f -r 2.5e-2 -i 100 -t 1e-6 "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/optimal_wavelet/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 2.5e-2 -i 100 -t 1e-6 "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/optimal_wavelet/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/optimal_wavelet/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_y_1p5mm_r3x2/bart_output/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_y_1p5mm_r3x2/nifti/optimal_wavelet" --suffix BARTWaveMPRAGELRY1p5mmR3x2OptimalWavelet
 
-# Approximately 1.25x1.25x1 mm: unregularized FISTA.
-mkdir -p "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti"
-bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/image_wave"
-printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/image_wave"
-printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/wave_command.txt"
-python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti" --suffix BARTWaveMPRAGELRXY1p25mmR3x2
+# Approximately 1.25x1.25x1 mm: FISTA r=0 control and Wavelet 2.2e-2.
+mkdir -p "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/fista_r0" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti/fista_r0"
+bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/fista_r0/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/fista_r0/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/fista_r0/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti/fista_r0" --suffix BARTWaveMPRAGELRXY1p25mmR3x2FISTAR0
+mkdir -p "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti/optimal_wavelet"
+bart wave -g -w -f -r 2.2e-2 -i 100 -t 1e-6 "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/image_wave"
+printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 2.2e-2 -i 100 -t 1e-6 "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/coil_sens" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/psf" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs/wave_kspace" "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/image_wave"
+printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/wave_command.txt"
+python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti/optimal_wavelet" --suffix BARTWaveMPRAGELRXY1p25mmR3x2OptimalWavelet
 
 echo "Retrospective MPRAGE reconstructions complete: $RETRO_ROOT"

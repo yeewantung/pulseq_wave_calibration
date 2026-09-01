@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-08-31, America/New_York
+Updated: 2026-09-01, America/New_York
 
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
@@ -8,13 +8,21 @@ record; the old R3x1 tracker is historical only.
 
 ## Immediate next action
 
-The corrected pure-image-lattice regularization rerun is active in a separate
-session. Wait for all five cases—native R3x1, native R3x2, LR-X R3x2, LR-Y
-R3x2, and LR-XY R3x2—to complete evaluation and user visual review. Then
-record the explicitly approved solver family, lambda, and LLR block size for
-each case and update the `wave_retro_lr_recon` defaults, tests, README, source
-cleanup plan, and this handover together. Do not promote an incomplete sweep,
-an automatic metric leader, or the historical ACS-union selections.
+The corrected pure-image-lattice regularization rerun and explicit manual
+visual/metric selection are complete. The approved Wavelet lambdas are
+`3.5e-2` for native R3x1, `3.5e-2` for native R3x2, `2.5e-2` for LR-X R3x2,
+`2.5e-2` for LR-Y R3x2, and `2.2e-2` for LR-XY R3x2. The selection manifest
+SHA-256 is
+`07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6`;
+the actual private path remains outside tracked source.
+
+The measured MPRAGE sample workflows now retain the FISTA-r0 control and the
+selected Wavelet result as separate canonical branches for ablation. The
+optional collection copies both branches and applies one normal
+optimal-Wavelet-derived whole-head mask to both. Normal R1 remains
+FISTA-r0-only because this rerun did not select an R1 Wavelet value. Complete
+source tests and real-data validation before beginning GRE implementation or
+the broader synthetic-tool cleanup.
 
 The existing case-matched CSMs and calibrated PSFs remain the reconstruction
 inputs for this rerun, and the approved BET brain mask remains evaluation-only.

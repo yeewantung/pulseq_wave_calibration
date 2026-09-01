@@ -17,6 +17,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 from wave_retro_lr.bart_io import sha256_file  # noqa: E402
 from wave_retro_lr.nifti_collection import (  # noqa: E402
     HeadMaskParameters,
+    RECONSTRUCTION_BRANCHES,
     RETRO_CASES,
     build_mprage_nifti_collection,
 )
@@ -46,8 +47,12 @@ class NiftiCollectionTests(unittest.TestCase):
 
             collection = root / "nifti_collection"
             self.assertEqual(manifest["builder"], "wave_retro_lr.nifti_collection")
-            self.assertEqual(len(manifest["cases"]), 5)
+            self.assertEqual(len(manifest["cases"]), 10)
             self.assertFalse(manifest["head_mask"]["bet_used"])
+            self.assertEqual(manifest["head_mask"]["source_branch"], "optimal_wavelet")
+            self.assertTrue(
+                manifest["scientific_scope"]["same_whole_head_mask_applied_to_all_branches"]
+            )
             self.assertTrue(
                 manifest["scientific_scope"]["original_niftis_copied_byte_for_byte"]
             )
@@ -55,36 +60,59 @@ class NiftiCollectionTests(unittest.TestCase):
                 self.assertEqual(sha256_file(source), digest)
 
             normal_magnitude = next(
-                path for path in source_paths if "normal/nifti" in str(path) and "part-mag" in path.name
+                path
+                for path in source_paths
+                if "normal/nifti/optimal_wavelet" in str(path) and "part-mag" in path.name
             )
-            copied_normal = collection / "original_nifti" / "normal" / normal_magnitude.name
+            copied_normal = (
+                collection / "original_nifti" / "optimal_wavelet" / "normal" / normal_magnitude.name
+            )
             self.assertEqual(sha256_file(copied_normal), sha256_file(normal_magnitude))
-            masked_normal = collection / "head_masked_nifti" / "normal" / normal_magnitude.name
+            masked_normal = (
+                collection
+                / "head_masked_nifti"
+                / "optimal_wavelet"
+                / "normal"
+                / normal_magnitude.name
+            )
             masked_data = np.asanyarray(nib.load(str(masked_normal)).dataobj)
             self.assertGreater(float(masked_data[16, 16, 16]), 0)
             self.assertEqual(float(masked_data[2, 2, 2]), 0)
             self.assertEqual(float(masked_data[31, 16, 16]), 0)
 
-            for case in RETRO_CASES:
-                masked_files = sorted(
-                    (collection / "head_masked_nifti" / "retro" / case).glob("*.nii.gz")
-                )
-                self.assertEqual(len(masked_files), 2)
-                for path in masked_files:
-                    data = np.asanyarray(nib.load(str(path)).dataobj)
-                    self.assertGreater(np.count_nonzero(data), 0)
-                    sidecar = path.with_name(path.name[: -len(".nii.gz")] + ".json")
-                    metadata = json.loads(sidecar.read_text(encoding="utf-8"))
-                    self.assertTrue(metadata["WholeHeadMaskApplied"])
-                    self.assertFalse(metadata["WholeHeadMaskBETUsed"])
+            for branch in RECONSTRUCTION_BRANCHES:
+                for case in RETRO_CASES:
+                    masked_files = sorted(
+                        (
+                            collection
+                            / "head_masked_nifti"
+                            / branch
+                            / "retro"
+                            / case
+                        ).glob("*.nii.gz")
+                    )
+                    self.assertEqual(len(masked_files), 2)
+                    for path in masked_files:
+                        data = np.asanyarray(nib.load(str(path)).dataobj)
+                        self.assertGreater(np.count_nonzero(data), 0)
+                        sidecar = path.with_name(path.name[: -len(".nii.gz")] + ".json")
+                        metadata = json.loads(sidecar.read_text(encoding="utf-8"))
+                        self.assertTrue(metadata["WholeHeadMaskApplied"])
+                        self.assertFalse(metadata["WholeHeadMaskBETUsed"])
+                        self.assertEqual(
+                            metadata["WholeHeadMaskSHA256"],
+                            manifest["head_mask"]["collection_sha256"],
+                        )
 
             # A second build safely replaces only the utility-owned collection.
             refreshed = build_mprage_nifti_collection(
                 root, require_retro=True, parameters=mask_parameters
             )
-            self.assertEqual(len(refreshed["cases"]), 5)
+            self.assertEqual(len(refreshed["cases"]), 10)
 
-            protected = collection / "original_nifti" / "normal" / normal_magnitude.name
+            protected = (
+                collection / "original_nifti" / "optimal_wavelet" / "normal" / normal_magnitude.name
+            )
             protected.write_bytes(b"user-modified")
             with self.assertRaisesRegex(FileExistsError, "changed since its manifest"):
                 build_mprage_nifti_collection(
@@ -100,19 +128,60 @@ class NiftiCollectionTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "reconstruction"
-            self._write_case(root / "normal" / "nifti", (32, 32, 32), (1.0, 1.0, 1.0))
+            self._write_sampling_class(root, "R1")
+            self._write_case(
+                root / "normal" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
             manifest = build_mprage_nifti_collection(root)
             self.assertEqual([record["case"] for record in manifest["cases"]], ["normal"])
+            self.assertEqual([record["branch"] for record in manifest["cases"]], ["fista_r0"])
+            self.assertEqual(manifest["head_mask"]["source_branch"], "fista_r0")
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "reconstruction"
-            self._write_case(root / "normal" / "nifti", (32, 32, 32), (1.0, 1.0, 1.0))
+            self._write_sampling_class(root, "R1")
+            self._write_case(
+                root / "normal" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
             collection = root / "nifti_collection"
             collection.mkdir()
             (collection / "user_file.txt").write_text("keep\n", encoding="utf-8")
             with self.assertRaisesRegex(FileExistsError, "not tool-owned"):
                 build_mprage_nifti_collection(root)
             self.assertEqual((collection / "user_file.txt").read_text(encoding="utf-8"), "keep\n")
+
+    def test_sampling_class_enforces_available_normal_branches(self) -> None:
+        """Reject incomplete R3x1 and unsupported positive-Wavelet R1 trees.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "r3x1"
+            self._write_sampling_class(root, "R3x1")
+            self._write_case(
+                root / "normal" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            with self.assertRaisesRegex(FileNotFoundError, "optimal_wavelet"):
+                build_mprage_nifti_collection(root)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "r1"
+            self._write_sampling_class(root, "R1")
+            for branch in RECONSTRUCTION_BRANCHES:
+                self._write_case(
+                    root / "normal" / "nifti" / branch,
+                    (32, 32, 32),
+                    (1.0, 1.0, 1.0),
+                )
+            with self.assertRaisesRegex(ValueError, "no approved optimal-Wavelet"):
+                build_mprage_nifti_collection(root)
 
     def _write_complete_source_tree(self, root: Path) -> list[Path]:
         """Create representative normal and four-grid canonical source pairs.
@@ -123,18 +192,41 @@ class NiftiCollectionTests(unittest.TestCase):
         Returns:
             All source NIfTI and JSON paths created for mutation checks.
         """
-        paths = self._write_case(
-            root / "normal" / "nifti", (32, 32, 32), (1.0, 1.0, 1.0)
-        )
+        self._write_sampling_class(root, "R3x1")
+        paths: list[Path] = []
         geometries = {
             "native_r3x2": ((32, 32, 32), (1.0, 1.0, 1.0)),
             "lr_x_1p5mm_r3x2": ((22, 32, 32), (1.5, 1.0, 1.0)),
             "lr_y_1p5mm_r3x2": ((32, 22, 32), (1.0, 1.5, 1.0)),
             "lr_xy_1p25mm_r3x2": ((26, 26, 32), (1.25, 1.25, 1.0)),
         }
-        for case, (shape, spacing) in geometries.items():
-            paths.extend(self._write_case(root / "retro" / case / "nifti", shape, spacing))
+        for branch in RECONSTRUCTION_BRANCHES:
+            paths.extend(
+                self._write_case(
+                    root / "normal" / "nifti" / branch,
+                    (32, 32, 32),
+                    (1.0, 1.0, 1.0),
+                )
+            )
+            for case, (shape, spacing) in geometries.items():
+                paths.extend(
+                    self._write_case(root / "retro" / case / "nifti" / branch, shape, spacing)
+                )
         return paths
+
+    def _write_sampling_class(self, root: Path, sampling_class: str) -> None:
+        """Write the normal prepared-input sampling record used by collection gates.
+
+        Args:
+            root: Temporary reconstruction root.
+            sampling_class: Measured sampling label to record.
+
+        Returns:
+            None.
+        """
+        path = root / "normal" / "bart_inputs" / "sampling_class.txt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{sampling_class}\n", encoding="utf-8")
 
     def _write_case(
         self,
