@@ -126,6 +126,18 @@ the target GPU architecture and CUDA/host-compiler pairing.
 ## Reactivate the environment for continued work
 
 The tool-local `.venv` and compiled BART tree persist after the shell closes.
+After a fresh clone, or after pulling a parent-repository change that updates
+submodule URLs or pinned revisions, synchronize and initialize all nested
+dependencies before reactivating the environment:
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+These commands are not required every time a new shell is opened when the
+recorded submodule revisions are already present.
+
 In every new shell, activate that same venv and then expose the matching BART
 source tree. Do not recreate the venv or reinstall packages for routine use:
 
