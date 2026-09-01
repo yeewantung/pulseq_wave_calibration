@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -27,7 +27,11 @@ from wave_retro_lr.sampling import (  # noqa: E402
     pure_cartesian_image_lattice_mask,
     validate_pure_cartesian_image_lattice,
 )
-from wave_retro_lr.mprage import _embed_image_stream  # noqa: E402
+from wave_retro_lr.mprage import (  # noqa: E402
+    _calibrated_psf_inputs,
+    _embed_image_stream,
+    _normalize_psf_coefficient_settings,
+)
 from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
 
@@ -163,6 +167,72 @@ class SamplingTests(unittest.TestCase):
 
 
 class PsfAndGeometryTests(unittest.TestCase):
+    def test_psf_coefficient_settings_preserve_upstream_modes(self) -> None:
+        """Verify smooth and half-open sine-line settings are validated.
+
+        Returns:
+            None.
+        """
+        self.assertEqual(
+            _normalize_psf_coefficient_settings("smooth", None, None),
+            {
+                "coefficient_processing": "smooth",
+                "fit_kx_range": None,
+                "fit_kx_range_convention": "half-open",
+            },
+        )
+        self.assertEqual(
+            _normalize_psf_coefficient_settings("sine-line", 12, 180),
+            {
+                "coefficient_processing": "sine-line",
+                "fit_kx_range": [12, 180],
+                "fit_kx_range_convention": "half-open",
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "only with sine-line"):
+            _normalize_psf_coefficient_settings("smooth", 12, 180)
+        with self.assertRaisesRegex(ValueError, "requires both"):
+            _normalize_psf_coefficient_settings("sine-line", 12, None)
+        with self.assertRaisesRegex(ValueError, "0 <= min < max"):
+            _normalize_psf_coefficient_settings("sine-line", 12, 12)
+
+    def test_sine_line_settings_reach_upstream_processing(self) -> None:
+        """Verify the selected mode and kx bounds reach the upstream helper.
+
+        Returns:
+            None.
+        """
+        raw_a = np.arange(8, dtype=np.float64)
+        raw_b = raw_a + 1
+        raw_c = raw_a + 2
+        native = Mock()
+        native.fit_wave_psf_deviation_from_projection.return_value = (
+            raw_a,
+            raw_b,
+            raw_c,
+            320,
+        )
+        native._process_psf_coefficients.return_value = (raw_a, raw_b, raw_c)
+        native.generate_theoretical_wave_trajectory.return_value = (raw_a, raw_b)
+
+        result = _calibrated_psf_inputs(
+            native,
+            twix_path=Path("input.dat"),
+            sequence_path=Path("input.seq"),
+            readout_oversampled=8,
+            ncalib=4,
+            nacs=4,
+            coefficient_processing="sine-line",
+            fit_kx_min=1,
+            fit_kx_max=7,
+        )
+
+        self.assertEqual(len(result), 5)
+        processing_call = native._process_psf_coefficients.call_args
+        self.assertEqual(processing_call.kwargs["coefficient_processing"], "sine-line")
+        self.assertEqual(processing_call.kwargs["fit_kx_min"], 1)
+        self.assertEqual(processing_call.kwargs["fit_kx_max"], 7)
+
     def test_target_matrices_are_nearest_multiple_of_four(self) -> None:
         """Verify requested LR spacings resolve to compatible PE matrices.
 
@@ -449,6 +519,10 @@ class PreparationIntegrationTests(unittest.TestCase):
 
             normal = output / "normal" / "bart_inputs"
             self.assertEqual(manifest["sampling"]["name"], "R1")
+            self.assertEqual(
+                manifest["psf_calibration"]["coefficient_processing"], "smooth"
+            )
+            self.assertIsNone(manifest["psf_calibration"]["fit_kx_range"])
             self.assertEqual(read_shape(normal / "wave_kspace"), (8, 16, 16, 12, 1))
             self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 12))
             self.assertEqual(read_shape(normal / "psf"), (8, 16, 16, 1, 1))
@@ -463,6 +537,16 @@ class PreparationIntegrationTests(unittest.TestCase):
                     (8, shape[1], shape[2]),
                 )
                 self.assertEqual(read_shape(case_inputs / "psf")[:3], (8, shape[1], shape[2]))
+
+            with self.assertRaisesRegex(ValueError, "PSF coefficient-processing"):
+                prepare_normal_mprage(
+                    twix,
+                    output,
+                    sequence,
+                    psf_coefficient_processing="sine-line",
+                    psf_fit_kx_min=1,
+                    psf_fit_kx_max=7,
+                )
 
 
 if __name__ == "__main__":

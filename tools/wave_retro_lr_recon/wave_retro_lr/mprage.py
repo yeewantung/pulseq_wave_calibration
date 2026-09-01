@@ -30,6 +30,49 @@ RETRO_CASES = (
 )
 
 
+def _normalize_psf_coefficient_settings(
+    processing: str,
+    fit_kx_min: int | None,
+    fit_kx_max: int | None,
+) -> dict[str, Any]:
+    """Validate and normalize PSF coefficient-processing settings.
+
+    Args:
+        processing: Upstream processing mode, either ``smooth`` or
+            ``sine-line``.
+        fit_kx_min: Inclusive first readout index used by sine-line fitting.
+        fit_kx_max: Exclusive final readout index used by sine-line fitting.
+
+    Returns:
+        A JSON-compatible settings mapping with a half-open fit range.
+
+    Raises:
+        ValueError: If the mode is unsupported or its kx bounds are invalid.
+    """
+    mode = str(processing).strip().lower()
+    if mode not in {"smooth", "sine-line"}:
+        raise ValueError("PSF coefficient processing must be 'smooth' or 'sine-line'.")
+    if mode == "smooth":
+        if fit_kx_min is not None or fit_kx_max is not None:
+            raise ValueError("PSF fit kx bounds are valid only with sine-line processing.")
+        return {
+            "coefficient_processing": "smooth",
+            "fit_kx_range": None,
+            "fit_kx_range_convention": "half-open",
+        }
+    if fit_kx_min is None or fit_kx_max is None:
+        raise ValueError("Sine-line PSF processing requires both fit kx bounds.")
+    lower = int(fit_kx_min)
+    upper = int(fit_kx_max)
+    if lower < 0 or upper <= lower:
+        raise ValueError("PSF fit kx bounds must satisfy 0 <= min < max.")
+    return {
+        "coefficient_processing": "sine-line",
+        "fit_kx_range": [lower, upper],
+        "fit_kx_range_convention": "half-open",
+    }
+
+
 def _utc_now() -> str:
     """Return the current UTC time as an ISO-8601 string.
 
@@ -242,6 +285,9 @@ def _calibrated_psf_inputs(
     readout_oversampled: int,
     ncalib: int,
     nacs: int,
+    coefficient_processing: str,
+    fit_kx_min: int | None,
+    fit_kx_max: int | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Fit ``a,b,c`` and return them with the sequence Wave trajectories.
 
@@ -252,6 +298,9 @@ def _calibrated_psf_inputs(
         readout_oversampled: Oversampled readout length.
         ncalib: Number of projection-calibration readouts.
         nacs: Integrated reference-scan ACS width.
+        coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
+        fit_kx_min: Inclusive first sine-line fitting index, if selected.
+        fit_kx_max: Exclusive final sine-line fitting index, if selected.
 
     Returns:
         ``delta_lin``, ``delta_par``, and fitted ``a``, ``b``, ``c`` vectors,
@@ -279,7 +328,9 @@ def _calibrated_psf_inputs(
         b_raw,
         c_raw,
         Nx_os=readout_oversampled,
-        coefficient_processing="smooth",
+        coefficient_processing=coefficient_processing,
+        fit_kx_min=fit_kx_min,
+        fit_kx_max=fit_kx_max,
     )
     delta_lin, delta_par = native.generate_theoretical_wave_trajectory(
         fn_seq=str(sequence_path),
@@ -343,23 +394,36 @@ def _read_real_vectors(base: Path, expected_count: int) -> tuple[np.ndarray, ...
 
 
 def _native_manifest_matches(
-    manifest: Mapping[str, Any], twix_path: Path, sequence_path: Path
+    manifest: Mapping[str, Any],
+    twix_path: Path,
+    sequence_path: Path,
+    psf_settings: Mapping[str, Any],
 ) -> bool:
-    """Check whether an existing native manifest matches both source files.
+    """Check whether a native manifest matches sources and PSF settings.
 
     Args:
         manifest: Existing preparation manifest.
         twix_path: Requested measured TWIX file.
         sequence_path: Requested Pulseq sequence file.
+        psf_settings: Normalized coefficient-processing settings.
 
     Returns:
-        ``True`` when the status and recorded source identities match.
+        ``True`` when the status, source identities, and PSF settings match.
     """
+    recorded_psf = manifest.get("psf_calibration", {})
+    recorded_settings = {
+        "coefficient_processing": recorded_psf.get("coefficient_processing", "smooth"),
+        "fit_kx_range": recorded_psf.get("fit_kx_range"),
+        "fit_kx_range_convention": recorded_psf.get(
+            "fit_kx_range_convention", "half-open"
+        ),
+    }
     return (
         manifest.get("status") == "measured_wave_mprage_bart_inputs_ready"
         and manifest.get("source", {}).get("twix") == _file_identity(twix_path)
         and manifest.get("source", {}).get("sequence")
         == _file_identity(sequence_path, include_hash=True)
+        and recorded_settings == dict(psf_settings)
     )
 
 
@@ -368,6 +432,9 @@ def prepare_normal_mprage(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    psf_coefficient_processing: str = "smooth",
+    psf_fit_kx_min: int | None = None,
+    psf_fit_kx_max: int | None = None,
     reuse: bool = True,
 ) -> dict[str, Any]:
     """Prepare native measured-Wave k-space, calibration k-space, and PSF.
@@ -376,6 +443,9 @@ def prepare_normal_mprage(
         twix: Measured Wave-MPRAGE TWIX file.
         output_root: Dataset-specific output root.
         sequence: Pulseq sequence file used for the acquisition.
+        psf_coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
+        psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
+        psf_fit_kx_max: Exclusive final sine-line fitting index, if selected.
         reuse: Reuse compatible inputs already present under ``output_root``.
 
     Returns:
@@ -391,14 +461,17 @@ def prepare_normal_mprage(
 
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
+    psf_settings = _normalize_psf_coefficient_settings(
+        psf_coefficient_processing, psf_fit_kx_min, psf_fit_kx_max
+    )
     destination = Path(output_root).expanduser().resolve() / NORMAL_INPUT_RELATIVE
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
-        if not _native_manifest_matches(existing, twix_path, sequence_path):
+        if not _native_manifest_matches(existing, twix_path, sequence_path, psf_settings):
             raise ValueError(
-                "Existing normal BART inputs were prepared from different "
-                "TWIX/sequence inputs."
+                "Existing normal BART inputs use different sources or PSF "
+                "coefficient-processing settings."
             )
         for name in (
             "wave_kspace",
@@ -423,6 +496,11 @@ def prepare_normal_mprage(
     ro_os = nro * os_factor
     ncalib = int(definitions.get("Calibration_Ncalib1", 72))
     nacs = int(definitions.get("Calibration_Nacs", 32))
+    fit_kx_range = psf_settings["fit_kx_range"]
+    if fit_kx_range is not None and int(fit_kx_range[1]) > ro_os:
+        raise ValueError(
+            f"PSF fit kx max {fit_kx_range[1]} exceeds oversampled readout {ro_os}."
+        )
     native._resolve_mprage_wave_mode(
         "wave", str(sequence_path), ro_os, ncalib, nacs, slice_orientation="SAG"
     )
@@ -481,6 +559,13 @@ def prepare_normal_mprage(
         readout_oversampled=ro_os,
         ncalib=ncalib,
         nacs=nacs,
+        coefficient_processing=str(psf_settings["coefficient_processing"]),
+        fit_kx_min=(
+            None if fit_kx_range is None else fit_kx_range[0]
+        ),
+        fit_kx_max=(
+            None if fit_kx_range is None else fit_kx_range[1]
+        ),
     )
     calibrated_psf = evaluate_calibrated_psf(
         delta_lin,
@@ -537,7 +622,8 @@ def prepare_normal_mprage(
             "leading_singular_values": [float(value) for value in singular_values[:12]],
         },
         "psf_calibration": {
-            "method": "sequence trajectory plus smoothed integrated projection a,b,c",
+            "method": "sequence trajectory plus processed integrated projection a,b,c",
+            **psf_settings,
             "trajectory_sign_lin_par": [-1, -1],
             "ncalib": ncalib,
             "nacs": nacs,
@@ -591,6 +677,10 @@ def prepare_retro_mprage(
     twix: str | Path,
     output_root: str | Path,
     sequence: str | Path,
+    *,
+    psf_coefficient_processing: str = "smooth",
+    psf_fit_kx_min: int | None = None,
+    psf_fit_kx_max: int | None = None,
 ) -> list[dict[str, Any]]:
     """Prepare native R3x2 and three direct-crop LR R3x2 BART input sets.
 
@@ -598,6 +688,9 @@ def prepare_retro_mprage(
         twix: Measured Wave-MPRAGE TWIX file.
         output_root: Dataset-specific output root shared with normal preparation.
         sequence: Pulseq sequence file used for the acquisition.
+        psf_coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
+        psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
+        psf_fit_kx_max: Exclusive final sine-line fitting index, if selected.
 
     Returns:
         One manifest per resolved native or low-resolution case.
@@ -609,7 +702,15 @@ def prepare_retro_mprage(
     """
 
     output_path = Path(output_root).expanduser().resolve()
-    normal = prepare_normal_mprage(twix, output_path, sequence, reuse=True)
+    normal = prepare_normal_mprage(
+        twix,
+        output_path,
+        sequence,
+        psf_coefficient_processing=psf_coefficient_processing,
+        psf_fit_kx_min=psf_fit_kx_min,
+        psf_fit_kx_max=psf_fit_kx_max,
+        reuse=True,
+    )
     normal_inputs = output_path / NORMAL_INPUT_RELATIVE
     retro_root = output_path / RETRO_RELATIVE
     retro_root.mkdir(parents=True, exist_ok=True)

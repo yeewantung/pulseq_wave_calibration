@@ -35,6 +35,13 @@ grid from:
 - the two sequence-derived Wave trajectory displacements; and
 - the integrated calibration phase-plane coefficients `a`, `b`, and `c`.
 
+The coefficients use the upstream nine-sample smoothing mode by default. The
+sample scripts also expose the upstream `sine-line` model
+`A*sin(w*kx+phi)+C1*kx+C2`; that mode requires inclusive `kx-min` and exclusive
+`kx-max` readout indices, defining a half-open `[min, max)` fit interval. The
+selected processing mode and interval are recorded in the normal-input
+manifest and must match before prepared inputs can be reused.
+
 LR PSFs are neither cropped nor interpolated. Measured-Wave LR k-space is
 created by direct centered LIN/PAR cropping, preservation of the measured LIN
 residue, and explicit factor-two selection on PAR, without interpolation,
@@ -134,6 +141,24 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
     --r3-lambda 1.8e-2
 ```
 
+To replace the default coefficient smoothing with the upstream sine-plus-line
+fit, provide both half-open readout bounds:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/a_new_output_root \
+    /path/to/matching_wave_mprage.seq \
+    --psf-coefficient-processing sine-line \
+    --psf-fit-kx-min START_INDEX \
+    --psf-fit-kx-max END_INDEX
+```
+
+Replace `START_INDEX` and `END_INDEX` with integers satisfying
+`0 <= min < max <=` the oversampled readout length. Use a new output root when
+changing the PSF processing settings; incompatible prepared inputs are rejected
+rather than overwritten.
+
 Both examples use CPU BART. Add `-g` after the other arguments to request GPU
 execution from a CUDA-enabled BART build:
 
@@ -161,7 +186,9 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_retro_lr_recon.sh \
 ```
 
 This command uses CPU BART by default. Append `-g` to reconstruct all eight
-Wave branches with a CUDA-enabled BART build.
+Wave branches with a CUDA-enabled BART build. The retrospective script accepts
+the same three `--psf-*` options as the normal script. If normal inputs already
+exist, their recorded coefficient-processing settings must match.
 
 Compatible normal inputs and maps are reused. If absent, the inputs are
 prepared from TWIX and ecalib is run once. Each of the four canonical cases

@@ -24,7 +24,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         Zero after all BART input sets are ready.
     """
     args = _parser().parse_args(argv)
-    prepare_retro_mprage(args.twix, args.output, args.seq)
+    prepare_retro_mprage(
+        args.twix,
+        args.output,
+        args.seq,
+        psf_coefficient_processing=args.psf_coefficient_processing,
+        psf_fit_kx_min=args.psf_fit_kx_min,
+        psf_fit_kx_max=args.psf_fit_kx_max,
+    )
     return 0
 
 
@@ -42,6 +49,22 @@ def _parser() -> argparse.ArgumentParser:
         "output", type=Path, help="Same dataset output root used by the normal script."
     )
     parser.add_argument("seq", type=Path, help="Matching integrated Wave-MPRAGE sequence.")
+    parser.add_argument(
+        "--psf-coefficient-processing",
+        choices=("smooth", "sine-line"),
+        default="smooth",
+        help="Processing applied to the fitted PSF coefficient vectors.",
+    )
+    parser.add_argument(
+        "--psf-fit-kx-min",
+        type=int,
+        help="Inclusive first readout index for sine-line fitting.",
+    )
+    parser.add_argument(
+        "--psf-fit-kx-max",
+        type=int,
+        help="Exclusive final readout index for sine-line fitting.",
+    )
     return parser
 
 

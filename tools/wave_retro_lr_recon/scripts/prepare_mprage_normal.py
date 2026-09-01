@@ -24,7 +24,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         Zero after preparation completes successfully.
     """
     args = _parser().parse_args(argv)
-    prepare_normal_mprage(args.twix, args.output, args.seq, reuse=True)
+    prepare_normal_mprage(
+        args.twix,
+        args.output,
+        args.seq,
+        psf_coefficient_processing=args.psf_coefficient_processing,
+        psf_fit_kx_min=args.psf_fit_kx_min,
+        psf_fit_kx_max=args.psf_fit_kx_max,
+        reuse=True,
+    )
     return 0
 
 
@@ -40,6 +48,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("twix", type=Path, help="Wave-encoded Siemens TWIX file.")
     parser.add_argument("output", type=Path, help="User-selected dataset output root.")
     parser.add_argument("seq", type=Path, help="Matching integrated Wave-MPRAGE sequence.")
+    parser.add_argument(
+        "--psf-coefficient-processing",
+        choices=("smooth", "sine-line"),
+        default="smooth",
+        help="Processing applied to the fitted PSF coefficient vectors.",
+    )
+    parser.add_argument(
+        "--psf-fit-kx-min",
+        type=int,
+        help="Inclusive first readout index for sine-line fitting.",
+    )
+    parser.add_argument(
+        "--psf-fit-kx-max",
+        type=int,
+        help="Exclusive final readout index for sine-line fitting.",
+    )
     return parser
 
 

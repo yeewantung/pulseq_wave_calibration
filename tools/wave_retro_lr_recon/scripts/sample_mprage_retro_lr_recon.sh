@@ -6,6 +6,8 @@ set -euo pipefail
 
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [-g]"
+    echo "       [--psf-coefficient-processing smooth|sine-line]"
+    echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -17,9 +19,15 @@ shift 3
 
 ECALIB_CROP="0.6"
 USE_GPU=false
+PSF_COEFFICIENT_PROCESSING="smooth"
+PSF_FIT_KX_MIN=""
+PSF_FIT_KX_MAX=""
 while (($#)); do
     case "$1" in
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
+        --psf-coefficient-processing) PSF_COEFFICIENT_PROCESSING="$2"; shift 2 ;;
+        --psf-fit-kx-min) PSF_FIT_KX_MIN="$2"; shift 2 ;;
+        --psf-fit-kx-max) PSF_FIT_KX_MAX="$2"; shift 2 ;;
         -g) USE_GPU=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
@@ -33,10 +41,19 @@ RETRO_ROOT="$OUTPUT_ROOT/retro"
 ECALIB_RECORD="$NORMAL_OUTPUT/ecalib_command.txt"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
-command -v bart >/dev/null || { echo "Error: source bart_startup.sh before running." >&2; exit 2; }
+command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
 # This reuses compatible normal inputs, or prepares them from TWIX when absent.
-python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE"
+if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" ]]; then
+    [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]] || { echo "Error: PSF kx bounds require sine-line processing." >&2; exit 2; }
+    python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth
+elif [[ "$PSF_COEFFICIENT_PROCESSING" == "sine-line" ]]; then
+    [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]] || { echo "Error: sine-line processing requires both PSF kx bounds." >&2; exit 2; }
+    python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line --psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX"
+else
+    echo "Error: PSF coefficient processing must be smooth or sine-line." >&2
+    exit 2
+fi
 mkdir -p "$NORMAL_OUTPUT"
 
 # Run ecalib exactly once unless the matching normal workflow already produced

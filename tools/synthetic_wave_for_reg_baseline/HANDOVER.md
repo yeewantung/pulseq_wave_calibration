@@ -29,6 +29,10 @@ The user-facing measured MPRAGE samples now default to CPU BART for collaborator
 portability and accept an explicit `-g` to select their visible GPU command
 branches. This does not change the synthetic experiment runners: their frozen
 provenance and this tool's local `AGENTS.md` continue to require GPU BART.
+The measured samples retain upstream nine-sample PSF coefficient smoothing as
+the default and expose the upstream sine-plus-line alternative with a required
+half-open kx fit interval. Normal-input manifests bind this choice so a
+different coefficient model cannot silently reuse an existing PSF.
 
 Begin GRE implementation planning in a fresh session by rereading the private
 `gre_retro_lr_recon_plan.md` and re-inventorying both this clean worktree and
