@@ -15,7 +15,11 @@ import numpy as np
 
 from .bart_io import create_cfl, open_cfl, read_shape, sha256_file
 from .core import CaseSpec, Geometry, resolve_case
-from .psf import evaluate_calibrated_psf
+from .psf import (
+    PSF_COEFFICIENT_PLOT_NAME,
+    evaluate_calibrated_psf,
+    write_psf_coefficient_plot,
+)
 from .retrospective import resample_sensitivity_maps, write_measured_wave_crop
 from .sampling import SamplingPattern, inspect_twix_sampling
 
@@ -393,6 +397,49 @@ def _read_real_vectors(base: Path, expected_count: int) -> tuple[np.ndarray, ...
     )
 
 
+def _ensure_r3x1_psf_coefficient_plot(
+    normal_directory: Path,
+    sampling_name: str,
+    coefficient_vectors: tuple[np.ndarray, np.ndarray, np.ndarray],
+    psf_settings: Mapping[str, Any],
+    *,
+    overwrite: bool = False,
+) -> Path | None:
+    """Create and announce the native R3x1 PSF coefficient diagnostic.
+
+    Args:
+        normal_directory: Dataset ``normal`` output directory.
+        sampling_name: Validated measured sampling class.
+        coefficient_vectors: Processed ``a``, ``b``, and ``c`` vectors used
+            to evaluate the reconstruction PSF.
+        psf_settings: Normalized coefficient-processing settings.
+        overwrite: Replace an existing diagnostic with the supplied vectors.
+
+    Returns:
+        The diagnostic PNG path for R3x1, otherwise ``None``.
+    """
+    if sampling_name != "R3x1":
+        return None
+    destination = normal_directory / PSF_COEFFICIENT_PLOT_NAME
+    fit_range = psf_settings.get("fit_kx_range")
+    normalized_range = (
+        None if fit_range is None else (int(fit_range[0]), int(fit_range[1]))
+    )
+    if overwrite or not destination.is_file():
+        write_psf_coefficient_plot(
+            *coefficient_vectors,
+            destination,
+            processing=str(psf_settings["coefficient_processing"]),
+            fit_kx_range=normalized_range,
+        )
+    print(f"PSF coefficient visual-assessment plot: {destination}")
+    print(
+        "If reconstruction has unexpected artifacts, inspect this plot and "
+        "tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
+    )
+    return destination
+
+
 def _native_manifest_matches(
     manifest: Mapping[str, Any],
     twix_path: Path,
@@ -481,6 +528,24 @@ def prepare_normal_mprage(
             "psf_coefficients",
         ):
             read_shape(destination / name)
+        a_fit, b_fit, c_fit = _read_real_vectors(destination / "psf_coefficients", 3)
+        diagnostic = _ensure_r3x1_psf_coefficient_plot(
+            destination.parent,
+            str(existing["sampling"]["name"]),
+            (a_fit, b_fit, c_fit),
+            psf_settings,
+        )
+        if diagnostic is not None:
+            expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+            calibration = existing.setdefault("psf_calibration", {})
+            recorded_relative = calibration.get(
+                "visual_assessment_plot_relative_to_output_root"
+            )
+            if recorded_relative != expected_relative:
+                calibration[
+                    "visual_assessment_plot_relative_to_output_root"
+                ] = expected_relative
+                _write_json(manifest_path, existing)
         print(f"Reusing compatible normal BART inputs: {destination}")
         return existing
     if destination.exists() and any(destination.iterdir()):
@@ -592,6 +657,13 @@ def prepare_normal_mprage(
     del psf_output
     _write_real_vectors(destination / "wave_trajectory", (delta_lin, delta_par))
     _write_real_vectors(destination / "psf_coefficients", (a_fit, b_fit, c_fit))
+    diagnostic = _ensure_r3x1_psf_coefficient_plot(
+        destination.parent,
+        sampling.name,
+        (a_fit, b_fit, c_fit),
+        psf_settings,
+        overwrite=True,
+    )
 
     physical_fov_mm_xyz = tuple(
         float(value) * 1000.0 for value in upstream_geometry["FOVxyz"]
@@ -629,6 +701,15 @@ def prepare_normal_mprage(
             "nacs": nacs,
             "wave_trajectory": "wave_trajectory",
             "psf_coefficients": "psf_coefficients",
+            **(
+                {
+                    "visual_assessment_plot_relative_to_output_root": (
+                        f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+                    )
+                }
+                if diagnostic is not None
+                else {}
+            ),
         },
         "dimension_order": ["READ", "PHS1", "PHS2", "COIL", "MAPS"],
         "kspace_calib": "kspace_calib",

@@ -48,6 +48,8 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn('$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"', source)
         self.assertIn('$BART_OUTPUT_ROOT/optimal_wavelet/wave_command.txt"', source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
+        self.assertIn("PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png", source)
+        self.assertIn("TROUBLESHOOTING.md", source)
 
     def test_retro_script_has_one_ecalib_and_eight_wave_commands(self) -> None:
         """Verify one ecalib and explicit CPU/GPU Wave branches per case.
@@ -84,6 +86,8 @@ class SampleCommandTests(unittest.TestCase):
         self.assertEqual(source.count("bart_output/optimal_wavelet/image_wave"), 20)
         self.assertNotIn("sample_mprage_normal_recon.sh", source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
+        self.assertIn("PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png", source)
+        self.assertIn("TROUBLESHOOTING.md", source)
 
     def test_samples_parse_and_offer_dataset_independent_help(self) -> None:
         """Verify all Bash samples parse and expose path-agnostic help.

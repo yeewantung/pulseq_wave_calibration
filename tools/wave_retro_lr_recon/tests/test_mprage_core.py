@@ -16,7 +16,11 @@ sys.path.insert(0, str(TOOL_ROOT))
 from wave_retro_lr.bart_io import create_cfl, open_cfl, read_shape  # noqa: E402
 from wave_retro_lr.core import CaseSpec, Geometry, build_wave_options, resolve_case  # noqa: E402
 from wave_retro_lr.core import build_case_mask  # noqa: E402
-from wave_retro_lr.psf import evaluate_calibrated_psf  # noqa: E402
+from wave_retro_lr.psf import (  # noqa: E402
+    PSF_COEFFICIENT_PLOT_NAME,
+    evaluate_calibrated_psf,
+    write_psf_coefficient_plot,
+)
 from wave_retro_lr.retrospective import (  # noqa: E402
     resample_sensitivity_maps,
     synthesize_wave_from_no_wave_crop,
@@ -30,6 +34,7 @@ from wave_retro_lr.sampling import (  # noqa: E402
 from wave_retro_lr.mprage import (  # noqa: E402
     _calibrated_psf_inputs,
     _embed_image_stream,
+    _ensure_r3x1_psf_coefficient_plot,
     _normalize_psf_coefficient_settings,
 )
 from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
@@ -167,6 +172,69 @@ class SamplingTests(unittest.TestCase):
 
 
 class PsfAndGeometryTests(unittest.TestCase):
+    def test_only_r3x1_preparation_requests_the_visible_diagnostic(self) -> None:
+        """Verify the visible coefficient diagnostic is specific to R3x1.
+
+        Returns:
+            None.
+        """
+        settings = {
+            "coefficient_processing": "smooth",
+            "fit_kx_range": None,
+        }
+        vectors = tuple(np.zeros(16, dtype=np.float64) for _ in range(3))
+        with tempfile.TemporaryDirectory() as folder:
+            normal = Path(folder) / "normal"
+            self.assertIsNone(
+                _ensure_r3x1_psf_coefficient_plot(
+                    normal,
+                    "R1",
+                    vectors,
+                    settings,
+                )
+            )
+            self.assertFalse((normal / PSF_COEFFICIENT_PLOT_NAME).exists())
+
+            result = _ensure_r3x1_psf_coefficient_plot(
+                normal,
+                "R3x1",
+                vectors,
+                settings,
+            )
+            self.assertEqual(result, normal / PSF_COEFFICIENT_PLOT_NAME)
+            self.assertTrue(result.is_file())
+
+    def test_psf_coefficient_plot_records_processed_vectors_and_fit_range(self) -> None:
+        """Verify the headless R3x1 diagnostic is a nonempty PNG.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / PSF_COEFFICIENT_PLOT_NAME
+            kx = np.arange(32, dtype=np.float64)
+            result = write_psf_coefficient_plot(
+                np.sin(kx / 5.0),
+                np.cos(kx / 6.0),
+                0.01 * kx,
+                destination,
+                processing="sine-line",
+                fit_kx_range=(4, 28),
+            )
+            self.assertEqual(result, destination.resolve())
+            self.assertEqual(destination.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertGreater(destination.stat().st_size, 1000)
+
+            with self.assertRaisesRegex(ValueError, "within the readout"):
+                write_psf_coefficient_plot(
+                    kx,
+                    kx,
+                    kx,
+                    destination,
+                    processing="sine-line",
+                    fit_kx_range=(4, 40),
+                )
+
     def test_psf_coefficient_settings_preserve_upstream_modes(self) -> None:
         """Verify smooth and half-open sine-line settings are validated.
 
@@ -403,15 +471,17 @@ class PreparationIntegrationTests(unittest.TestCase):
 
             @staticmethod
             def load_img(path):
-                """Return a finite full-grid mock image stream.
+                """Return a finite R3x1 mock image stream on the full grid.
 
                 Args:
                     path: Ignored mock TWIX path.
 
                 Returns:
-                    A finite complex image-stream tensor.
+                    A finite complex image-stream tensor with R3x1 support.
                 """
-                return torch.ones((8, 16, 16, 12), dtype=torch.complex64)
+                image = torch.zeros((8, 16, 16, 12), dtype=torch.complex64)
+                image[:, (1, 4, 7, 10, 13), :, :] = 1
+                return image
 
             @staticmethod
             def load_ref(path):
@@ -471,11 +541,11 @@ class PreparationIntegrationTests(unittest.TestCase):
                 return kspace @ torch.as_tensor(basis)
 
         pattern = SamplingPattern(
-            name="R1",
-            acceleration_lin_par=(1, 1),
-            lin_residue=None,
+            name="R3x1",
+            acceleration_lin_par=(3, 1),
+            lin_residue=1,
             matrix_lin_par=(16, 16),
-            acquired_lin=tuple(range(16)),
+            acquired_lin=(1, 4, 7, 10, 13),
             acquired_par=tuple(range(16)),
             measurement_index=0,
         )
@@ -515,14 +585,24 @@ class PreparationIntegrationTests(unittest.TestCase):
                 ),
             ):
                 manifest = prepare_normal_mprage(twix, output, sequence)
+                diagnostic = output / "normal" / PSF_COEFFICIENT_PLOT_NAME
+                self.assertTrue(diagnostic.is_file())
+                diagnostic.unlink()
                 retro = prepare_retro_mprage(twix, output, sequence)
 
             normal = output / "normal" / "bart_inputs"
-            self.assertEqual(manifest["sampling"]["name"], "R1")
+            self.assertEqual(manifest["sampling"]["name"], "R3x1")
             self.assertEqual(
                 manifest["psf_calibration"]["coefficient_processing"], "smooth"
             )
             self.assertIsNone(manifest["psf_calibration"]["fit_kx_range"])
+            self.assertEqual(
+                manifest["psf_calibration"][
+                    "visual_assessment_plot_relative_to_output_root"
+                ],
+                f"normal/{PSF_COEFFICIENT_PLOT_NAME}",
+            )
+            self.assertTrue(diagnostic.is_file())
             self.assertEqual(read_shape(normal / "wave_kspace"), (8, 16, 16, 12, 1))
             self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 12))
             self.assertEqual(read_shape(normal / "psf"), (8, 16, 16, 1, 1))

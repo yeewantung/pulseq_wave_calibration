@@ -42,6 +42,16 @@ sample scripts also expose the upstream `sine-line` model
 selected processing mode and interval are recorded in the normal-input
 manifest and must match before prepared inputs can be reused.
 
+For native R3x1 input, preparation also writes the processed coefficients used
+by reconstruction as an immediately visible diagnostic:
+`OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png`. The plot shows
+`a`, `b`, and `c` against the oversampled kx readout index, marks the readout
+center, and shades the selected sine-line fit interval when applicable. It is
+also backfilled when compatible older BART inputs are reused. The sample
+scripts print a reminder to inspect it when reconstruction has unexpected
+artifacts. See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for interpretation;
+the plot is diagnostic and does not automatically accept or reject a PSF.
+
 LR PSFs are neither cropped nor interpolated. Measured-Wave LR k-space is
 created by direct centered LIN/PAR cropping, preservation of the measured LIN
 residue, and explicit factor-two selection on PAR, without interpolation,
@@ -173,6 +183,8 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
 The shared inputs and CSM remain directly below `normal/bart_inputs` and
 `normal/bart_output`. Reconstructed images and NIfTIs are separated into
 `fista_r0` and `optimal_wavelet` subdirectories. R1 creates only `fista_r0`.
+The native R3x1 PSF coefficient diagnostic is placed directly under `normal/`
+so it is not hidden among BART arrays.
 
 ## Retrospective R3x2 and LR command
 

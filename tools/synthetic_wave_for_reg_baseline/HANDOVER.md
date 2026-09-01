@@ -33,6 +33,11 @@ The measured samples retain upstream nine-sample PSF coefficient smoothing as
 the default and expose the upstream sine-plus-line alternative with a required
 half-open kx fit interval. Normal-input manifests bind this choice so a
 different coefficient model cannot silently reuse an existing PSF.
+Native measured R3x1 preparation now also writes
+`normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` below the user-selected output
+root and points users to the Wave tool's `TROUBLESHOOTING.md`. It visualizes
+the processed `a`, `b`, and `c` used for reconstruction and does not alter the
+legacy no-Wave synthetic path or any frozen output tree.
 
 Begin GRE implementation planning in a fresh session by rereading the private
 `gre_retro_lr_recon_plan.md` and re-inventorying both this clean worktree and

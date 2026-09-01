@@ -164,3 +164,7 @@ printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/o
 python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti/optimal_wavelet" --suffix BARTWaveMPRAGELRXY1p25mmR3x2OptimalWavelet
 
 echo "Retrospective MPRAGE reconstructions complete: $RETRO_ROOT"
+if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then
+    echo "PSF visual-assessment plot: $OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
+    echo "For unexpected reconstruction artifacts, review that plot and tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
+fi
