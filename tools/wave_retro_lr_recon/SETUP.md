@@ -131,6 +131,7 @@ submodule URLs or pinned revisions, synchronize and initialize all nested
 dependencies before reactivating the environment:
 
 ```bash
+git pull
 git submodule sync --recursive
 git submodule update --init --recursive
 ```
