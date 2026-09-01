@@ -53,17 +53,20 @@ def _parser() -> argparse.ArgumentParser:
         "--psf-coefficient-processing",
         choices=("smooth", "sine-line"),
         default="smooth",
-        help="Processing applied to the fitted PSF coefficient vectors.",
+        help=(
+            "PSF coefficient processing. Sine-line selects its range automatically "
+            "unless both manual kx bounds are supplied."
+        ),
     )
     parser.add_argument(
         "--psf-fit-kx-min",
         type=int,
-        help="Inclusive first readout index for sine-line fitting.",
+        help="Inclusive manual sine-line readout index; omit both bounds for automatic selection.",
     )
     parser.add_argument(
         "--psf-fit-kx-max",
         type=int,
-        help="Exclusive final readout index for sine-line fitting.",
+        help="Exclusive manual sine-line readout index; omit both bounds for automatic selection.",
     )
     return parser
 

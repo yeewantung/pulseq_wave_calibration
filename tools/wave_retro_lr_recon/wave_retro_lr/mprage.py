@@ -48,7 +48,8 @@ def _normalize_psf_coefficient_settings(
         fit_kx_max: Exclusive final readout index used by sine-line fitting.
 
     Returns:
-        A JSON-compatible settings mapping with a half-open fit range.
+        A JSON-compatible request mapping that distinguishes automatic and
+        manual half-open fit-range selection.
 
     Raises:
         ValueError: If the mode is unsupported or its kx bounds are invalid.
@@ -61,18 +62,29 @@ def _normalize_psf_coefficient_settings(
             raise ValueError("PSF fit kx bounds are valid only with sine-line processing.")
         return {
             "coefficient_processing": "smooth",
-            "fit_kx_range": None,
+            "fit_range_selection": None,
+            "requested_fit_kx_range": None,
             "fit_kx_range_convention": "half-open",
         }
-    if fit_kx_min is None or fit_kx_max is None:
-        raise ValueError("Sine-line PSF processing requires both fit kx bounds.")
+    if (fit_kx_min is None) != (fit_kx_max is None):
+        raise ValueError(
+            "Sine-line PSF processing requires both manual fit kx bounds or neither."
+        )
+    if fit_kx_min is None:
+        return {
+            "coefficient_processing": "sine-line",
+            "fit_range_selection": "automatic",
+            "requested_fit_kx_range": None,
+            "fit_kx_range_convention": "half-open",
+        }
     lower = int(fit_kx_min)
     upper = int(fit_kx_max)
     if lower < 0 or upper <= lower:
         raise ValueError("PSF fit kx bounds must satisfy 0 <= min < max.")
     return {
         "coefficient_processing": "sine-line",
-        "fit_kx_range": [lower, upper],
+        "fit_range_selection": "manual",
+        "requested_fit_kx_range": [lower, upper],
         "fit_kx_range_convention": "half-open",
     }
 
@@ -155,6 +167,32 @@ def _repo_root() -> Path:
         The absolute repository path inferred from this module location.
     """
     return Path(__file__).resolve().parents[3]
+
+
+def _psf_processing_implementation_identity() -> dict[str, Any]:
+    """Identify pinned upstream files that determine MPRAGE PSF calibration.
+
+    Returns:
+        Relative upstream paths and SHA-256 digests used to reject prepared
+        inputs created by a different calibration implementation.
+
+    Raises:
+        FileNotFoundError: If an expected pinned upstream source file is absent.
+    """
+
+    repository = _repo_root()
+    relative_paths = (
+        Path("external/wave-mprage/recon/recon_wave_mprage_from_twix_integrated_nifti.py"),
+        Path("external/wave-mprage/recon/utils/psf_coefficient_processing.py"),
+        Path("external/wave-mprage/recon/utils/psf_wrapped_phase_fit.py"),
+    )
+    files = {}
+    for relative_path in relative_paths:
+        source = repository / relative_path
+        if not source.is_file():
+            raise FileNotFoundError(f"Pinned PSF calibration source not found: {source}")
+        files[str(relative_path)] = sha256_file(source)
+    return {"files_sha256": files}
 
 
 def load_wave_mprage_helpers() -> Any:
@@ -292,7 +330,7 @@ def _calibrated_psf_inputs(
     coefficient_processing: str,
     fit_kx_min: int | None,
     fit_kx_max: int | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     """Fit ``a,b,c`` and return them with the sequence Wave trajectories.
 
     Args:
@@ -308,7 +346,8 @@ def _calibrated_psf_inputs(
 
     Returns:
         ``delta_lin``, ``delta_par``, and fitted ``a``, ``b``, ``c`` vectors,
-        each sampled on the oversampled readout grid.
+        each sampled on the oversampled readout grid, followed by the upstream
+        coefficient-processing diagnostics.
 
     Raises:
         ValueError: If any returned vector has an unexpected length.
@@ -316,7 +355,13 @@ def _calibrated_psf_inputs(
 
     with tempfile.TemporaryDirectory(prefix="wave_mprage_psf_") as temporary:
         output_prefix = str(Path(temporary)) + "/"
-        a_raw, b_raw, c_raw, calibration_samples = native.fit_wave_psf_deviation_from_projection(
+        (
+            a_raw,
+            b_raw,
+            c_raw,
+            calibration_samples,
+            calibration_evidence,
+        ) = native.fit_wave_psf_deviation_from_projection(
             mprage_data_file=str(twix_path),
             mprage_seq_file=str(sequence_path),
             out_folder=output_prefix,
@@ -326,8 +371,9 @@ def _calibrated_psf_inputs(
             Ncalib=ncalib,
             Nacs=nacs,
             slice_orientation="SAG",
+            return_diagnostics=True,
         )
-    a_fit, b_fit, c_fit = native._process_psf_coefficients(
+    a_fit, b_fit, c_fit, processing_diagnostics = native._process_psf_coefficients(
         a_raw,
         b_raw,
         c_raw,
@@ -335,6 +381,8 @@ def _calibrated_psf_inputs(
         coefficient_processing=coefficient_processing,
         fit_kx_min=fit_kx_min,
         fit_kx_max=fit_kx_max,
+        fit_quality=calibration_evidence["projection_quality"],
+        return_diagnostics=True,
     )
     delta_lin, delta_par = native.generate_theoretical_wave_trajectory(
         fn_seq=str(sequence_path),
@@ -348,7 +396,7 @@ def _calibrated_psf_inputs(
     )
     if any(value.size != readout_oversampled for value in vectors):
         raise ValueError("Calibrated PSF vectors do not match the oversampled readout.")
-    return vectors  # type: ignore[return-value]
+    return (*vectors, processing_diagnostics)  # type: ignore[return-value]
 
 
 def _write_real_vectors(base: Path, vectors: tuple[np.ndarray, ...]) -> None:
@@ -431,6 +479,7 @@ def _ensure_r3x1_psf_coefficient_plot(
             destination,
             processing=str(psf_settings["coefficient_processing"]),
             fit_kx_range=normalized_range,
+            fit_range_selection=psf_settings.get("fit_range_selection"),
         )
     print(f"PSF coefficient visual-assessment plot: {destination}")
     print(
@@ -458,12 +507,23 @@ def _native_manifest_matches(
         ``True`` when the status, source identities, and PSF settings match.
     """
     recorded_psf = manifest.get("psf_calibration", {})
+    recorded_mode = recorded_psf.get("coefficient_processing", "smooth")
+    recorded_selection = recorded_psf.get("fit_range_selection")
+    if recorded_selection is None and recorded_mode == "sine-line":
+        recorded_selection = (
+            "manual" if recorded_psf.get("fit_kx_range") is not None else "automatic"
+        )
+    recorded_requested_range = recorded_psf.get("requested_fit_kx_range")
+    if recorded_requested_range is None and recorded_selection == "manual":
+        recorded_requested_range = recorded_psf.get("fit_kx_range")
     recorded_settings = {
-        "coefficient_processing": recorded_psf.get("coefficient_processing", "smooth"),
-        "fit_kx_range": recorded_psf.get("fit_kx_range"),
+        "coefficient_processing": recorded_mode,
+        "fit_range_selection": recorded_selection,
+        "requested_fit_kx_range": recorded_requested_range,
         "fit_kx_range_convention": recorded_psf.get(
             "fit_kx_range_convention", "half-open"
         ),
+        "processing_implementation": recorded_psf.get("processing_implementation"),
     }
     return (
         manifest.get("status") == "measured_wave_mprage_bart_inputs_ready"
@@ -511,6 +571,9 @@ def prepare_normal_mprage(
     psf_settings = _normalize_psf_coefficient_settings(
         psf_coefficient_processing, psf_fit_kx_min, psf_fit_kx_max
     )
+    psf_settings["processing_implementation"] = (
+        _psf_processing_implementation_identity()
+    )
     destination = Path(output_root).expanduser().resolve() / NORMAL_INPUT_RELATIVE
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and reuse:
@@ -529,11 +592,15 @@ def prepare_normal_mprage(
         ):
             read_shape(destination / name)
         a_fit, b_fit, c_fit = _read_real_vectors(destination / "psf_coefficients", 3)
+        effective_psf_settings = {
+            **psf_settings,
+            "fit_kx_range": existing.get("psf_calibration", {}).get("fit_kx_range"),
+        }
         diagnostic = _ensure_r3x1_psf_coefficient_plot(
             destination.parent,
             str(existing["sampling"]["name"]),
             (a_fit, b_fit, c_fit),
-            psf_settings,
+            effective_psf_settings,
         )
         if diagnostic is not None:
             expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
@@ -561,10 +628,10 @@ def prepare_normal_mprage(
     ro_os = nro * os_factor
     ncalib = int(definitions.get("Calibration_Ncalib1", 72))
     nacs = int(definitions.get("Calibration_Nacs", 32))
-    fit_kx_range = psf_settings["fit_kx_range"]
-    if fit_kx_range is not None and int(fit_kx_range[1]) > ro_os:
+    requested_fit_kx_range = psf_settings["requested_fit_kx_range"]
+    if requested_fit_kx_range is not None and int(requested_fit_kx_range[1]) > ro_os:
         raise ValueError(
-            f"PSF fit kx max {fit_kx_range[1]} exceeds oversampled readout {ro_os}."
+            f"PSF fit kx max {requested_fit_kx_range[1]} exceeds oversampled readout {ro_os}."
         )
     native._resolve_mprage_wave_mode(
         "wave", str(sequence_path), ro_os, ncalib, nacs, slice_orientation="SAG"
@@ -617,7 +684,14 @@ def prepare_normal_mprage(
     ] = compressed_acs
 
     # Evaluate the calibrated Wave model on the native acquisition grid.
-    delta_lin, delta_par, a_fit, b_fit, c_fit = _calibrated_psf_inputs(
+    (
+        delta_lin,
+        delta_par,
+        a_fit,
+        b_fit,
+        c_fit,
+        psf_processing_diagnostics,
+    ) = _calibrated_psf_inputs(
         native,
         twix_path=twix_path,
         sequence_path=sequence_path,
@@ -626,12 +700,17 @@ def prepare_normal_mprage(
         nacs=nacs,
         coefficient_processing=str(psf_settings["coefficient_processing"]),
         fit_kx_min=(
-            None if fit_kx_range is None else fit_kx_range[0]
+            None if requested_fit_kx_range is None else requested_fit_kx_range[0]
         ),
         fit_kx_max=(
-            None if fit_kx_range is None else fit_kx_range[1]
+            None if requested_fit_kx_range is None else requested_fit_kx_range[1]
         ),
     )
+    selected_fit_kx_range = psf_processing_diagnostics.get("kx_range")
+    effective_psf_settings = {
+        **psf_settings,
+        "fit_kx_range": selected_fit_kx_range,
+    }
     calibrated_psf = evaluate_calibrated_psf(
         delta_lin,
         delta_par,
@@ -661,7 +740,7 @@ def prepare_normal_mprage(
         destination.parent,
         sampling.name,
         (a_fit, b_fit, c_fit),
-        psf_settings,
+        effective_psf_settings,
         overwrite=True,
     )
 
@@ -669,7 +748,7 @@ def prepare_normal_mprage(
         float(value) * 1000.0 for value in upstream_geometry["FOVxyz"]
     )
     manifest: dict[str, Any] = {
-        "format_version": 1,
+        "format_version": 2,
         "status": "measured_wave_mprage_bart_inputs_ready",
         "source": {
             "twix": _file_identity(twix_path),
@@ -696,6 +775,8 @@ def prepare_normal_mprage(
         "psf_calibration": {
             "method": "sequence trajectory plus processed integrated projection a,b,c",
             **psf_settings,
+            "fit_kx_range": selected_fit_kx_range,
+            "processing_diagnostics": psf_processing_diagnostics,
             "trajectory_sign_lin_par": [-1, -1],
             "ncalib": ncalib,
             "nacs": nacs,

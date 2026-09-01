@@ -37,10 +37,13 @@ grid from:
 
 The coefficients use the upstream nine-sample smoothing mode by default. The
 sample scripts also expose the upstream `sine-line` model
-`A*sin(w*kx+phi)+C1*kx+C2`; that mode requires inclusive `kx-min` and exclusive
-`kx-max` readout indices, defining a half-open `[min, max)` fit interval. The
-selected processing mode and interval are recorded in the normal-input
-manifest and must match before prepared inputs can be reused.
+`A*sin(w*kx+phi)+C1*kx+C2`. Omitting both kx bounds requests automatic range
+selection; providing both inclusive `kx-min` and exclusive `kx-max` indices is
+a reproducible manual override using the half-open interval `[min, max)`. The
+request, selected interval, algorithm diagnostics, and pinned implementation
+identity are recorded in the normal-input manifest and must match before
+prepared inputs can be reused. Automatic selection or fit validation failures
+stop preparation rather than silently falling back to smoothing.
 
 For native R3x1 input, preparation also writes the processed coefficients used
 by reconstruction as an immediately visible diagnostic:
@@ -151,8 +154,19 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
     --r3-lambda 1.8e-2
 ```
 
-To replace the default coefficient smoothing with the upstream sine-plus-line
-fit, provide both half-open readout bounds:
+If the default smooth-coefficient PNG looks unreliable, request automatic
+sine-plus-line fitting by omitting the optional bounds:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/a_new_output_root \
+    /path/to/matching_wave_mprage.seq \
+    --psf-coefficient-processing sine-line
+```
+
+If the automatic result is also unsatisfactory, override it with a reviewed
+half-open readout interval:
 
 ```bash
 tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
@@ -167,9 +181,10 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
 Replace `START_INDEX` and `END_INDEX` with integers satisfying
 `0 <= min < max <=` the oversampled readout length. Use a new output root when
 changing the PSF processing settings; incompatible prepared inputs are rejected
-rather than overwritten.
+rather than overwritten. Always inspect the newly generated coefficient PNG;
+automatic sine-line is optional and does not change the default from smooth.
 
-Both examples use CPU BART. Add `-g` after the other arguments to request GPU
+These examples use CPU BART. Add `-g` after the other arguments to request GPU
 execution from a CUDA-enabled BART build:
 
 ```bash

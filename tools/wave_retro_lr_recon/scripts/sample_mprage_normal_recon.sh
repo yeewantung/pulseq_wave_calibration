@@ -45,14 +45,20 @@ ECALIB_RECORD="$BART_OUTPUT_ROOT/ecalib_command.txt"
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
-# Smooth coefficients by default, or pass both half-open kx bounds to the
-# upstream sine-plus-line model before evaluating the calibrated PSF.
+# Smooth coefficients by default. Sine-line without bounds selects its range
+# automatically; providing both bounds is a reproducible manual override.
 if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" ]]; then
     [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]] || { echo "Error: PSF kx bounds require sine-line processing." >&2; exit 2; }
     python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth
 elif [[ "$PSF_COEFFICIENT_PROCESSING" == "sine-line" ]]; then
-    [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]] || { echo "Error: sine-line processing requires both PSF kx bounds." >&2; exit 2; }
-    python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line --psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX"
+    if [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]]; then
+        python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line
+    elif [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
+        python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line --psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX"
+    else
+        echo "Error: manual sine-line processing requires both PSF kx bounds; omit both for automatic selection." >&2
+        exit 2
+    fi
 else
     echo "Error: PSF coefficient processing must be smooth or sine-line." >&2
     exit 2

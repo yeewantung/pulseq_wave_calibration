@@ -245,7 +245,17 @@ class PsfAndGeometryTests(unittest.TestCase):
             _normalize_psf_coefficient_settings("smooth", None, None),
             {
                 "coefficient_processing": "smooth",
-                "fit_kx_range": None,
+                "fit_range_selection": None,
+                "requested_fit_kx_range": None,
+                "fit_kx_range_convention": "half-open",
+            },
+        )
+        self.assertEqual(
+            _normalize_psf_coefficient_settings("sine-line", None, None),
+            {
+                "coefficient_processing": "sine-line",
+                "fit_range_selection": "automatic",
+                "requested_fit_kx_range": None,
                 "fit_kx_range_convention": "half-open",
             },
         )
@@ -253,7 +263,8 @@ class PsfAndGeometryTests(unittest.TestCase):
             _normalize_psf_coefficient_settings("sine-line", 12, 180),
             {
                 "coefficient_processing": "sine-line",
-                "fit_kx_range": [12, 180],
+                "fit_range_selection": "manual",
+                "requested_fit_kx_range": [12, 180],
                 "fit_kx_range_convention": "half-open",
             },
         )
@@ -273,14 +284,27 @@ class PsfAndGeometryTests(unittest.TestCase):
         raw_a = np.arange(8, dtype=np.float64)
         raw_b = raw_a + 1
         raw_c = raw_a + 2
+        quality = {"combined_support": np.ones(8, dtype=np.float64)}
+        diagnostics = {
+            "coefficient_processing": "sine-line",
+            "fit_range_selection": "manual",
+            "kx_range": [1, 7],
+            "kx_range_convention": "half-open [min, max)",
+        }
         native = Mock()
         native.fit_wave_psf_deviation_from_projection.return_value = (
             raw_a,
             raw_b,
             raw_c,
             320,
+            {"projection_quality": quality},
         )
-        native._process_psf_coefficients.return_value = (raw_a, raw_b, raw_c)
+        native._process_psf_coefficients.return_value = (
+            raw_a,
+            raw_b,
+            raw_c,
+            diagnostics,
+        )
         native.generate_theoretical_wave_trajectory.return_value = (raw_a, raw_b)
 
         result = _calibrated_psf_inputs(
@@ -295,11 +319,47 @@ class PsfAndGeometryTests(unittest.TestCase):
             fit_kx_max=7,
         )
 
-        self.assertEqual(len(result), 5)
+        self.assertEqual(len(result), 6)
+        self.assertIs(result[-1], diagnostics)
+        calibration_call = native.fit_wave_psf_deviation_from_projection.call_args
+        self.assertTrue(calibration_call.kwargs["return_diagnostics"])
         processing_call = native._process_psf_coefficients.call_args
         self.assertEqual(processing_call.kwargs["coefficient_processing"], "sine-line")
         self.assertEqual(processing_call.kwargs["fit_kx_min"], 1)
         self.assertEqual(processing_call.kwargs["fit_kx_max"], 7)
+        self.assertIs(processing_call.kwargs["fit_quality"], quality)
+        self.assertTrue(processing_call.kwargs["return_diagnostics"])
+
+        native.reset_mock()
+        native.fit_wave_psf_deviation_from_projection.return_value = (
+            raw_a,
+            raw_b,
+            raw_c,
+            320,
+            {"projection_quality": quality},
+        )
+        native._process_psf_coefficients.return_value = (
+            raw_a,
+            raw_b,
+            raw_c,
+            {**diagnostics, "fit_range_selection": "automatic"},
+        )
+        native.generate_theoretical_wave_trajectory.return_value = (raw_a, raw_b)
+        _calibrated_psf_inputs(
+            native,
+            twix_path=Path("input.dat"),
+            sequence_path=Path("input.seq"),
+            readout_oversampled=8,
+            ncalib=4,
+            nacs=4,
+            coefficient_processing="sine-line",
+            fit_kx_min=None,
+            fit_kx_max=None,
+        )
+        automatic_call = native._process_psf_coefficients.call_args
+        self.assertIsNone(automatic_call.kwargs["fit_kx_min"])
+        self.assertIsNone(automatic_call.kwargs["fit_kx_max"])
+        self.assertIs(automatic_call.kwargs["fit_quality"], quality)
 
     def test_target_matrices_are_nearest_multiple_of_four(self) -> None:
         """Verify requested LR spacings resolve to compatible PE matrices.
@@ -561,6 +621,12 @@ class PreparationIntegrationTests(unittest.TestCase):
             "FOVxyz": (0.016, 0.016, 0.004),
         }
         zero_vectors = tuple(np.zeros(8, dtype=np.float64) for _ in range(5))
+        processing_diagnostics = {
+            "coefficient_processing": "smooth",
+            "fit_range_selection": None,
+            "kx_range": None,
+            "kx_range_convention": "half-open [min, max)",
+        }
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -581,7 +647,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                 ),
                 patch(
                     "wave_retro_lr.mprage._calibrated_psf_inputs",
-                    return_value=zero_vectors,
+                    return_value=(*zero_vectors, processing_diagnostics),
                 ),
             ):
                 manifest = prepare_normal_mprage(twix, output, sequence)
@@ -596,6 +662,14 @@ class PreparationIntegrationTests(unittest.TestCase):
                 manifest["psf_calibration"]["coefficient_processing"], "smooth"
             )
             self.assertIsNone(manifest["psf_calibration"]["fit_kx_range"])
+            self.assertIsNone(manifest["psf_calibration"]["fit_range_selection"])
+            self.assertIsNone(
+                manifest["psf_calibration"]["requested_fit_kx_range"]
+            )
+            self.assertEqual(
+                manifest["psf_calibration"]["processing_diagnostics"],
+                processing_diagnostics,
+            )
             self.assertEqual(
                 manifest["psf_calibration"][
                     "visual_assessment_plot_relative_to_output_root"

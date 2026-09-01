@@ -17,6 +17,7 @@ def write_psf_coefficient_plot(
     *,
     processing: str,
     fit_kx_range: tuple[int, int] | None = None,
+    fit_range_selection: str | None = None,
 ) -> Path:
     """Plot the processed PSF phase coefficients against readout index.
 
@@ -27,6 +28,8 @@ def write_psf_coefficient_plot(
         output_path: Destination PNG path.
         processing: Coefficient-processing mode recorded in the figure title.
         fit_kx_range: Optional half-open sine-line fit interval ``[min, max)``.
+        fit_range_selection: Optional ``automatic`` or ``manual`` selection
+            label recorded in the figure title.
 
     Returns:
         The resolved path of the written PNG diagnostic.
@@ -70,10 +73,11 @@ def write_psf_coefficient_plot(
         axis.grid(alpha=0.2)
     axes[-1].set_xlabel("kx (oversampled readout sample index)")
     mode = str(processing).strip().lower()
+    selection = "" if fit_range_selection is None else f" ({fit_range_selection})"
     interval = "" if fit_kx_range is None else f"; fit range [{lower}, {upper})"
     figure.suptitle(
         "Native R3x1 PSF coefficients used for reconstruction\n"
-        f"processing: {mode}{interval}"
+        f"processing: {mode}{selection}{interval}"
     )
     temporary = destination.with_name(f".{destination.stem}.tmp{destination.suffix}")
     figure.savefig(temporary, dpi=160, format="png")
