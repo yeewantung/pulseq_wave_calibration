@@ -25,6 +25,11 @@ source test suites passed, and the user accepted representative real-data
 normal, retrospective, NIfTI, and shared-mask results on 2026-09-01. Commit
 `0d94870` records this accepted dual-branch implementation.
 
+The user-facing measured MPRAGE samples now default to CPU BART for collaborator
+portability and accept an explicit `-g` to select their visible GPU command
+branches. This does not change the synthetic experiment runners: their frozen
+provenance and this tool's local `AGENTS.md` continue to require GPU BART.
+
 Begin GRE implementation planning in a fresh session by rereading the private
 `gre_retro_lr_recon_plan.md` and re-inventorying both this clean worktree and
 the pinned Wave-GRE candidate. Do not add the submodule or modify the upstream
@@ -403,9 +408,9 @@ the GRE plan together record current work.
 
 `tools/wave_retro_lr_recon/SETUP.md` separately documents the recommended
 standard-venv workflow (including later reactivation), optional uv usage,
-managed-environment integration, the CUDA-enabled BART build and activation
-contract, and GPU runtime checks. Keep its portable setup instructions
-synchronized when GRE adds or changes dependencies.
+managed-environment integration, CPU-only and CUDA-enabled BART builds, and
+runtime checks. Keep its portable setup instructions synchronized when GRE
+adds or changes dependencies.
 
 ## Dataset roles and baseline status
 

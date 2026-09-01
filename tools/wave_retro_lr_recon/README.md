@@ -54,9 +54,9 @@ For measured R3x1 it reconstructs both the unregularized FISTA control
 crop and R3 Wavelet lambda may be overridden on the command line. R1 remains
 FISTA-r0-only because the five-case rerun did not select an R1 Wavelet value.
 
-The pinned `macha` BART `ecalib` command does not provide a `-g` option, so its
-explicit command is `bart ecalib -m 1 -c ...`. BART `wave` does support GPU,
-and every reconstruction command requires `-g`.
+The validated BART v1.0 `ecalib` command does not provide a `-g` option, so its
+explicit command is `bart ecalib -m 1 -c ...`. The sample scripts run BART
+`wave` on CPU by default; pass `-g` to select their explicit GPU commands.
 
 The retrospective sample estimates native CSMs once and runs four sequential
 R3x2 cases:
@@ -120,8 +120,8 @@ machine-specific executable or dataset path in a tracked file; use an ignored
 `.local.sh` launcher when desired.
 
 See [`SETUP.md`](SETUP.md) for the recommended standard-venv installation and
-reactivation workflow, optional uv usage, CUDA-enabled BART compilation and
-activation, and GPU validation.
+reactivation workflow, optional uv usage, CPU-only or CUDA-enabled BART
+compilation, and runtime validation.
 
 ## Normal measured-data command
 
@@ -145,6 +145,17 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
     --r3-lambda 1.8e-2
 ```
 
+Both examples use CPU BART. Add `-g` after the other arguments to request GPU
+execution from a CUDA-enabled BART build:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq \
+    -g
+```
+
 The shared inputs and CSM remain directly below `normal/bart_inputs` and
 `normal/bart_output`. Reconstructed images and NIfTIs are separated into
 `fista_r0` and `optimal_wavelet` subdirectories. R1 creates only `fista_r0`.
@@ -159,6 +170,9 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_retro_lr_recon.sh \
     /path/to/output_root \
     /path/to/matching_wave_mprage.seq
 ```
+
+This command uses CPU BART by default. Append `-g` to reconstruct all eight
+Wave branches with a CUDA-enabled BART build.
 
 Compatible normal inputs and maps are reused. If absent, the inputs are
 prepared from TWIX and ecalib is run once. Each of the four canonical cases

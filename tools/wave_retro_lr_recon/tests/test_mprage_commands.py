@@ -31,17 +31,22 @@ class SampleCommandTests(unittest.TestCase):
         ]
         self.assertEqual(sum(line.startswith("bart ecalib -m 1 ") for line in commands), 1)
         self.assertEqual(sum(line.startswith("bart wave -g ") for line in commands), 3)
+        self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 3)
         self.assertIn('ECALIB_CROP="0.6"', source)
         self.assertIn('R3_LAMBDA="3.5e-2"', source)
+        self.assertIn("USE_GPU=false", source)
+        self.assertIn("-g) USE_GPU=true; shift ;;", source)
         self.assertEqual(sum(line.startswith("bart wave -g -w -f -r 0 ") for line in commands), 2)
+        self.assertEqual(sum(line.startswith("bart wave -w -f -r 0 ") for line in commands), 2)
         self.assertIn('bart wave -g -w -f -r "$R3_LAMBDA" ', source)
+        self.assertIn('bart wave -w -f -r "$R3_LAMBDA" ', source)
         self.assertIn('ECALIB_RECORD="$BART_OUTPUT_ROOT/ecalib_command.txt"', source)
         self.assertIn('$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"', source)
         self.assertIn('$BART_OUTPUT_ROOT/optimal_wavelet/wave_command.txt"', source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
 
     def test_retro_script_has_one_ecalib_and_eight_wave_commands(self) -> None:
-        """Verify one ecalib and two explicit GPU Wave commands per case.
+        """Verify one ecalib and explicit CPU/GPU Wave branches per case.
 
         Returns:
             None.
@@ -54,14 +59,21 @@ class SampleCommandTests(unittest.TestCase):
         ]
         self.assertEqual(sum(line.startswith("bart ecalib -m 1 ") for line in commands), 1)
         self.assertEqual(sum(line.startswith("bart wave -g ") for line in commands), 8)
+        self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 8)
+        self.assertIn("USE_GPU=false", source)
+        self.assertIn("-g) USE_GPU=true; shift ;;", source)
         self.assertEqual(sum(line.startswith("bart wave -g -w -f -r 0 ") for line in commands), 4)
+        self.assertEqual(sum(line.startswith("bart wave -w -f -r 0 ") for line in commands), 4)
         self.assertEqual(sum("bart wave -g -w -f -r 3.5e-2 " in line for line in commands), 1)
+        self.assertEqual(sum("bart wave -w -f -r 3.5e-2 " in line for line in commands), 1)
         self.assertEqual(sum("bart wave -g -w -f -r 2.5e-2 " in line for line in commands), 2)
+        self.assertEqual(sum("bart wave -w -f -r 2.5e-2 " in line for line in commands), 2)
         self.assertEqual(sum("bart wave -g -w -f -r 2.2e-2 " in line for line in commands), 1)
+        self.assertEqual(sum("bart wave -w -f -r 2.2e-2 " in line for line in commands), 1)
         self.assertNotIn("bart ecalib -g", source)
         self.assertEqual(source.count('wave_command.txt"'), 8)
-        self.assertEqual(source.count("bart_output/fista_r0/image_wave"), 12)
-        self.assertEqual(source.count("bart_output/optimal_wavelet/image_wave"), 12)
+        self.assertEqual(source.count("bart_output/fista_r0/image_wave"), 20)
+        self.assertEqual(source.count("bart_output/optimal_wavelet/image_wave"), 20)
         self.assertNotIn("sample_mprage_normal_recon.sh", source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
 
@@ -84,6 +96,8 @@ class SampleCommandTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn(expected_help, completed.stdout)
+            if name != "sample_mprage_nifti_collection.sh":
+                self.assertIn("[-g]", completed.stdout)
 
         defaults = HeadMaskParameters()
         self.assertEqual(defaults.relative_threshold, 0.02)
