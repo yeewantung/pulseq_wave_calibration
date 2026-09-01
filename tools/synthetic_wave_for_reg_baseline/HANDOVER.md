@@ -20,9 +20,18 @@ The measured MPRAGE sample workflows now retain the FISTA-r0 control and the
 selected Wavelet result as separate canonical branches for ablation. The
 optional collection copies both branches and applies one normal
 optimal-Wavelet-derived whole-head mask to both. Normal R1 remains
-FISTA-r0-only because this rerun did not select an R1 Wavelet value. Complete
-source tests and real-data validation before beginning GRE implementation or
-the broader synthetic-tool cleanup.
+FISTA-r0-only because this rerun did not select an R1 Wavelet value. Both full
+source test suites passed, and the user accepted representative real-data
+normal, retrospective, NIfTI, and shared-mask results on 2026-09-01. Commit
+`0d94870` records this accepted dual-branch implementation.
+
+Begin GRE implementation planning in a fresh session by rereading the private
+`gre_retro_lr_recon_plan.md` and re-inventorying both this clean worktree and
+the pinned Wave-GRE candidate. Do not add the submodule or modify the upstream
+repository until the focused GRE preparation API, nested-submodule handling,
+and exact parent-repository change map have been reviewed. The broader
+synthetic-tool structural cleanup remains after the GRE decision unless the
+user explicitly changes phase order.
 
 The existing case-matched CSMs and calibrated PSFs remain the reconstruction
 inputs for this rerun, and the approved BET brain mask remains evaluation-only.
@@ -378,15 +387,19 @@ The accepted Wave-MPRAGE cleanup is recorded by:
 3355fe5 refactor(tools): streamline Wave MPRAGE reconstruction
 cad8191 fix(tools): correct MPRAGE export orientation
 c61b302 Add separate MPRAGE NIfTI masking workflow
+3ff2436 feat(tools): add pure-mask synthetic Wave rerun
+9ac657c docs(tools): record GRE reconstruction plan
+0d94870 feat(tools): add MPRAGE ablation recon branches
 ```
 
-At the 2026-08-31 documentation check, `HEAD` and the local `origin/main`
-tracking ref pointed to `c61b302`; no fetch was performed. The shared worktree
-also contained the separate synthetic pure-mask implementation/rerun changes.
-Check `git status --short --branch` before every edit and do not assume any
-modified or untracked synthetic file is disposable. The historical tracker is
-under `docs/archive/`; `EXPERIMENT_PLAN.md`, the source cleanup plan, the
-pure-mask rerun plan, and the GRE plan together record current work.
+At the 2026-09-01 validation checkpoint, `HEAD` and the local `origin/main`
+tracking ref pointed to `0d94870`; no fetch was performed. The worktree and
+index were clean. The pure-mask rerun implementation is `3ff2436`, the GRE
+planning checkpoint is `9ac657c`, and the accepted dual-branch measured-MPRAGE
+implementation is `0d94870`. Recheck status before every edit and do not reset
+or discard later work. The historical tracker is under `docs/archive/`;
+`EXPERIMENT_PLAN.md`, the source cleanup plan, the pure-mask rerun plan, and
+the GRE plan together record current work.
 
 ## Dataset roles and baseline status
 

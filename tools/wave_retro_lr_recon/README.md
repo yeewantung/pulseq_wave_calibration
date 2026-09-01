@@ -74,6 +74,10 @@ selection manifest has SHA-256
 `07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6`.
 Historical ACS-union selections are not carried forward.
 
+The complete dual-branch normal, retrospective, NIfTI-conversion, and shared
+head-mask collection workflow passed representative real measured-MPRAGE
+visual validation on 2026-09-01. This closes the MPRAGE gate before GRE work.
+
 LR CSMs are derived from the one accepted native ecalib map set by centered
 Fourier resampling in PE at unchanged FOV, followed by coil-RSS
 renormalization. Readout maps are not resized. Every reconstruction exports
@@ -83,18 +87,18 @@ sidecars; an existing CSM is reused only when its command record matches.
 
 Reconstruction and presentation masking are separate workflows. The normal
 and retrospective reconstruction scripts write canonical NIfTIs below the
-`fista_r0` and `optimal_wavelet` branches. The
-optional collection script creates byte-identical canonical copies and
+`fista_r0` and `optimal_wavelet` branches. The optional collection script
+creates byte-identical canonical copies and
 whole-head-masked derivatives beneath `OUTPUT_ROOT/nifti_collection`. The
 canonical files under `normal/nifti/*` and `retro/*/nifti/*` remain unchanged
 and are the scientific source of record.
 
 The mask is estimated once from the normal optimal-Wavelet magnitude and is
 applied identically to both reconstruction branches. For the R1-only workflow,
-the normal FISTA-r0 magnitude is the documented fallback source. The mask supports a
-high-confidence head core with distance-limited low-threshold growth, optional
-physical opening, physical closing, the largest 26-connected 3D component, 3D
-hole filling, and optional physical dilation. BET is not used. On LR grids,
+the normal FISTA-r0 magnitude is the documented fallback source. The mask
+supports a high-confidence head core with distance-limited low-threshold
+growth, optional physical opening, physical closing, the largest 26-connected
+3D component, 3D hole filling, and optional physical dilation. BET is not used. On LR grids,
 this same mask is mapped by nearest-neighbor interpolation in NIfTI physical
 space; it is never re-estimated from a noisier R3x2 image. These masked
 derivatives are for viewing and background suppression, not for
