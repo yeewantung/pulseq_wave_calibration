@@ -1,3 +1,6 @@
 [submodule "external/wave-mprage"]
 	path = external/wave-mprage
 	url = https://github.com/HarmonizedMRI/wave-mprage.git
+[submodule "external/wave-gre-flow-comp"]
+	path = external/wave-gre-flow-comp
+	url = https://github.com/HarmonizedMRI/wave-gre-flow-comp.git

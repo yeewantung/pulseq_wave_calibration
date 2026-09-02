@@ -98,6 +98,53 @@ The complete dual-branch normal, retrospective, NIfTI-conversion, and shared
 head-mask collection workflow passed representative real measured-MPRAGE
 visual validation on 2026-09-01. This closes the MPRAGE gate before GRE work.
 
+## GRE integration status and next step
+
+The reviewed upstream calibration change is published at `wave-gre-flow-comp`
+commit `d3772bd` and pinned in this parent repository at
+`external/wave-gre-flow-comp`. The parent tool's GRE placeholder remains
+non-runnable; the next code change is the concise normal/retrospective adapter,
+not another copy of the upstream scientific reconstruction entry point.
+
+The multi-echo calibration contract is:
+
+- fit one shared `a`, `b`, and `c` coefficient solution from the integrated
+  projection refscan and reuse it for every echo;
+- do not independently refit `a/b/c` for later echoes, because that could
+  absorb the inter-echo phase evolution needed for delta-B0 analysis;
+- retain echo-specific sequence-derived theoretical trajectories when flow
+  compensation makes them differ, and combine each trajectory with the one
+  shared coefficient solution to produce the corresponding per-echo PSF; and
+- validate identical image sampling, echo/TE ordering, finite inputs, and the
+  shared calibration identity before exporting any per-echo BART inputs.
+
+The upstream coefficient-processing interface should match the reviewed
+MPRAGE policy: nine-sample `smooth` remains the default, `sine-line` without
+bounds requests automatic range selection, and a complete half-open
+`[kx_min, kx_max)` pair is the reproducible manual override. Automatic
+selection must receive calibration-quality evidence, record its selected
+range and fit diagnostics, and fail explicitly instead of silently reverting
+to smooth. Shared PSF fitting logic should be factored or maintained as a
+byte-identical, versioned utility at one clear boundary rather than allowed to
+diverge between nearly identical MPRAGE and GRE implementations.
+
+Completed dependency sequence:
+
+1. the narrow upstream calibration change passed 22 focused tests;
+2. the user published upstream commit `d3772bd`;
+3. the parent added the public-HTTPS submodule and recursively verified its
+   nested dependency; and
+4. setup documentation retained the standard recursive sync/update commands.
+
+Next, replace the local GRE placeholder with concise normal R3x1 and
+retrospective native/LR R3x2 adapters, keeping explicit
+`bart wave -w -f -r 0` commands in the sample scripts.
+
+The default must not move from smooth to automatic sine-line until both paths
+have been tested on representative real multi-echo GRE data. Upstream and
+parent commits remain separate: publish upstream first, then update the parent
+pin.
+
 LR CSMs are derived from the one accepted native ecalib map set by centered
 Fourier resampling in PE at unchanged FOV, followed by coil-RSS
 renormalization. Readout maps are not resized. Every reconstruction exports
@@ -278,8 +325,8 @@ preferred overrides may be kept in an ignored `.local.sh` wrapper.
 - `wave_retro_lr/psf.py`: direct calibrated PSF evaluation;
 - `wave_retro_lr/retrospective.py`: measured-Wave crop, CSM resampling, and the
   explicitly named synthetic no-Wave utility;
-- `wave_retro_lr/gre.py`: non-runnable GRE adapter placeholder pending
-  real-data MPRAGE validation;
+- `wave_retro_lr/gre.py`: non-runnable GRE adapter placeholder pending the
+  parent integration of pinned upstream commit `d3772bd`;
 - `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
   split-complex output recombination;
 - `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,

@@ -11,9 +11,10 @@ Installing CUDA-enabled PyTorch or CuPy in Python does not make BART
 GPU-enabled. Conversely, a CUDA-enabled BART build does not install the Python
 dependencies. Prepare and validate both layers before using the sample scripts.
 
-## Obtain the source and submodule
+## Obtain the source and submodules
 
-From the parent repository root, initialize the pinned Wave-MPRAGE dependency:
+From the parent repository root, initialize the pinned Wave-MPRAGE and
+Wave-GRE dependencies, including their nested sequence-safety dependency:
 
 ```bash
 git submodule sync --recursive
@@ -21,10 +22,13 @@ git submodule update --init --recursive
 cd tools/wave_retro_lr_recon
 ```
 
-The Python adapter imports focused TWIX, calibration, geometry, and NIfTI
-helpers from that exact submodule path. A separately installed `wave-mprage`
-package or an unrelated sibling checkout is not a substitute. The tracked
-submodule URLs use public HTTPS so read-only users do not need GitHub SSH keys.
+The MPRAGE adapter imports focused TWIX, calibration, geometry, and NIfTI
+helpers from `external/wave-mprage`. The GRE adapter will use the independently
+versioned axial/multi-echo implementation in `external/wave-gre-flow-comp`
+once the currently non-runnable placeholder is replaced.
+Separately installed packages or unrelated sibling checkouts are not
+substitutes for these pinned sources. The tracked submodule URLs use public
+HTTPS so read-only users do not need GitHub SSH keys.
 
 ## Create the Python environment
 
