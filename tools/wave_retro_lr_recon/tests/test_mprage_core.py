@@ -170,6 +170,60 @@ class SamplingTests(unittest.TestCase):
         self.assertTrue(np.all(full[:, pattern.mask(), :] == 1))
         self.assertTrue(np.all(full[:, ~pattern.mask(), :] == 0))
 
+    def test_full_grid_embedding_reuses_storage_without_changing_samples(self) -> None:
+        """Verify full-grid masking avoids a second physical-coil allocation.
+
+        Returns:
+            None.
+        """
+        import torch
+
+        pattern = classify_mprage_sampling(
+            [1, 4, 1, 4],
+            [0, 0, 1, 1],
+            matrix_lin_par=(6, 2),
+        )
+        # Match the non-contiguous coil-last view returned by upstream load_img.
+        loaded = torch.zeros((4, 3, 6, 2), dtype=torch.complex64).permute(0, 2, 3, 1)
+        loaded[:, pattern.mask(), :] = 2 + 3j
+        storage_pointer = loaded.data_ptr()
+
+        full = _embed_image_stream(
+            loaded,
+            pattern,
+            readout_oversampled=4,
+            physical_coils=3,
+        )
+
+        self.assertEqual(full.data_ptr(), storage_pointer)
+        self.assertTrue(torch.all(full[:, pattern.mask(), :] == 2 + 3j))
+        self.assertTrue(torch.all(full[:, ~pattern.mask(), :] == 0))
+
+    def test_full_grid_embedding_rejects_unmeasured_nonzero_samples(self) -> None:
+        """Verify bounded lattice validation still detects invalid payloads.
+
+        Returns:
+            None.
+        """
+        import torch
+
+        pattern = classify_mprage_sampling(
+            [1, 4, 1, 4],
+            [0, 0, 1, 1],
+            matrix_lin_par=(6, 2),
+        )
+        loaded = torch.zeros((17, 6, 2, 3), dtype=torch.complex64)
+        loaded[:, pattern.mask(), :] = 1
+        loaded[16, 0, 0, 0] = 1
+
+        with self.assertRaisesRegex(ValueError, "outside its MDH sampling mask"):
+            _embed_image_stream(
+                loaded,
+                pattern,
+                readout_oversampled=17,
+                physical_coils=3,
+            )
+
 
 class PsfAndGeometryTests(unittest.TestCase):
     def test_only_r3x1_preparation_requests_the_visible_diagnostic(self) -> None:

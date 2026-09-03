@@ -278,7 +278,9 @@ def _embed_image_stream(
         physical_coils: Expected receive-coil count.
 
     Returns:
-        A complex Torch tensor on the full logical PE grid.
+        A complex Torch tensor on the full logical PE grid. When ``loaded``
+        already has the full logical shape and complex64 dtype, its storage is
+        reused and samples outside the measured lattice are zeroed in place.
 
     Raises:
         ValueError: If payload dimensions, coils, support, or samples disagree
@@ -313,10 +315,20 @@ def _embed_image_stream(
         )
         full[:, skip_lin:stop_lin, skip_par:stop_par, :] = image.to(torch.complex64)
     mask = torch.from_numpy(sampling.mask()).view(1, nlin, npar, 1)
-    outside = full.masked_select(~mask)
-    if outside.numel() and torch.count_nonzero(outside).item():
-        raise ValueError("TWIX payload contains nonzero samples outside its MDH sampling mask.")
-    return full * mask
+
+    # Check the unmeasured lattice in bounded readout blocks. Materializing the
+    # complete boolean selection can otherwise consume many GiB for 52 coils.
+    for start in range(0, readout_oversampled, 8):
+        outside = full[start : start + 8].masked_select(~mask)
+        if outside.numel() and torch.count_nonzero(outside).item():
+            raise ValueError(
+                "TWIX payload contains nonzero samples outside its MDH sampling mask."
+            )
+
+    # The full-grid tensor is owned by this preparation stage and is no longer
+    # needed unmasked, so avoid allocating a second physical-coil volume.
+    full.mul_(mask)
+    return full
 
 
 def _calibrated_psf_inputs(
@@ -640,7 +652,8 @@ def prepare_normal_mprage(
     # Validate the measured Wave image stream independently of the set-4
     # no-Wave reference scan used for sensitivity-map calibration.
     sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
-    image = native.load_img(str(twix_path))
+    # Load and consume the large dense reference before the image stream so
+    # the two physical-coil payloads are never resident together unnecessarily.
     reference = native.load_ref(str(twix_path))
     native._check_integrated_refscan_shape(reference, Nacs=nacs, Ncalib=ncalib)
     physical_coils = int(reference.shape[-1])
@@ -650,13 +663,6 @@ def prepare_normal_mprage(
         )
     if physical_coils < 12:
         raise ValueError("MPRAGE BART preparation requires at least 12 physical receive coils.")
-    full_image = _embed_image_stream(
-        image,
-        sampling,
-        readout_oversampled=ro_os,
-        physical_coils=physical_coils,
-    )
-
     # Compute one shared coil-compression basis from the integrated reference
     # scan, then apply it consistently to image and calibration data.
     integrated_acs = reference[:, :nacs, :nacs, -1, :]
@@ -668,10 +674,20 @@ def prepare_normal_mprage(
         acs=nacs,
         x_step=os_factor,
     )
-    compressed = native.apply_cc_coillast_torch(full_image, basis, x_chunk=8)
     compressed_acs = native.apply_cc_coillast_torch(integrated_acs, basis, x_chunk=8)[
         ::os_factor
-    ]
+    ].contiguous()
+    del integrated_acs, reference
+
+    image = native.load_img(str(twix_path))
+    full_image = _embed_image_stream(
+        image,
+        sampling,
+        readout_oversampled=ro_os,
+        physical_coils=physical_coils,
+    )
+    compressed = native.apply_cc_coillast_torch(full_image, basis, x_chunk=8)
+    del full_image, image
     if tuple(compressed_acs.shape) != (nro, nacs, nacs, 12):
         raise ValueError(f"Unexpected compressed ACS shape: {tuple(compressed_acs.shape)}.")
     if not torch.isfinite(compressed).all() or not torch.isfinite(compressed_acs).all():
