@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import json
 import sys
@@ -17,6 +18,8 @@ from .bart_io import create_cfl, open_cfl, read_shape, sha256_file
 from .core import CaseSpec, Geometry, resolve_case
 from .psf import (
     PSF_COEFFICIENT_PLOT_NAME,
+    PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME,
+    PSF_COEFFICIENT_REJECTED_PLOT_NAME,
     evaluate_calibrated_psf,
     write_psf_coefficient_plot,
 )
@@ -32,6 +35,41 @@ RETRO_CASES = (
     ("lr_y_1p5mm_r3x2", (1.0, 1.5)),
     ("lr_xy_1p25mm_r3x2", (1.25, 1.25)),
 )
+AUTOMATIC_C_RECOVERY_VERSION = 1
+AB_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE = 0.02
+SEQUENCE_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE = 0.03
+C_FIXED_FREQUENCY_MAXIMUM_CONDITION_NUMBER = 1.0e8
+C_FIXED_FREQUENCY_MAXIMUM_RAW_RELATIVE_RMSE = 0.5
+C_FIXED_FREQUENCY_MAXIMUM_TRIMMED_RELATIVE_L2 = 2.0
+
+
+class AutomaticPsfFitRejected(ValueError):
+    """Carry a rejected automatic fit and its measured coefficient samples."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray],
+        candidate_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray] | None,
+        diagnostics: Mapping[str, Any],
+    ) -> None:
+        """Initialize an automatic-fit rejection with diagnostic payloads.
+
+        Args:
+            message: Upstream validation error.
+            raw_coefficients: Measured per-readout ``a``, ``b``, and ``c``.
+            candidate_coefficients: Reconstructed rejected fit curves when
+                upstream parameter diagnostics are available.
+            diagnostics: Upstream automatic range and validation details.
+
+        Returns:
+            None.
+        """
+        super().__init__(message)
+        self.raw_coefficients = raw_coefficients
+        self.candidate_coefficients = candidate_coefficients
+        self.diagnostics = dict(diagnostics)
 
 
 def _normalize_psf_coefficient_settings(
@@ -230,6 +268,8 @@ def load_wave_mprage_helpers() -> Any:
         generate_theoretical_wave_trajectory=(
             native.generate_theoretical_wave_trajectory
         ),
+        smooth_1d_nan=native.smooth_1d_nan,
+        AUTO_FIT_PREFILTER_WINDOW=native.AUTO_FIT_PREFILTER_WINDOW,
         _process_psf_coefficients=native._process_psf_coefficients,
         _resolve_mprage_wave_mode=native._resolve_mprage_wave_mode,
         _check_integrated_refscan_shape=native._check_integrated_refscan_shape,
@@ -331,6 +371,432 @@ def _embed_image_stream(
     return full
 
 
+def _curve_from_fit_parameters(
+    parameters: Mapping[str, Any], readout_oversampled: int
+) -> np.ndarray | None:
+    """Reconstruct one sine-line curve from recorded fit parameters.
+
+    Args:
+        parameters: Mapping containing ``A``, ``w``, ``phi``, ``C1``, and
+            ``C2`` sine-line parameters.
+        readout_oversampled: Number of samples on the full readout grid.
+
+    Returns:
+        A finite full-readout curve, or ``None`` for incomplete parameters.
+    """
+    kx = np.arange(readout_oversampled, dtype=np.float64)
+    try:
+        amplitude = float(parameters["A"])
+        angular_frequency = float(parameters["w"])
+        phase = float(parameters["phi"])
+        slope = float(parameters["C1"])
+        intercept = float(parameters["C2"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    curve = (
+        amplitude * np.sin(angular_frequency * kx + phase)
+        + slope * kx
+        + intercept
+    )
+    return curve if np.isfinite(curve).all() else None
+
+
+def _candidate_curves_from_fit_diagnostics(
+    diagnostics: Mapping[str, Any], readout_oversampled: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Reconstruct rejected sine-line curves from upstream fit parameters.
+
+    Args:
+        diagnostics: Upstream sine-line diagnostics containing one parameter
+            mapping for each of ``a``, ``b``, and ``c``.
+        readout_oversampled: Number of samples on the full readout grid.
+
+    Returns:
+        Three finite rejected candidate curves, or ``None`` when complete
+        parameter diagnostics were not produced before failure.
+    """
+    coefficient_diagnostics = diagnostics.get("coefficients")
+    if not isinstance(coefficient_diagnostics, Mapping):
+        return None
+    curves: list[np.ndarray] = []
+    for name in ("a", "b", "c"):
+        parameters = coefficient_diagnostics.get(name)
+        if not isinstance(parameters, Mapping):
+            return None
+        curve = _curve_from_fit_parameters(parameters, readout_oversampled)
+        if curve is None:
+            return None
+        curves.append(curve)
+    return tuple(curves)  # type: ignore[return-value]
+
+
+def _sequence_wave_angular_frequency(
+    delta_lin: np.ndarray, delta_par: np.ndarray
+) -> float:
+    """Estimate the common Wave angular frequency from sequence trajectories.
+
+    Args:
+        delta_lin: Sequence-derived LIN displacement over readout.
+        delta_par: Sequence-derived PAR displacement over readout.
+
+    Returns:
+        Dominant nonzero angular frequency in radians per readout sample.
+
+    Raises:
+        ValueError: If no finite oscillatory sequence component is present.
+    """
+    vectors = tuple(
+        np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in (delta_lin, delta_par)
+    )
+    if not vectors[0].size or vectors[0].size != vectors[1].size:
+        raise ValueError("Sequence Wave trajectories must have one common length.")
+    sample_index = np.arange(vectors[0].size, dtype=np.float64)
+    combined_power = np.zeros(vectors[0].size // 2 + 1, dtype=np.float64)
+    usable_components = 0
+    for vector in vectors:
+        if not np.isfinite(vector).all():
+            raise ValueError("Sequence Wave trajectories must be finite.")
+        slope, intercept = np.polyfit(sample_index, vector, 1)
+        detrended = vector - (slope * sample_index + intercept)
+        power = np.abs(np.fft.rfft(detrended)) ** 2
+        power[0] = 0.0
+        maximum = float(np.max(power))
+        if maximum > np.finfo(np.float64).eps:
+            combined_power += power / maximum
+            usable_components += 1
+    if not usable_components or not np.any(combined_power[1:] > 0.0):
+        raise ValueError("Sequence Wave trajectories contain no oscillatory component.")
+    frequency_bin = int(np.argmax(combined_power[1:]) + 1)
+    return float(2.0 * np.pi * frequency_bin / vectors[0].size)
+
+
+def _fit_fixed_frequency_sine_line(
+    values: np.ndarray,
+    fit_indices: np.ndarray,
+    *,
+    angular_frequency: float,
+    readout_size: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Fit sine/cosine amplitudes plus a line at one fixed frequency.
+
+    Args:
+        values: One-dimensional coefficient samples used by the fit.
+        fit_indices: Readout indices selected as reliable observations.
+        angular_frequency: Fixed angular frequency in radians per sample.
+        readout_size: Full oversampled readout length.
+
+    Returns:
+        The full-readout fitted curve and JSON-compatible fit diagnostics.
+
+    Raises:
+        ValueError: If inputs are insufficient, non-finite, or rank deficient.
+    """
+    observations = np.asarray(values, dtype=np.float64).reshape(-1)
+    indices = np.asarray(fit_indices, dtype=np.int64).reshape(-1)
+    if observations.size != readout_size:
+        raise ValueError("Fixed-frequency c samples must match the readout size.")
+    indices = indices[(indices >= 0) & (indices < observations.size)]
+    indices = indices[np.isfinite(observations[indices])]
+    if indices.size < 6:
+        raise ValueError(
+            "Fixed-frequency c fitting requires at least 6 finite samples."
+        )
+    t = indices.astype(np.float64)
+    center = float(np.mean(t))
+    scale = float(np.ptp(t) / 2.0)
+    if (
+        not np.isfinite(angular_frequency)
+        or angular_frequency <= 0.0
+        or scale <= 0.0
+    ):
+        raise ValueError(
+            "Fixed-frequency c fitting requires a positive frequency and span."
+        )
+    centered = (t - center) / scale
+    design = np.column_stack(
+        (
+            np.sin(angular_frequency * t),
+            np.cos(angular_frequency * t),
+            centered,
+            np.ones_like(t),
+        )
+    )
+    coefficients, _, rank, singular_values = np.linalg.lstsq(
+        design, observations[indices], rcond=None
+    )
+    if rank != 4 or not np.isfinite(coefficients).all():
+        raise ValueError("Fixed-frequency c fit is rank deficient or non-finite.")
+    condition_number = float(singular_values[0] / singular_values[-1])
+    sine_weight, cosine_weight, scaled_slope, centered_intercept = coefficients
+    slope = float(scaled_slope / scale)
+    intercept = float(centered_intercept - slope * center)
+    amplitude = float(np.hypot(sine_weight, cosine_weight))
+    phase = float(np.arctan2(cosine_weight, sine_weight))
+    full_index = np.arange(readout_size, dtype=np.float64)
+    curve = (
+        amplitude * np.sin(angular_frequency * full_index + phase)
+        + slope * full_index
+        + intercept
+    )
+    prediction = curve[indices]
+    residual_rmse = float(
+        np.sqrt(np.mean((prediction - observations[indices]) ** 2))
+    )
+    return curve, {
+        "model": "A*sin(w*kx+phi)+C1*kx+C2",
+        "frequency_constraint": "fixed",
+        "A": amplitude,
+        "w": float(angular_frequency),
+        "phi": phase,
+        "C1": slope,
+        "C2": intercept,
+        "fit_sample_count": int(indices.size),
+        "design_rank": int(rank),
+        "design_condition_number": condition_number,
+        "fit_input_residual_rmse": residual_rmse,
+    }
+
+
+def _recover_c_only_automatic_rejection(
+    native: Any,
+    *,
+    raw_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray],
+    rejected_diagnostics: Mapping[str, Any],
+    delta_lin: np.ndarray,
+    delta_par: np.ndarray,
+) -> tuple[
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    dict[str, Any],
+] | None:
+    """Recover a c-only automatic rejection with constrained fit or smoothing.
+
+    Args:
+        native: Namespace exposing the pinned nine-point smoothing helper.
+        raw_coefficients: Measured per-readout ``a``, ``b``, and ``c`` samples.
+        rejected_diagnostics: Upstream independent sine-line fit diagnostics.
+        delta_lin: Sequence-derived LIN Wave trajectory.
+        delta_par: Sequence-derived PAR Wave trajectory.
+
+    Returns:
+        Accepted coefficient vectors and explicit hybrid diagnostics, or
+        ``None`` when strict ``a/b`` and sequence eligibility checks fail.
+    """
+    coefficient_diagnostics = rejected_diagnostics.get("coefficients")
+    if not isinstance(coefficient_diagnostics, Mapping):
+        return None
+    failed_names = [
+        name
+        for name in ("a", "b", "c")
+        if not bool(
+            isinstance(coefficient_diagnostics.get(name), Mapping)
+            and coefficient_diagnostics[name].get("validation_passed")
+        )
+    ]
+    if failed_names != ["c"]:
+        return None
+    original_curves = _candidate_curves_from_fit_diagnostics(
+        rejected_diagnostics, raw_coefficients[0].size
+    )
+    if original_curves is None:
+        return None
+    try:
+        frequency_a = float(coefficient_diagnostics["a"]["w"])
+        frequency_b = float(coefficient_diagnostics["b"]["w"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    common_frequency = 0.5 * (frequency_a + frequency_b)
+    if frequency_a <= 0.0 or frequency_b <= 0.0 or common_frequency <= 0.0:
+        return None
+    ab_relative_difference = abs(frequency_a - frequency_b) / common_frequency
+    sequence_frequency = _sequence_wave_angular_frequency(delta_lin, delta_par)
+    sequence_relative_difference = (
+        abs(common_frequency - sequence_frequency) / sequence_frequency
+    )
+    if (
+        ab_relative_difference > AB_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE
+        or sequence_relative_difference
+        > SEQUENCE_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE
+    ):
+        return None
+
+    fit_range = rejected_diagnostics.get("kx_range")
+    range_diagnostics = rejected_diagnostics.get("range_selection_diagnostics")
+    if (
+        not isinstance(fit_range, (list, tuple))
+        or len(fit_range) != 2
+        or not isinstance(range_diagnostics, Mapping)
+    ):
+        return None
+    lower, upper = (int(value) for value in fit_range)
+    readout_size = raw_coefficients[2].size
+    if not 0 <= lower < upper <= readout_size:
+        return None
+    fit_mask = np.zeros(readout_size, dtype=bool)
+    fit_mask[lower:upper] = True
+    excluded = np.asarray(
+        range_diagnostics.get("excluded_sample_indices_within_interval", []),
+        dtype=np.int64,
+    )
+    if excluded.size and (np.any(excluded < lower) or np.any(excluded >= upper)):
+        return None
+    fit_mask[excluded] = False
+    fit_indices = np.flatnonzero(fit_mask)
+
+    import torch
+
+    raw_c_tensor = torch.as_tensor(raw_coefficients[2], dtype=torch.float64)
+    masked_c = raw_c_tensor.clone()
+    masked_c[~torch.from_numpy(fit_mask)] = torch.nan
+    fit_input = (
+        native.smooth_1d_nan(
+            masked_c,
+            window=int(native.AUTO_FIT_PREFILTER_WINDOW),
+        )
+        .cpu()
+        .numpy()
+    )
+    try:
+        constrained_curve, constrained = _fit_fixed_frequency_sine_line(
+            fit_input,
+            fit_indices,
+            angular_frequency=common_frequency,
+            readout_size=readout_size,
+        )
+        raw_fit_values = raw_coefficients[2][fit_indices]
+        raw_residual_rmse = float(
+            np.sqrt(
+                np.mean((constrained_curve[fit_indices] - raw_fit_values) ** 2)
+            )
+        )
+        raw_range = max(float(np.ptp(raw_fit_values)), np.finfo(np.float64).eps)
+        raw_relative_rmse = raw_residual_rmse / raw_range
+
+        trim = max(2, int(np.ceil(0.05 * (upper - lower))))
+        trimmed_indices = fit_indices[
+            (fit_indices >= lower + trim) & (fit_indices < upper - trim)
+        ]
+        trimmed_success = False
+        trimmed_relative_l2 = None
+        try:
+            trimmed_curve, _ = _fit_fixed_frequency_sine_line(
+                fit_input,
+                trimmed_indices,
+                angular_frequency=common_frequency,
+                readout_size=readout_size,
+            )
+            trimmed_relative_l2 = float(
+                np.linalg.norm(constrained_curve - trimmed_curve)
+                / max(np.linalg.norm(constrained_curve), np.finfo(np.float64).eps)
+            )
+            trimmed_success = True
+        except ValueError:
+            pass
+        gates = {
+            "design_condition_number_at_most_1e8": bool(
+                constrained["design_condition_number"]
+                <= C_FIXED_FREQUENCY_MAXIMUM_CONDITION_NUMBER
+            ),
+            "raw_residual_rmse_relative_to_range_at_most_0p5": bool(
+                raw_relative_rmse <= C_FIXED_FREQUENCY_MAXIMUM_RAW_RELATIVE_RMSE
+            ),
+            "endpoint_trim_refit_succeeded": trimmed_success,
+            "endpoint_trim_full_readout_relative_l2_at_most_2": bool(
+                trimmed_relative_l2 is not None
+                and trimmed_relative_l2
+                <= C_FIXED_FREQUENCY_MAXIMUM_TRIMMED_RELATIVE_L2
+            ),
+        }
+        constrained.update(
+            {
+                "raw_observation_residual_rmse": raw_residual_rmse,
+                "raw_observation_residual_rmse_relative_to_range": raw_relative_rmse,
+                "endpoint_trim_samples_per_side": trim,
+                "endpoint_trim_full_readout_relative_l2_difference": (
+                    trimmed_relative_l2
+                ),
+                "validation_gates": gates,
+                "validation_passed": all(gates.values()),
+            }
+        )
+    except ValueError as exc:
+        constrained_curve = None
+        constrained = {
+            "model": "A*sin(w*kx+phi)+C1*kx+C2",
+            "frequency_constraint": "fixed",
+            "w": common_frequency,
+            "validation_passed": False,
+            "error": str(exc),
+        }
+
+    accepted_c = constrained_curve
+    outcome = "constrained_common_frequency_c"
+    effective_processing = "sine_line_ab_constrained_common_frequency_c"
+    if constrained_curve is None or not constrained["validation_passed"]:
+        accepted_c = (
+            native.smooth_1d_nan(raw_c_tensor, window=9).cpu().numpy()
+        )
+        if not np.isfinite(accepted_c).all():
+            return None
+        outcome = "smooth_c_fallback"
+        effective_processing = "sine_line_ab_smooth_c"
+
+    accepted_diagnostics = copy.deepcopy(dict(rejected_diagnostics))
+    original_c_diagnostics = copy.deepcopy(coefficient_diagnostics["c"])
+    accepted_diagnostics["original_independent_fit_validation_passed"] = False
+    accepted_diagnostics["validation_passed"] = True
+    accepted_diagnostics["validation_policy"] = "local-c-only-recovery-v1"
+    accepted_diagnostics["effective_coefficient_processing"] = effective_processing
+    accepted_diagnostics["automatic_c_recovery"] = {
+        "version": AUTOMATIC_C_RECOVERY_VERSION,
+        "trigger": "only independently fitted c failed upstream validation",
+        "a_b_strict_validation_passed": True,
+        "a_b_angular_frequencies_rad_per_sample": [frequency_a, frequency_b],
+        "a_b_relative_frequency_difference": ab_relative_difference,
+        "sequence_angular_frequency_rad_per_sample": sequence_frequency,
+        "sequence_relative_frequency_difference": sequence_relative_difference,
+        "common_angular_frequency_rad_per_sample": common_frequency,
+        "policy_thresholds": {
+            "maximum_a_b_relative_frequency_difference": (
+                AB_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE
+            ),
+            "maximum_sequence_relative_frequency_difference": (
+                SEQUENCE_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE
+            ),
+            "maximum_c_design_condition_number": (
+                C_FIXED_FREQUENCY_MAXIMUM_CONDITION_NUMBER
+            ),
+            "maximum_c_raw_relative_rmse": (
+                C_FIXED_FREQUENCY_MAXIMUM_RAW_RELATIVE_RMSE
+            ),
+            "maximum_c_trimmed_relative_l2": (
+                C_FIXED_FREQUENCY_MAXIMUM_TRIMMED_RELATIVE_L2
+            ),
+        },
+        "original_rejected_c_fit": original_c_diagnostics,
+        "constrained_c_fit": constrained,
+        "outcome": outcome,
+        "smooth_c_window_samples": 9 if outcome == "smooth_c_fallback" else None,
+        "fallback_was_silent": False,
+    }
+    accepted_coefficients = accepted_diagnostics["coefficients"]
+    accepted_coefficients["c"] = (
+        constrained
+        if outcome == "constrained_common_frequency_c"
+        else {
+            "coefficient_processing": "smooth",
+            "window_samples": 9,
+            "validation_passed": True,
+            "validation_gates": {"finite_after_nine_point_smoothing": True},
+            "fallback_reason": "relaxed constrained-frequency c gates failed",
+        }
+    )
+    return (
+        (original_curves[0], original_curves[1], accepted_c),
+        accepted_diagnostics,
+    )
+
+
 def _calibrated_psf_inputs(
     native: Any,
     *,
@@ -371,6 +837,8 @@ def _calibrated_psf_inputs(
         readout grid.
 
     Raises:
+        AutomaticPsfFitRejected: If an automatic sine-line candidate fails
+            upstream numerical or extrapolation-stability validation.
         ValueError: If any returned vector has an unexpected length.
     """
 
@@ -394,30 +862,80 @@ def _calibrated_psf_inputs(
             slice_orientation="SAG",
             return_diagnostics=True,
         )
-    a_fit, b_fit, c_fit, processing_diagnostics = native._process_psf_coefficients(
-        a_raw,
-        b_raw,
-        c_raw,
-        Nx_os=readout_oversampled,
-        coefficient_processing=coefficient_processing,
-        fit_kx_min=fit_kx_min,
-        fit_kx_max=fit_kx_max,
-        fit_quality=calibration_evidence["projection_quality"],
-        return_diagnostics=True,
+    raw_vectors = tuple(
+        np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in (a_raw, b_raw, c_raw)
     )
+    if any(value.size != readout_oversampled for value in raw_vectors):
+        raise ValueError(
+            "Raw calibrated PSF vectors do not match the oversampled readout."
+        )
     delta_lin, delta_par = native.generate_theoretical_wave_trajectory(
         fn_seq=str(sequence_path),
         Nx_os=readout_oversampled,
         Nacs_total=calibration_samples,
         slice_orientation="SAG",
     )
+    delta_vectors = tuple(
+        np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in (delta_lin, delta_par)
+    )
+    with tempfile.TemporaryDirectory(prefix="wave_mprage_psf_processing_") as temporary:
+        diagnostic_path = Path(temporary) / "psf_sine_line_fit_automatic_candidate.json"
+        try:
+            a_fit, b_fit, c_fit, processing_diagnostics = (
+                native._process_psf_coefficients(
+                    a_raw,
+                    b_raw,
+                    c_raw,
+                    Nx_os=readout_oversampled,
+                    coefficient_processing=coefficient_processing,
+                    fit_kx_min=fit_kx_min,
+                    fit_kx_max=fit_kx_max,
+                    fit_quality=calibration_evidence["projection_quality"],
+                    out_folder=temporary,
+                    file_tag="automatic_candidate",
+                    return_diagnostics=True,
+                )
+            )
+        except ValueError as exc:
+            is_automatic_sine_line = (
+                str(coefficient_processing).strip().lower() == "sine-line"
+                and fit_kx_min is None
+                and fit_kx_max is None
+            )
+            if not is_automatic_sine_line:
+                raise
+            try:
+                rejected_diagnostics = (
+                    _load_json(diagnostic_path) if diagnostic_path.is_file() else {}
+                )
+            except (OSError, ValueError):
+                rejected_diagnostics = {}
+            candidate_coefficients = _candidate_curves_from_fit_diagnostics(
+                rejected_diagnostics, readout_oversampled
+            )
+            try:
+                recovery = _recover_c_only_automatic_rejection(
+                    native,
+                    raw_coefficients=raw_vectors,
+                    rejected_diagnostics=rejected_diagnostics,
+                    delta_lin=delta_vectors[0],
+                    delta_par=delta_vectors[1],
+                )
+            except ValueError:
+                recovery = None
+            if recovery is None:
+                raise AutomaticPsfFitRejected(
+                    str(exc),
+                    raw_coefficients=raw_vectors,
+                    candidate_coefficients=candidate_coefficients,
+                    diagnostics=rejected_diagnostics,
+                ) from exc
+            (a_fit, b_fit, c_fit), processing_diagnostics = recovery
     vectors = tuple(
         np.asarray(value, dtype=np.float64).reshape(-1)
-        for value in (delta_lin, delta_par, a_fit, b_fit, c_fit)
-    )
-    raw_vectors = tuple(
-        np.asarray(value, dtype=np.float64).reshape(-1)
-        for value in (a_raw, b_raw, c_raw)
+        for value in (*delta_vectors, a_fit, b_fit, c_fit)
     )
     if any(
         value.size != readout_oversampled for value in (*vectors, *raw_vectors)
@@ -479,6 +997,7 @@ def _ensure_r3x1_psf_coefficient_plot(
     psf_settings: Mapping[str, Any],
     *,
     raw_coefficient_vectors: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+    processing_diagnostics: Mapping[str, Any] | None = None,
     overwrite: bool = False,
 ) -> Path | None:
     """Create and announce the native R3x1 PSF coefficient diagnostic.
@@ -491,6 +1010,8 @@ def _ensure_r3x1_psf_coefficient_plot(
         psf_settings: Normalized coefficient-processing settings.
         raw_coefficient_vectors: Optional original ``a``, ``b``, and ``c``
             samples to overlay as scatter points.
+        processing_diagnostics: Optional accepted automatic-recovery details
+            used to label hybrid curves and show a rejected constrained c.
         overwrite: Replace an existing diagnostic with the supplied vectors.
 
     Returns:
@@ -503,14 +1024,48 @@ def _ensure_r3x1_psf_coefficient_plot(
     normalized_range = (
         None if fit_range is None else (int(fit_range[0]), int(fit_range[1]))
     )
+    plot_processing = str(psf_settings["coefficient_processing"])
+    curve_labels = None
+    comparison_coefficients = None
+    comparison_labels = None
+    if processing_diagnostics is not None:
+        effective = processing_diagnostics.get("effective_coefficient_processing")
+        recovery = processing_diagnostics.get("automatic_c_recovery")
+        if isinstance(effective, str) and isinstance(recovery, Mapping):
+            plot_processing = effective
+            outcome = recovery.get("outcome")
+            if outcome == "constrained_common_frequency_c":
+                curve_labels = (
+                    "strict sine-line fit",
+                    "strict sine-line fit",
+                    "accepted common-frequency sine-line fit",
+                )
+            elif outcome == "smooth_c_fallback":
+                curve_labels = (
+                    "strict sine-line fit",
+                    "strict sine-line fit",
+                    "accepted 9-point smooth fallback",
+                )
+                constrained = recovery.get("constrained_c_fit")
+                comparison_c = (
+                    _curve_from_fit_parameters(constrained, coefficient_vectors[0].size)
+                    if isinstance(constrained, Mapping)
+                    else None
+                )
+                if comparison_c is not None:
+                    comparison_coefficients = (None, None, comparison_c)
+                    comparison_labels = ("", "", "rejected constrained c fit")
     if overwrite or not destination.is_file():
         write_psf_coefficient_plot(
             *coefficient_vectors,
             destination,
-            processing=str(psf_settings["coefficient_processing"]),
+            processing=plot_processing,
             fit_kx_range=normalized_range,
             fit_range_selection=psf_settings.get("fit_range_selection"),
             raw_coefficients=raw_coefficient_vectors,
+            curve_labels=curve_labels,
+            comparison_coefficients=comparison_coefficients,
+            comparison_labels=comparison_labels,
         )
     print(f"PSF coefficient visual-assessment plot: {destination}")
     print(
@@ -518,6 +1073,65 @@ def _ensure_r3x1_psf_coefficient_plot(
         "tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
     )
     return destination
+
+
+def _write_automatic_psf_rejection_diagnostics(
+    normal_directory: Path,
+    rejection: AutomaticPsfFitRejected,
+    *,
+    twix_path: Path,
+    sequence_path: Path,
+) -> tuple[Path, Path]:
+    """Persist a rejected automatic fit without creating reusable BART inputs.
+
+    Args:
+        normal_directory: Dataset ``normal`` output directory.
+        rejection: Rejected fit with raw samples and optional candidate curves.
+        twix_path: Measured TWIX source identity to record.
+        sequence_path: Pulseq sequence source identity to record.
+
+    Returns:
+        Paths to the rejected-fit PNG and JSON diagnostics.
+    """
+    fit_range = rejection.diagnostics.get("kx_range")
+    normalized_range = None
+    if isinstance(fit_range, (list, tuple)) and len(fit_range) == 2:
+        normalized_range = (int(fit_range[0]), int(fit_range[1]))
+    candidate = rejection.candidate_coefficients
+    plot_path = normal_directory / PSF_COEFFICIENT_REJECTED_PLOT_NAME
+    write_psf_coefficient_plot(
+        *(candidate if candidate is not None else (None, None, None)),
+        plot_path,
+        processing="sine-line",
+        fit_kx_range=normalized_range,
+        fit_range_selection="automatic",
+        raw_coefficients=rejection.raw_coefficients,
+        accepted_for_reconstruction=False,
+    )
+    json_path = normal_directory / PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME
+    _write_json(
+        json_path,
+        {
+            "format_version": 1,
+            "status": "automatic_sine_line_psf_fit_rejected",
+            "created_utc": _utc_now(),
+            "error": str(rejection),
+            "source": {
+                "twix": _file_identity(twix_path),
+                "sequence": _file_identity(sequence_path, include_hash=True),
+            },
+            "plot_relative_to_output_root": (
+                f"normal/{PSF_COEFFICIENT_REJECTED_PLOT_NAME}"
+            ),
+            "accepted_for_reconstruction": False,
+            "manual_override": {
+                "fit_kx_range_convention": "half-open [min, max)",
+                "required_arguments": ["--psf-fit-kx-min", "--psf-fit-kx-max"],
+            },
+            "upstream_fit_diagnostics": rejection.diagnostics,
+        },
+    )
+    return plot_path, json_path
 
 
 def _native_manifest_matches(
@@ -538,6 +1152,13 @@ def _native_manifest_matches(
         ``True`` when the status, source identities, and PSF settings match.
     """
     recorded_psf = manifest.get("psf_calibration", {})
+    recorded_processing = recorded_psf.get("processing_diagnostics", {})
+    if isinstance(recorded_processing, Mapping):
+        recovery = recorded_processing.get("automatic_c_recovery")
+        if isinstance(recovery, Mapping) and recovery.get("version") != (
+            AUTOMATIC_C_RECOVERY_VERSION
+        ):
+            return False
     recorded_mode = recorded_psf.get("coefficient_processing", "smooth")
     recorded_selection = recorded_psf.get("fit_range_selection")
     if recorded_selection is None and recorded_mode == "sine-line":
@@ -639,6 +1260,9 @@ def prepare_normal_mprage(
             (a_fit, b_fit, c_fit),
             effective_psf_settings,
             raw_coefficient_vectors=raw_coefficients,
+            processing_diagnostics=existing.get("psf_calibration", {}).get(
+                "processing_diagnostics"
+            ),
         )
         if diagnostic is not None:
             expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
@@ -726,29 +1350,42 @@ def prepare_normal_mprage(
     ] = compressed_acs
 
     # Evaluate the calibrated Wave model on the native acquisition grid.
-    (
-        delta_lin,
-        delta_par,
-        a_fit,
-        b_fit,
-        c_fit,
-        raw_coefficients,
-        psf_processing_diagnostics,
-    ) = _calibrated_psf_inputs(
-        native,
-        twix_path=twix_path,
-        sequence_path=sequence_path,
-        readout_oversampled=ro_os,
-        ncalib=ncalib,
-        nacs=nacs,
-        coefficient_processing=str(psf_settings["coefficient_processing"]),
-        fit_kx_min=(
-            None if requested_fit_kx_range is None else requested_fit_kx_range[0]
-        ),
-        fit_kx_max=(
-            None if requested_fit_kx_range is None else requested_fit_kx_range[1]
-        ),
-    )
+    try:
+        (
+            delta_lin,
+            delta_par,
+            a_fit,
+            b_fit,
+            c_fit,
+            raw_coefficients,
+            psf_processing_diagnostics,
+        ) = _calibrated_psf_inputs(
+            native,
+            twix_path=twix_path,
+            sequence_path=sequence_path,
+            readout_oversampled=ro_os,
+            ncalib=ncalib,
+            nacs=nacs,
+            coefficient_processing=str(psf_settings["coefficient_processing"]),
+            fit_kx_min=(
+                None if requested_fit_kx_range is None else requested_fit_kx_range[0]
+            ),
+            fit_kx_max=(
+                None if requested_fit_kx_range is None else requested_fit_kx_range[1]
+            ),
+        )
+    except AutomaticPsfFitRejected as exc:
+        plot_path, json_path = _write_automatic_psf_rejection_diagnostics(
+            destination.parent,
+            exc,
+            twix_path=twix_path,
+            sequence_path=sequence_path,
+        )
+        raise ValueError(
+            f"{exc} Rejected-fit PNG: {plot_path}. Fit diagnostics: {json_path}. "
+            "Review the raw samples and shaded interval, then rerun with both "
+            "--psf-fit-kx-min and --psf-fit-kx-max for a manual half-open range."
+        ) from exc
     selected_fit_kx_range = psf_processing_diagnostics.get("kx_range")
     effective_psf_settings = {
         **psf_settings,
@@ -786,6 +1423,7 @@ def prepare_normal_mprage(
         (a_fit, b_fit, c_fit),
         effective_psf_settings,
         raw_coefficient_vectors=raw_coefficients,
+        processing_diagnostics=psf_processing_diagnostics,
         overwrite=True,
     )
 
@@ -820,6 +1458,10 @@ def prepare_normal_mprage(
         "psf_calibration": {
             "method": "sequence trajectory plus processed integrated projection a,b,c",
             **psf_settings,
+            "effective_coefficient_processing": psf_processing_diagnostics.get(
+                "effective_coefficient_processing",
+                psf_settings["coefficient_processing"],
+            ),
             "fit_kx_range": selected_fit_kx_range,
             "processing_diagnostics": psf_processing_diagnostics,
             "trajectory_sign_lin_par": [-1, -1],

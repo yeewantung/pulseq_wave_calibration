@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,8 @@ from wave_retro_lr.core import CaseSpec, Geometry, build_wave_options, resolve_c
 from wave_retro_lr.core import build_case_mask  # noqa: E402
 from wave_retro_lr.psf import (  # noqa: E402
     PSF_COEFFICIENT_PLOT_NAME,
+    PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME,
+    PSF_COEFFICIENT_REJECTED_PLOT_NAME,
     evaluate_calibrated_psf,
     write_psf_coefficient_plot,
 )
@@ -32,10 +35,13 @@ from wave_retro_lr.sampling import (  # noqa: E402
     validate_pure_cartesian_image_lattice,
 )
 from wave_retro_lr.mprage import (  # noqa: E402
+    AutomaticPsfFitRejected,
     _calibrated_psf_inputs,
     _embed_image_stream,
     _ensure_r3x1_psf_coefficient_plot,
     _normalize_psf_coefficient_settings,
+    _recover_c_only_automatic_rejection,
+    _write_automatic_psf_rejection_diagnostics,
 )
 from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
@@ -310,6 +316,61 @@ class PsfAndGeometryTests(unittest.TestCase):
                     raw_coefficients=(kx, kx, kx[:-1]),
                 )
 
+    def test_hybrid_plot_labels_smooth_c_and_rejected_constrained_candidate(
+        self,
+    ) -> None:
+        """Verify a smooth-c fallback is explicit in the accepted PSF PNG.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            normal = Path(folder) / "normal"
+            kx = np.arange(32, dtype=np.float64)
+            vectors = (np.sin(kx), np.cos(kx), 0.01 * kx)
+            diagnostics = {
+                "effective_coefficient_processing": "sine_line_ab_smooth_c",
+                "automatic_c_recovery": {
+                    "outcome": "smooth_c_fallback",
+                    "constrained_c_fit": {
+                        "A": 0.1,
+                        "w": 0.2,
+                        "phi": 0.3,
+                        "C1": 0.001,
+                        "C2": 0.0,
+                        "validation_passed": False,
+                    },
+                },
+            }
+            from matplotlib.axes import Axes
+
+            original_plot = Axes.plot
+            with patch.object(
+                Axes,
+                "plot",
+                autospec=True,
+                side_effect=original_plot,
+            ) as plot:
+                result = _ensure_r3x1_psf_coefficient_plot(
+                    normal,
+                    "R3x1",
+                    vectors,
+                    {
+                        "coefficient_processing": "sine-line",
+                        "fit_range_selection": "automatic",
+                        "fit_kx_range": [4, 28],
+                    },
+                    raw_coefficient_vectors=vectors,
+                    processing_diagnostics=diagnostics,
+                    overwrite=True,
+                )
+
+            labels = [call.kwargs.get("label") for call in plot.call_args_list]
+            self.assertIn("accepted 9-point smooth fallback", labels)
+            self.assertIn("rejected constrained c fit", labels)
+            self.assertIsNotNone(result)
+            self.assertTrue(result.is_file())
+
     def test_psf_coefficient_settings_preserve_upstream_modes(self) -> None:
         """Verify smooth and half-open sine-line settings are validated.
 
@@ -437,6 +498,319 @@ class PsfAndGeometryTests(unittest.TestCase):
         self.assertIsNone(automatic_call.kwargs["fit_kx_min"])
         self.assertIsNone(automatic_call.kwargs["fit_kx_max"])
         self.assertIs(automatic_call.kwargs["fit_quality"], quality)
+
+    def test_automatic_sine_line_rejection_retains_candidate_and_raw_samples(
+        self,
+    ) -> None:
+        """Verify failed validation returns the exact upstream candidate evidence.
+
+        Returns:
+            None.
+        """
+        raw = tuple(np.linspace(index, index + 1, 8) for index in range(3))
+        diagnostics = {
+            "model": "A*sin(w*kx+phi)+C1*kx+C2",
+            "kx_range": [1, 7],
+            "fit_range_selection": "automatic",
+            "validation_passed": False,
+            "coefficients": {
+                name: {
+                    "A": 0.5 + index,
+                    "w": 0.2,
+                    "phi": 0.1,
+                    "C1": 0.01,
+                    "C2": -0.2,
+                    "validation_passed": False,
+                }
+                for index, name in enumerate(("a", "b", "c"))
+            },
+        }
+
+        def reject_candidate(*args: object, **kwargs: object) -> None:
+            """Write mock upstream diagnostics and reject the candidate.
+
+            Args:
+                args: Unused positional coefficient arrays.
+                kwargs: Upstream processing options with diagnostics location.
+
+            Returns:
+                None.
+
+            Raises:
+                ValueError: Always, to emulate upstream validation rejection.
+            """
+            destination = Path(str(kwargs["out_folder"])) / (
+                f"psf_sine_line_fit_{kwargs['file_tag']}.json"
+            )
+            destination.write_text(json.dumps(diagnostics), encoding="utf-8")
+            raise ValueError("automatic candidate rejected")
+
+        native = Mock()
+        native.fit_wave_psf_deviation_from_projection.return_value = (
+            *raw,
+            320,
+            {"projection_quality": {"combined_support": np.ones(8)}},
+        )
+        native._process_psf_coefficients.side_effect = reject_candidate
+        native.generate_theoretical_wave_trajectory.return_value = (raw[0], raw[1])
+
+        with self.assertRaises(AutomaticPsfFitRejected) as context:
+            _calibrated_psf_inputs(
+                native,
+                twix_path=Path("input.dat"),
+                sequence_path=Path("input.seq"),
+                readout_oversampled=8,
+                ncalib=4,
+                nacs=4,
+                coefficient_processing="sine-line",
+                fit_kx_min=None,
+                fit_kx_max=None,
+            )
+        rejection = context.exception
+        self.assertEqual(rejection.diagnostics, diagnostics)
+        for observed, expected in zip(rejection.raw_coefficients, raw, strict=True):
+            np.testing.assert_array_equal(observed, expected)
+        self.assertIsNotNone(rejection.candidate_coefficients)
+        kx = np.arange(8, dtype=np.float64)
+        for index, observed in enumerate(rejection.candidate_coefficients or ()):
+            expected = (0.5 + index) * np.sin(0.2 * kx + 0.1) + 0.01 * kx - 0.2
+            np.testing.assert_allclose(observed, expected)
+
+    def test_rejected_fit_diagnostics_do_not_populate_bart_inputs(self) -> None:
+        """Verify rejected PNG/JSON permit a later manual preparation rerun.
+
+        Returns:
+            None.
+        """
+        raw = tuple(np.linspace(index, index + 1, 8) for index in range(3))
+        rejection = AutomaticPsfFitRejected(
+            "automatic candidate rejected",
+            raw_coefficients=raw,
+            candidate_coefficients=None,
+            diagnostics={
+                "kx_range": [1, 7],
+                "fit_range_selection": "automatic",
+                "validation_passed": False,
+            },
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            normal = root / "normal"
+            bart_inputs = normal / "bart_inputs"
+            bart_inputs.mkdir(parents=True)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"twix")
+            sequence.write_text("sequence\n", encoding="utf-8")
+            plot_path, json_path = _write_automatic_psf_rejection_diagnostics(
+                normal,
+                rejection,
+                twix_path=twix,
+                sequence_path=sequence,
+            )
+
+            self.assertEqual(plot_path, normal / PSF_COEFFICIENT_REJECTED_PLOT_NAME)
+            self.assertEqual(
+                json_path, normal / PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME
+            )
+            self.assertEqual(plot_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            record = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], "automatic_sine_line_psf_fit_rejected")
+            self.assertFalse(record["accepted_for_reconstruction"])
+            self.assertEqual(
+                record["manual_override"]["required_arguments"],
+                ["--psf-fit-kx-min", "--psf-fit-kx-max"],
+            )
+            self.assertFalse(any(bart_inputs.iterdir()))
+
+    def test_calibrated_inputs_return_an_accepted_c_only_recovery(self) -> None:
+        """Verify an accepted recovery continues the normal PSF input path.
+
+        Returns:
+            None.
+        """
+        raw = tuple(np.linspace(index, index + 1, 8) for index in range(3))
+        trajectory = (np.zeros(8), np.ones(8))
+        accepted_diagnostics = {
+            "validation_passed": True,
+            "effective_coefficient_processing": "sine_line_ab_smooth_c",
+        }
+        native = Mock()
+        native.fit_wave_psf_deviation_from_projection.return_value = (
+            *raw,
+            320,
+            {"projection_quality": {}},
+        )
+        native.generate_theoretical_wave_trajectory.return_value = trajectory
+        native._process_psf_coefficients.side_effect = ValueError("c rejected")
+
+        with patch(
+            "wave_retro_lr.mprage._recover_c_only_automatic_rejection",
+            return_value=(raw, accepted_diagnostics),
+        ) as recover:
+            result = _calibrated_psf_inputs(
+                native,
+                twix_path=Path("input.dat"),
+                sequence_path=Path("input.seq"),
+                readout_oversampled=8,
+                ncalib=4,
+                nacs=4,
+                coefficient_processing="sine-line",
+                fit_kx_min=None,
+                fit_kx_max=None,
+            )
+
+        recover.assert_called_once()
+        self.assertIs(result[-1], accepted_diagnostics)
+        for observed, expected in zip(result[2:5], raw, strict=True):
+            np.testing.assert_array_equal(observed, expected)
+
+    def test_c_only_rejection_uses_common_frequency_when_relaxed_gates_pass(
+        self,
+    ) -> None:
+        """Verify strict a/b fits can anchor an accepted constrained c fit.
+
+        Returns:
+            None.
+        """
+        readout_size = 128
+        kx = np.arange(readout_size, dtype=np.float64)
+        frequency = 2.0 * np.pi * 8.0 / readout_size
+        raw = (
+            np.sin(frequency * kx + 0.1),
+            0.6 * np.sin(frequency * kx - 0.3),
+            0.08 * np.sin(frequency * kx + 0.7) + 0.0002 * kx,
+        )
+        diagnostics = {
+            "kx_range": [8, 120],
+            "range_selection_diagnostics": {
+                "excluded_sample_indices_within_interval": []
+            },
+            "validation_passed": False,
+            "coefficients": {
+                "a": {
+                    "A": 1.0,
+                    "w": frequency * 0.995,
+                    "phi": 0.1,
+                    "C1": 0.0,
+                    "C2": 0.0,
+                    "validation_passed": True,
+                },
+                "b": {
+                    "A": 0.6,
+                    "w": frequency * 1.005,
+                    "phi": -0.3,
+                    "C1": 0.0,
+                    "C2": 0.0,
+                    "validation_passed": True,
+                },
+                "c": {
+                    "A": 0.02,
+                    "w": 2.0 * np.pi / readout_size,
+                    "phi": 0.0,
+                    "C1": 0.0,
+                    "C2": 0.0,
+                    "validation_passed": False,
+                },
+            },
+        }
+        native = Mock()
+        native.AUTO_FIT_PREFILTER_WINDOW = 9
+        native.smooth_1d_nan.side_effect = lambda values, window: values
+        recovery = _recover_c_only_automatic_rejection(
+            native,
+            raw_coefficients=raw,
+            rejected_diagnostics=diagnostics,
+            delta_lin=np.sin(frequency * kx),
+            delta_par=np.cos(frequency * kx),
+        )
+
+        self.assertIsNotNone(recovery)
+        coefficients, accepted = recovery or ((), {})
+        self.assertEqual(
+            accepted["effective_coefficient_processing"],
+            "sine_line_ab_constrained_common_frequency_c",
+        )
+        self.assertEqual(
+            accepted["automatic_c_recovery"]["outcome"],
+            "constrained_common_frequency_c",
+        )
+        self.assertTrue(accepted["validation_passed"])
+        np.testing.assert_allclose(coefficients[2], raw[2], atol=1e-12)
+
+    def test_c_only_rejection_falls_back_to_nine_point_smooth(self) -> None:
+        """Verify failure of relaxed c gates accepts an explicit smooth hybrid.
+
+        Returns:
+            None.
+        """
+        readout_size = 128
+        kx = np.arange(readout_size, dtype=np.float64)
+        frequency = 2.0 * np.pi * 8.0 / readout_size
+        raw = (
+            np.sin(frequency * kx),
+            0.5 * np.cos(frequency * kx),
+            0.05 * np.sin(frequency * kx + 0.4) + 0.001 * kx,
+        )
+        diagnostics = {
+            "kx_range": [8, 120],
+            "range_selection_diagnostics": {
+                "excluded_sample_indices_within_interval": []
+            },
+            "validation_passed": False,
+            "coefficients": {
+                "a": {
+                    "A": 1.0,
+                    "w": frequency,
+                    "phi": 0.0,
+                    "C1": 0.0,
+                    "C2": 0.0,
+                    "validation_passed": True,
+                },
+                "b": {
+                    "A": 0.5,
+                    "w": frequency,
+                    "phi": np.pi / 2.0,
+                    "C1": 0.0,
+                    "C2": 0.0,
+                    "validation_passed": True,
+                },
+                "c": {
+                    "A": 0.01,
+                    "w": 2.0 * np.pi / readout_size,
+                    "phi": 0.0,
+                    "C1": 0.0,
+                    "C2": 0.0,
+                    "validation_passed": False,
+                },
+            },
+        }
+        native = Mock()
+        native.AUTO_FIT_PREFILTER_WINDOW = 9
+        native.smooth_1d_nan.side_effect = lambda values, window: values
+        with patch(
+            "wave_retro_lr.mprage.C_FIXED_FREQUENCY_MAXIMUM_CONDITION_NUMBER",
+            -1.0,
+        ):
+            recovery = _recover_c_only_automatic_rejection(
+                native,
+                raw_coefficients=raw,
+                rejected_diagnostics=diagnostics,
+                delta_lin=np.sin(frequency * kx),
+                delta_par=np.cos(frequency * kx),
+            )
+
+        self.assertIsNotNone(recovery)
+        coefficients, accepted = recovery or ((), {})
+        self.assertEqual(
+            accepted["effective_coefficient_processing"],
+            "sine_line_ab_smooth_c",
+        )
+        recovery_record = accepted["automatic_c_recovery"]
+        self.assertEqual(recovery_record["outcome"], "smooth_c_fallback")
+        self.assertEqual(recovery_record["smooth_c_window_samples"], 9)
+        self.assertFalse(recovery_record["fallback_was_silent"])
+        np.testing.assert_array_equal(coefficients[2], raw[2])
 
     def test_target_matrices_are_nearest_multiple_of_four(self) -> None:
         """Verify requested LR spacings resolve to compatible PE matrices.

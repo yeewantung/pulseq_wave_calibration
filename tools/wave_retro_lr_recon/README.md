@@ -42,8 +42,16 @@ selection; providing both inclusive `kx-min` and exclusive `kx-max` indices is
 a reproducible manual override using the half-open interval `[min, max)`. The
 request, selected interval, algorithm diagnostics, and pinned implementation
 identity are recorded in the normal-input manifest and must match before
-prepared inputs can be reused. Automatic selection or fit validation failures
-stop preparation rather than silently falling back to smoothing.
+prepared inputs can be reused. Automatic `a/b` validation remains strict. If
+only the weaker `c` fit fails, validated `a/b` frequencies must agree with one
+another and with the sequence trajectory before a fixed-common-frequency `c`
+fit is attempted under relaxed safety gates. If that fit fails, the accepted
+hybrid uses sine-line `a/b` and the upstream nine-point smooth `c`; this
+fallback is explicit in the manifest and coefficient PNG. Other automatic
+selection or fit failures stop preparation. A fully rejected automatic
+candidate is still written as raw-sample/candidate-curve PNG and numerical
+JSON diagnostics under `OUTPUT_ROOT/normal`, explicitly labeled as not used
+for reconstruction; see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 For native R3x1 input, preparation also writes the processed coefficients used
 by reconstruction as an immediately visible diagnostic:
