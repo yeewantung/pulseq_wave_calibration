@@ -18,8 +18,9 @@ def write_psf_coefficient_plot(
     processing: str,
     fit_kx_range: tuple[int, int] | None = None,
     fit_range_selection: str | None = None,
+    raw_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
 ) -> Path:
-    """Plot the processed PSF phase coefficients against readout index.
+    """Plot raw and processed PSF phase coefficients against readout index.
 
     Args:
         coefficient_a: Processed per-readout LIN phase coefficient.
@@ -30,6 +31,8 @@ def write_psf_coefficient_plot(
         fit_kx_range: Optional half-open sine-line fit interval ``[min, max)``.
         fit_range_selection: Optional ``automatic`` or ``manual`` selection
             label recorded in the figure title.
+        raw_coefficients: Optional original ``a``, ``b``, and ``c`` samples
+            shown as scatter points beneath the processed curves.
 
     Returns:
         The resolved path of the written PNG diagnostic.
@@ -46,6 +49,18 @@ def write_psf_coefficient_plot(
         raise ValueError("PSF coefficient vectors must have one common nonzero length.")
     if not all(np.isfinite(value).all() for value in vectors):
         raise ValueError("PSF coefficient vectors must contain only finite values.")
+    raw_vectors = None
+    if raw_coefficients is not None:
+        raw_vectors = tuple(
+            np.asarray(value, dtype=np.float64).reshape(-1)
+            for value in raw_coefficients
+        )
+        if len(raw_vectors) != 3 or any(
+            value.size != vectors[0].size for value in raw_vectors
+        ):
+            raise ValueError(
+                "Raw PSF coefficient vectors must match the processed readout grid."
+            )
     if fit_kx_range is not None:
         lower, upper = (int(value) for value in fit_kx_range)
         if not (0 <= lower < upper <= vectors[0].size):
@@ -63,14 +78,35 @@ def write_psf_coefficient_plot(
     axes = figure.subplots(3, 1, sharex=True)
     kx = np.arange(vectors[0].size)
     colors = ("tab:blue", "tab:orange", "tab:green")
-    for axis, name, vector, color in zip(axes, ("a", "b", "c"), vectors, colors):
-        axis.plot(kx, vector, color=color, linewidth=1.5)
+    for index, (axis, name, vector, color) in enumerate(
+        zip(axes, ("a", "b", "c"), vectors, colors, strict=True)
+    ):
+        if raw_vectors is not None:
+            axis.scatter(
+                kx,
+                raw_vectors[index],
+                color=color,
+                marker="o",
+                s=9,
+                alpha=0.45,
+                linewidths=0,
+                label="raw samples",
+                zorder=2,
+            )
+        curve_label = (
+            "sine-line fit"
+            if str(processing).strip().lower() == "sine-line"
+            else "processed"
+        )
+        axis.plot(kx, vector, color=color, linewidth=1.5, label=curve_label, zorder=3)
         axis.axhline(0.0, color="0.35", linewidth=0.8, linestyle="--")
         axis.axvline(vectors[0].size // 2, color="black", linewidth=0.8, linestyle=":")
         if fit_kx_range is not None:
             axis.axvspan(lower, upper, color="tab:purple", alpha=0.12)
         axis.set_ylabel(f"{name} (rad)")
         axis.grid(alpha=0.2)
+        if raw_vectors is not None:
+            axis.legend(loc="best", fontsize="small")
     axes[-1].set_xlabel("kx (oversampled readout sample index)")
     mode = str(processing).strip().lower()
     selection = "" if fit_range_selection is None else f" ({fit_range_selection})"

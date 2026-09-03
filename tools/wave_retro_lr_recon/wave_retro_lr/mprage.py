@@ -342,7 +342,15 @@ def _calibrated_psf_inputs(
     coefficient_processing: str,
     fit_kx_min: int | None,
     fit_kx_max: int | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    dict[str, Any],
+]:
     """Fit ``a,b,c`` and return them with the sequence Wave trajectories.
 
     Args:
@@ -358,8 +366,9 @@ def _calibrated_psf_inputs(
 
     Returns:
         ``delta_lin``, ``delta_par``, and fitted ``a``, ``b``, ``c`` vectors,
-        each sampled on the oversampled readout grid, followed by the upstream
-        coefficient-processing diagnostics.
+        followed by the three original coefficient vectors and the upstream
+        coefficient-processing diagnostics. All vectors use the oversampled
+        readout grid.
 
     Raises:
         ValueError: If any returned vector has an unexpected length.
@@ -406,9 +415,15 @@ def _calibrated_psf_inputs(
         np.asarray(value, dtype=np.float64).reshape(-1)
         for value in (delta_lin, delta_par, a_fit, b_fit, c_fit)
     )
-    if any(value.size != readout_oversampled for value in vectors):
+    raw_vectors = tuple(
+        np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in (a_raw, b_raw, c_raw)
+    )
+    if any(
+        value.size != readout_oversampled for value in (*vectors, *raw_vectors)
+    ):
         raise ValueError("Calibrated PSF vectors do not match the oversampled readout.")
-    return (*vectors, processing_diagnostics)  # type: ignore[return-value]
+    return (*vectors, raw_vectors, processing_diagnostics)  # type: ignore[return-value]
 
 
 def _write_real_vectors(base: Path, vectors: tuple[np.ndarray, ...]) -> None:
@@ -463,6 +478,7 @@ def _ensure_r3x1_psf_coefficient_plot(
     coefficient_vectors: tuple[np.ndarray, np.ndarray, np.ndarray],
     psf_settings: Mapping[str, Any],
     *,
+    raw_coefficient_vectors: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     overwrite: bool = False,
 ) -> Path | None:
     """Create and announce the native R3x1 PSF coefficient diagnostic.
@@ -473,6 +489,8 @@ def _ensure_r3x1_psf_coefficient_plot(
         coefficient_vectors: Processed ``a``, ``b``, and ``c`` vectors used
             to evaluate the reconstruction PSF.
         psf_settings: Normalized coefficient-processing settings.
+        raw_coefficient_vectors: Optional original ``a``, ``b``, and ``c``
+            samples to overlay as scatter points.
         overwrite: Replace an existing diagnostic with the supplied vectors.
 
     Returns:
@@ -492,6 +510,7 @@ def _ensure_r3x1_psf_coefficient_plot(
             processing=str(psf_settings["coefficient_processing"]),
             fit_kx_range=normalized_range,
             fit_range_selection=psf_settings.get("fit_range_selection"),
+            raw_coefficients=raw_coefficient_vectors,
         )
     print(f"PSF coefficient visual-assessment plot: {destination}")
     print(
@@ -604,6 +623,12 @@ def prepare_normal_mprage(
         ):
             read_shape(destination / name)
         a_fit, b_fit, c_fit = _read_real_vectors(destination / "psf_coefficients", 3)
+        raw_name = existing.get("psf_calibration", {}).get("raw_psf_coefficients")
+        raw_coefficients = (
+            None
+            if raw_name is None
+            else _read_real_vectors(destination / str(raw_name), 3)
+        )
         effective_psf_settings = {
             **psf_settings,
             "fit_kx_range": existing.get("psf_calibration", {}).get("fit_kx_range"),
@@ -613,6 +638,7 @@ def prepare_normal_mprage(
             str(existing["sampling"]["name"]),
             (a_fit, b_fit, c_fit),
             effective_psf_settings,
+            raw_coefficient_vectors=raw_coefficients,
         )
         if diagnostic is not None:
             expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
@@ -706,6 +732,7 @@ def prepare_normal_mprage(
         a_fit,
         b_fit,
         c_fit,
+        raw_coefficients,
         psf_processing_diagnostics,
     ) = _calibrated_psf_inputs(
         native,
@@ -752,11 +779,13 @@ def prepare_normal_mprage(
     del psf_output
     _write_real_vectors(destination / "wave_trajectory", (delta_lin, delta_par))
     _write_real_vectors(destination / "psf_coefficients", (a_fit, b_fit, c_fit))
+    _write_real_vectors(destination / "psf_coefficients_raw", raw_coefficients)
     diagnostic = _ensure_r3x1_psf_coefficient_plot(
         destination.parent,
         sampling.name,
         (a_fit, b_fit, c_fit),
         effective_psf_settings,
+        raw_coefficient_vectors=raw_coefficients,
         overwrite=True,
     )
 
@@ -798,6 +827,7 @@ def prepare_normal_mprage(
             "nacs": nacs,
             "wave_trajectory": "wave_trajectory",
             "psf_coefficients": "psf_coefficients",
+            "raw_psf_coefficients": "psf_coefficients_raw",
             **(
                 {
                     "visual_assessment_plot_relative_to_output_root": (

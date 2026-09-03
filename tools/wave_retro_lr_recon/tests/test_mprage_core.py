@@ -259,7 +259,7 @@ class PsfAndGeometryTests(unittest.TestCase):
             self.assertTrue(result.is_file())
 
     def test_psf_coefficient_plot_records_processed_vectors_and_fit_range(self) -> None:
-        """Verify the headless R3x1 diagnostic is a nonempty PNG.
+        """Verify the diagnostic overlays raw samples on fitted curves.
 
         Returns:
             None.
@@ -267,14 +267,28 @@ class PsfAndGeometryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             destination = Path(folder) / PSF_COEFFICIENT_PLOT_NAME
             kx = np.arange(32, dtype=np.float64)
-            result = write_psf_coefficient_plot(
-                np.sin(kx / 5.0),
-                np.cos(kx / 6.0),
-                0.01 * kx,
-                destination,
-                processing="sine-line",
-                fit_kx_range=(4, 28),
-            )
+            fitted = (np.sin(kx / 5.0), np.cos(kx / 6.0), 0.01 * kx)
+            raw = tuple(value + 0.05 * np.sin(kx) for value in fitted)
+            from matplotlib.axes import Axes
+
+            original_scatter = Axes.scatter
+            with patch.object(
+                Axes,
+                "scatter",
+                autospec=True,
+                side_effect=original_scatter,
+            ) as scatter:
+                result = write_psf_coefficient_plot(
+                    *fitted,
+                    destination,
+                    processing="sine-line",
+                    fit_kx_range=(4, 28),
+                    raw_coefficients=raw,
+                )
+            self.assertEqual(scatter.call_count, 3)
+            for index, call in enumerate(scatter.call_args_list):
+                np.testing.assert_array_equal(call.args[1], kx)
+                np.testing.assert_allclose(call.args[2], raw[index])
             self.assertEqual(result, destination.resolve())
             self.assertEqual(destination.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
             self.assertGreater(destination.stat().st_size, 1000)
@@ -287,6 +301,13 @@ class PsfAndGeometryTests(unittest.TestCase):
                     destination,
                     processing="sine-line",
                     fit_kx_range=(4, 40),
+                )
+            with self.assertRaisesRegex(ValueError, "match the processed"):
+                write_psf_coefficient_plot(
+                    *fitted,
+                    destination,
+                    processing="sine-line",
+                    raw_coefficients=(kx, kx, kx[:-1]),
                 )
 
     def test_psf_coefficient_settings_preserve_upstream_modes(self) -> None:
@@ -373,7 +394,9 @@ class PsfAndGeometryTests(unittest.TestCase):
             fit_kx_max=7,
         )
 
-        self.assertEqual(len(result), 6)
+        self.assertEqual(len(result), 7)
+        for observed, expected in zip(result[-2], (raw_a, raw_b, raw_c), strict=True):
+            np.testing.assert_array_equal(observed, expected)
         self.assertIs(result[-1], diagnostics)
         calibration_call = native.fit_wave_psf_deviation_from_projection.call_args
         self.assertTrue(calibration_call.kwargs["return_diagnostics"])
@@ -701,7 +724,11 @@ class PreparationIntegrationTests(unittest.TestCase):
                 ),
                 patch(
                     "wave_retro_lr.mprage._calibrated_psf_inputs",
-                    return_value=(*zero_vectors, processing_diagnostics),
+                    return_value=(
+                        *zero_vectors,
+                        zero_vectors[2:],
+                        processing_diagnostics,
+                    ),
                 ),
             ):
                 manifest = prepare_normal_mprage(twix, output, sequence)
@@ -734,6 +761,11 @@ class PreparationIntegrationTests(unittest.TestCase):
             self.assertEqual(read_shape(normal / "wave_kspace"), (8, 16, 16, 12, 1))
             self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 12))
             self.assertEqual(read_shape(normal / "psf"), (8, 16, 16, 1, 1))
+            self.assertEqual(read_shape(normal / "psf_coefficients_raw"), (8, 3))
+            self.assertEqual(
+                manifest["psf_calibration"]["raw_psf_coefficients"],
+                "psf_coefficients_raw",
+            )
             self.assertEqual(len(retro), 4)
             for case in retro:
                 shape = tuple(case["case"]["target_logical_matrix_ro_lin_par"])
