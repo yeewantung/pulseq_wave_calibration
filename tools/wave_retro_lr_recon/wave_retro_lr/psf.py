@@ -200,6 +200,7 @@ def write_psf_coefficient_plot(
         axis.axvline(readout_size // 2, color="black", linewidth=0.8, linestyle=":")
         if fit_kx_range is not None:
             axis.axvspan(lower, upper, color="tab:purple", alpha=0.12)
+        axis.set_ylim(-2.0 * np.pi, 2.0 * np.pi)
         axis.set_ylabel(f"{name} (rad)")
         axis.grid(alpha=0.2)
         if raw_vectors is not None or vectors is not None:

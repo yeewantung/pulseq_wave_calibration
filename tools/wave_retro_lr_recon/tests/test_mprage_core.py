@@ -371,6 +371,41 @@ class PsfAndGeometryTests(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertTrue(result.is_file())
 
+    def test_psf_plot_uses_fixed_phase_range(self) -> None:
+        """Verify blow-up values cannot expand the diagnostic phase range.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / PSF_COEFFICIENT_PLOT_NAME
+            values = np.zeros(32, dtype=np.float64)
+            values[0] = 1.0e6
+            from matplotlib.axes import Axes
+
+            original_set_ylim = Axes.set_ylim
+            with patch.object(
+                Axes,
+                "set_ylim",
+                autospec=True,
+                side_effect=original_set_ylim,
+            ) as set_ylim:
+                write_psf_coefficient_plot(
+                    values,
+                    values,
+                    values,
+                    destination,
+                    processing="smooth",
+                )
+
+            fixed_calls = [
+                call
+                for call in set_ylim.call_args_list
+                if call.args[1:] == (-2.0 * np.pi, 2.0 * np.pi)
+            ]
+            self.assertEqual(len(fixed_calls), 3)
+            self.assertTrue(destination.is_file())
+
     def test_psf_coefficient_settings_preserve_upstream_modes(self) -> None:
         """Verify smooth and half-open sine-line settings are validated.
 
