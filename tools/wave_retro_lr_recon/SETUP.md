@@ -225,8 +225,11 @@ mean that the GPU is available only inside a scheduled allocation.
 
 - The sample workflows run `bart wave` on CPU by default. Passing `-g` to a
   sample script selects its explicit `bart wave -g` branch.
-- The validated BART v1.0 `ecalib` command has no `-g` option, so this tool runs
-  `bart ecalib -m 1 -c ...` on CPU exactly once and reuses its recorded maps.
+- The validated default uses `bart ecalib -m 1 -c ...` on CPU exactly once and
+  reuses its recorded maps. The normal-only `--ecalib-maps 2` experiment also
+  runs `ecalib` on CPU and isolates its maps and eigenvalue maps below
+  `normal/experimental_m2`; it has not yet been accepted as a reconstruction
+  default.
 - Python prepares inputs and converts outputs but never launches BART. Activate
   Python and BART in the same shell before calling a sample Bash script.
 - Keep actual environment, CUDA, BART, TWIX, sequence, and output paths only in

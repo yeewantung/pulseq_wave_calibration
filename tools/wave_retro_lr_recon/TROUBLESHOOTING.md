@@ -103,3 +103,24 @@ never changes `a/b` to smooth and records any accepted smooth `c` fallback.
 When reporting a problem, retain the coefficient PNG, the normal-input
 `manifest.json`, and the BART command text files. Do not add TWIX paths,
 subject identifiers, or other private machine data to tracked documentation.
+
+## Experimental m2 ESPIRiT comparison
+
+Use `--ecalib-maps 2` only for a controlled normal-reconstruction comparison,
+for example when shoulder or ear signal wraps into the FOV. It is not enabled
+for retrospective cases and does not alter the validated m1 outputs. All new
+files are isolated below:
+
+```text
+OUTPUT_ROOT/normal/experimental_m2/
+```
+
+Inspect `eigenvalue_maps`, both per-map magnitude/phase exports, and the
+display-only `MapsRSSDisplay` magnitude alongside the standard m1 result. A
+visually cleaner RSS display alone does not establish that m2 is preferable;
+also check residual artifacts, signal discontinuities, and the two individual
+map components. The experiment records the exact `ecalib` and `wave` commands.
+If it stops after creating only part of a BART CFL pair or command record, the
+next run fails explicitly rather than mixing partial results; remove or move
+only the incomplete `normal/experimental_m2` tree after reviewing it, then
+rerun. This experiment has not yet received real-data visual validation.

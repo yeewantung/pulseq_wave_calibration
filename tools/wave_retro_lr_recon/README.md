@@ -256,6 +256,33 @@ The shared inputs and CSM remain directly below `normal/bart_inputs` and
 The native R3x1 PSF coefficient diagnostic is placed directly under `normal/`
 so it is not hidden among BART arrays.
 
+### Experimental two-map ESPIRiT normal reconstruction
+
+For cases with anatomy wrapping into the FOV, the normal sample offers an
+opt-in `ecalib -m 2` comparison. This is an unvalidated experiment, not a new
+default. Run it with the same preparation settings as the corresponding m1
+reconstruction:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq \
+    --psf-coefficient-processing sine-line \
+    --ecalib-maps 2 \
+    -g
+```
+
+The experiment reuses `normal/bart_inputs` but writes every new artifact below
+`normal/experimental_m2/`, including sensitivity maps, eigenvalue maps, exact
+BART command records, both reconstruction branches, and NIfTI exports. Each
+complex map is exported separately with magnitude and wrapped phase. A
+`MapsRSSDisplay` magnitude is also written for visual comparison and is
+explicitly marked display-only; it has no combined phase. The standard m1
+outputs below `normal/bart_output` and `normal/nifti` are unchanged. Do not use
+the experimental output as a replacement for m1 until it has been visually
+reviewed.
+
 ## Retrospective R3x2 and LR command
 
 Use the same TWIX, output root, and sequence values as the normal command:

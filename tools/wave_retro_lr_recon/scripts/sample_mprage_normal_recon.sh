@@ -5,7 +5,7 @@ set -euo pipefail
 # export the unregularized-FISTA control plus selected Wavelet reconstruction.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [--ecalib-maps 1|2] [--r3-lambda VALUE] [-g]"
     echo "       [--psf-coefficient-processing smooth|sine-line]"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
 }
@@ -18,6 +18,7 @@ SEQUENCE_FILE="$3"
 shift 3
 
 ECALIB_CROP="0.6"
+ECALIB_MAPS="1"
 R3_LAMBDA="3.5e-2"
 USE_GPU=false
 PSF_COEFFICIENT_PROCESSING="smooth"
@@ -26,6 +27,7 @@ PSF_FIT_KX_MAX=""
 while (($#)); do
     case "$1" in
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
+        --ecalib-maps) ECALIB_MAPS="$2"; shift 2 ;;
         --r3-lambda) R3_LAMBDA="$2"; shift 2 ;;
         --psf-coefficient-processing) PSF_COEFFICIENT_PROCESSING="$2"; shift 2 ;;
         --psf-fit-kx-min) PSF_FIT_KX_MIN="$2"; shift 2 ;;
@@ -36,10 +38,21 @@ while (($#)); do
     esac
 done
 
+[[ "$ECALIB_MAPS" == "1" || "$ECALIB_MAPS" == "2" ]] || { echo "Error: --ecalib-maps must be 1 or 2." >&2; exit 2; }
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BART_INPUTS="$OUTPUT_ROOT/normal/bart_inputs"
-BART_OUTPUT_ROOT="$OUTPUT_ROOT/normal/bart_output"
-NIFTI_OUTPUT_ROOT="$OUTPUT_ROOT/normal/nifti"
+if [[ "$ECALIB_MAPS" == "2" ]]; then
+    BART_OUTPUT_ROOT="$OUTPUT_ROOT/normal/experimental_m2"
+    NIFTI_OUTPUT_ROOT="$BART_OUTPUT_ROOT/nifti"
+    CONVERTER_MAP_OPTIONS=(--map-count 2 --ecalib-record "$BART_OUTPUT_ROOT/ecalib_command.txt")
+    NIFTI_SUFFIX_MARKER="ExperimentalM2"
+else
+    BART_OUTPUT_ROOT="$OUTPUT_ROOT/normal/bart_output"
+    NIFTI_OUTPUT_ROOT="$OUTPUT_ROOT/normal/nifti"
+    CONVERTER_MAP_OPTIONS=()
+    NIFTI_SUFFIX_MARKER=""
+fi
 ECALIB_RECORD="$BART_OUTPUT_ROOT/ecalib_command.txt"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
@@ -65,20 +78,36 @@ else
 fi
 mkdir -p "$BART_OUTPUT_ROOT" "$NIFTI_OUTPUT_ROOT"
 
-# Estimate one sensitivity-map set from the integrated ACS k-space. BART
-# ecalib has no -g option; Wave uses CPU unless the user explicitly passes -g.
-printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
-EXPECTED_ECALIB_COMMAND="${EXPECTED_ECALIB_COMMAND% }"
-if [[ -f "$BART_OUTPUT_ROOT/coil_sens.hdr" && -f "$BART_OUTPUT_ROOT/coil_sens.cfl" ]]; then
-    [[ -f "$ECALIB_RECORD" ]] || { echo "Error: existing CSM has no command record." >&2; exit 2; }
-    [[ "$(<"$ECALIB_RECORD")" == "$EXPECTED_ECALIB_COMMAND" ]] || { echo "Error: existing CSM was generated with a different ecalib command." >&2; exit 2; }
-    echo "Reusing recorded ecalib result: $BART_OUTPUT_ROOT/coil_sens"
-elif [[ -e "$BART_OUTPUT_ROOT/coil_sens.hdr" || -e "$BART_OUTPUT_ROOT/coil_sens.cfl" || -e "$ECALIB_RECORD" ]]; then
-    echo "Error: incomplete CSM or ecalib command record in $BART_OUTPUT_ROOT" >&2
-    exit 2
+# Estimate sensitivity maps from the same integrated ACS k-space. The opt-in
+# two-map experiment keeps its maps, eigenvalue maps, and command record apart.
+if [[ "$ECALIB_MAPS" == "1" ]]; then
+    printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
+    EXPECTED_ECALIB_COMMAND="${EXPECTED_ECALIB_COMMAND% }"
+    if [[ -f "$BART_OUTPUT_ROOT/coil_sens.hdr" && -f "$BART_OUTPUT_ROOT/coil_sens.cfl" ]]; then
+        [[ -f "$ECALIB_RECORD" ]] || { echo "Error: existing CSM has no command record." >&2; exit 2; }
+        [[ "$(<"$ECALIB_RECORD")" == "$EXPECTED_ECALIB_COMMAND" ]] || { echo "Error: existing CSM was generated with a different ecalib command." >&2; exit 2; }
+        echo "Reusing recorded ecalib result: $BART_OUTPUT_ROOT/coil_sens"
+    elif [[ -e "$BART_OUTPUT_ROOT/coil_sens.hdr" || -e "$BART_OUTPUT_ROOT/coil_sens.cfl" || -e "$ECALIB_RECORD" ]]; then
+        echo "Error: incomplete CSM or ecalib command record in $BART_OUTPUT_ROOT" >&2
+        exit 2
+    else
+        bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
+        printf '%s\n' "$EXPECTED_ECALIB_COMMAND" > "$ECALIB_RECORD"
+    fi
 else
-    bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
-    printf '%s\n' "$EXPECTED_ECALIB_COMMAND" > "$ECALIB_RECORD"
+    printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 2 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens" "$BART_OUTPUT_ROOT/eigenvalue_maps"
+    EXPECTED_ECALIB_COMMAND="${EXPECTED_ECALIB_COMMAND% }"
+    if [[ -f "$BART_OUTPUT_ROOT/coil_sens.hdr" && -f "$BART_OUTPUT_ROOT/coil_sens.cfl" && -f "$BART_OUTPUT_ROOT/eigenvalue_maps.hdr" && -f "$BART_OUTPUT_ROOT/eigenvalue_maps.cfl" ]]; then
+        [[ -f "$ECALIB_RECORD" ]] || { echo "Error: existing experimental m2 CSM has no command record." >&2; exit 2; }
+        [[ "$(<"$ECALIB_RECORD")" == "$EXPECTED_ECALIB_COMMAND" ]] || { echo "Error: existing experimental m2 CSM was generated with a different ecalib command." >&2; exit 2; }
+        echo "Reusing recorded experimental m2 ecalib result: $BART_OUTPUT_ROOT/coil_sens"
+    elif [[ -e "$BART_OUTPUT_ROOT/coil_sens.hdr" || -e "$BART_OUTPUT_ROOT/coil_sens.cfl" || -e "$BART_OUTPUT_ROOT/eigenvalue_maps.hdr" || -e "$BART_OUTPUT_ROOT/eigenvalue_maps.cfl" || -e "$ECALIB_RECORD" ]]; then
+        echo "Error: incomplete experimental m2 CSM, eigenvalue maps, or ecalib command record in $BART_OUTPUT_ROOT" >&2
+        exit 2
+    else
+        bart ecalib -m 2 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens" "$BART_OUTPUT_ROOT/eigenvalue_maps"
+        printf '%s\n' "$EXPECTED_ECALIB_COMMAND" > "$ECALIB_RECORD"
+    fi
 fi
 
 SAMPLING_CLASS="$(<"$BART_INPUTS/sampling_class.txt")"
@@ -93,7 +122,7 @@ if [[ "$SAMPLING_CLASS" == "R3x1" ]]; then
         printf -v WAVE_COMMAND '%q ' bart wave -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
     fi
     printf '%s\n' "${WAVE_COMMAND% }" > "$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"
-    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/fista_r0" --suffix BARTWaveMPRAGENormalFISTAR0
+    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/fista_r0" --suffix "BARTWaveMPRAGENormalFISTAR0${NIFTI_SUFFIX_MARKER}" "${CONVERTER_MAP_OPTIONS[@]}"
 
     # The selected pure-lattice rerun value is the default positive Wavelet arm.
     mkdir -p "$BART_OUTPUT_ROOT/optimal_wavelet" "$NIFTI_OUTPUT_ROOT/optimal_wavelet"
@@ -105,7 +134,7 @@ if [[ "$SAMPLING_CLASS" == "R3x1" ]]; then
         printf -v WAVE_COMMAND '%q ' bart wave -w -f -r "$R3_LAMBDA" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave"
     fi
     printf '%s\n' "${WAVE_COMMAND% }" > "$BART_OUTPUT_ROOT/optimal_wavelet/wave_command.txt"
-    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/optimal_wavelet" --suffix BARTWaveMPRAGENormalOptimalWavelet
+    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/optimal_wavelet" --suffix "BARTWaveMPRAGENormalOptimalWavelet${NIFTI_SUFFIX_MARKER}" "${CONVERTER_MAP_OPTIONS[@]}"
 elif [[ "$SAMPLING_CLASS" == "R1" ]]; then
     # No R1 Wavelet optimum was selected; do not transfer the R3x1 lambda.
     mkdir -p "$BART_OUTPUT_ROOT/fista_r0" "$NIFTI_OUTPUT_ROOT/fista_r0"
@@ -117,13 +146,17 @@ elif [[ "$SAMPLING_CLASS" == "R1" ]]; then
         printf -v WAVE_COMMAND '%q ' bart wave -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
     fi
     printf '%s\n' "${WAVE_COMMAND% }" > "$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"
-    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/fista_r0" --suffix BARTWaveMPRAGENormalFISTAR0
+    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/fista_r0" --suffix "BARTWaveMPRAGENormalFISTAR0${NIFTI_SUFFIX_MARKER}" "${CONVERTER_MAP_OPTIONS[@]}"
 else
     echo "Error: unsupported prepared sampling class $SAMPLING_CLASS" >&2
     exit 2
 fi
 
-echo "Normal MPRAGE reconstruction complete: $OUTPUT_ROOT/normal"
+if [[ "$ECALIB_MAPS" == "2" ]]; then
+    echo "Experimental m2 normal MPRAGE reconstruction complete: $BART_OUTPUT_ROOT"
+else
+    echo "Normal MPRAGE reconstruction complete: $OUTPUT_ROOT/normal"
+fi
 if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then
     echo "PSF visual-assessment plot: $OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
     echo "For unexpected reconstruction artifacts, review that plot and tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
