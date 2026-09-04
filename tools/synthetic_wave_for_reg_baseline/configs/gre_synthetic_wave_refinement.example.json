@@ -1,0 +1,21 @@
+{
+  "format_version": 2,
+  "groups": {
+    "native_r3x1": {
+      "echo-01": [
+        {"method": "wavelet", "block_size": null, "lambdas": [5e-3, 1e-2, 2e-2]}
+      ],
+      "echo-02": []
+    },
+    "native_r3x2": {
+      "echo-01": [],
+      "echo-02": []
+    },
+    "lin_low_resolution_r3x2": {
+      "echo-01": [],
+      "echo-02": [
+        {"method": "llr", "block_size": 8, "lambdas": [5e-4, 1e-3, 2e-3]}
+      ]
+    }
+  }
+}

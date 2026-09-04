@@ -30,37 +30,49 @@ portability and accept an explicit `-g` to select their visible GPU command
 branches. This does not change the synthetic experiment runners: their frozen
 provenance and this tool's local `AGENTS.md` continue to require GPU BART.
 The measured samples retain upstream nine-sample PSF coefficient smoothing as
-the default and expose the upstream sine-plus-line alternative with a required
-half-open kx fit interval. Normal-input manifests bind this choice so a
-different coefficient model cannot silently reuse an existing PSF.
+the default. Sine-line processing now uses automatic kx-range selection when
+bounds are omitted and retains a reproducible manual half-open interval when
+both bounds are provided. Automatic-fit failure is hard; it never silently
+falls back to smooth. Normal-input manifests bind the mode, range-selection
+contract, effective range, diagnostics, and implementation identity so an
+incompatible PSF cannot be silently reused.
 Native measured R3x1 preparation now also writes
 `normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` below the user-selected output
 root and points users to the Wave tool's `TROUBLESHOOTING.md`. It visualizes
 the processed `a`, `b`, and `c` used for reconstruction and does not alter the
 legacy no-Wave synthetic path or any frozen output tree.
 
-Begin GRE implementation planning in a fresh session by rereading the private
-`gre_retro_lr_recon_plan.md` and re-inventorying both this clean worktree and
-the pinned Wave-GRE candidate. Do not add the submodule or modify the upstream
-repository until the focused GRE preparation API, nested-submodule handling,
-and exact parent-repository change map have been reviewed. The broader
-synthetic-tool structural cleanup remains after the GRE decision unless the
-user explicitly changes phase order.
+The GRE implementation plan is now reconciled with the published upstream and
+current parent tool. `external/wave-gre-flow-comp` is pinned at
+`d3772bda7077da9af16e776fce148ba2cec8fdcf`, including its recursively pinned
+sequence-safety dependency. The next code stage is the focused parent adapter;
+no further upstream change is required for its first implementation. Follow
+the private `gre_retro_lr_recon_plan.md` in order: shared PSF option contract,
+focused upstream loader, per-echo MDH validation, normal preparation,
+retrospective preparation, explicit BART launchers, case-aware NIfTI export,
+documentation, and tests. Do not launch a GRE scientific reconstruction job
+during implementation. The broader synthetic-tool structural cleanup remains
+after GRE unless the user explicitly changes phase order.
 
 The existing case-matched CSMs and calibrated PSFs remain the reconstruction
 inputs for this rerun, and the approved BET brain mask remains evaluation-only.
 Do not rerun ecalib, PSF calibration, or BET merely to select defaults.
 
 MPRAGE source cleanup and real-data validation are complete. GRE remains
-unsupported in the tool, but its read-only architecture inventory is recorded
-in the private plan `gre_retro_lr_recon_plan.md`. That plan recommends a pinned
-Wave-GRE external dependency for GRE-specific axial, multi-echo, PSF, and
-NIfTI behavior while retaining the tool's concise BART-only orchestration. Its
-confirmed cases are normal native-grid R3x1, retrospective native-grid R3x2,
-and retrospective LIN-cropped R3x2 near `0.9 x 1.5 x 2.5 mm`; the retro cases
-keep the PAR grid/resolution and add factor-two PAR sampling. Every GRE case
-uses explicit unregularized FISTA (`-w -f -r 0`). Submodule addition and GRE
-implementation remain explicit review gates.
+non-runnable in the parent tool, but its implementation-ready architecture is
+recorded in the private plan `gre_retro_lr_recon_plan.md`. The pinned upstream
+remains the authority for axial sequence parsing, multi-echo trajectories,
+one shared refscan `a/b/c` fit, and GRE NIfTI behavior; the parent owns sampling
+validation, direct crop, target-grid PSF evaluation, manifests, BART I/O, and
+concise orchestration. Confirmed cases are normal native-grid R3x1,
+retrospective native-grid R3x2, and retrospective LIN-cropped R3x2 near
+`0.9 x 1.5 x 2.5 mm`. Retro keeps the PAR grid/resolution and adds factor-two
+PAR sampling. Every case visibly uses unregularized FISTA (`-w -f -r 0`), CPU
+by default with optional `-g`. The initial GRE implementation produces only
+this single FISTA-r0 branch. Do not transfer an MPRAGE lambda or label any GRE
+setting optimal. After a separate representative GRE regularization sweep and
+explicit user selection, add the selected regularized reconstruction as a
+second branch while retaining FISTA-r0 as the control.
 
 The separate R1 and R3 private-output cleanups remain complete, indexed,
 checksum-validated, frozen, and outside source work. Do not reset or discard
@@ -404,14 +416,15 @@ c61b302 Add separate MPRAGE NIfTI masking workflow
 3ff2436 feat(tools): add pure-mask synthetic Wave rerun
 9ac657c docs(tools): record GRE reconstruction plan
 0d94870 feat(tools): add MPRAGE ablation recon branches
+c36cae8 Add automatic MPRAGE PSF fit selection interface
+41ab2de Add pinned Wave-GRE upstream dependency
 ```
 
-At the 2026-09-01 validation checkpoint, `HEAD` and the local `origin/main`
-tracking ref pointed to `0d94870`; no fetch was performed. The worktree and
-index were clean. The pure-mask rerun implementation is `3ff2436`, the GRE
-planning checkpoint is `9ac657c`, and the accepted dual-branch measured-MPRAGE
-implementation is `0d94870`. Recheck status before every edit and do not reset
-or discard later work. The historical tracker is under `docs/archive/`;
+At the latest 2026-09-01 checkpoint, local `HEAD` is `41ab2de`; no fetch was
+performed for this record. That commit pins the published GRE upstream after
+`c36cae8` exposed automatic/manual sine-line selection through the measured
+MPRAGE tool. Recheck status before every edit and do not reset or discard later
+work. The historical tracker is under `docs/archive/`;
 `EXPERIMENT_PLAN.md`, the source cleanup plan, the pure-mask rerun plan, and
 the GRE plan together record current work.
 

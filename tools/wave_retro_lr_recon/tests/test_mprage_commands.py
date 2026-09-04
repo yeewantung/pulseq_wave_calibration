@@ -10,7 +10,6 @@ from pathlib import Path
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
-from wave_retro_lr.gre import prepare_gre  # noqa: E402
 from wave_retro_lr.nifti_collection import HeadMaskParameters  # noqa: E402
 
 SCRIPTS = TOOL_ROOT / "scripts"
@@ -156,14 +155,17 @@ class SampleCommandTests(unittest.TestCase):
             "twix_array_axis_flips=MPRAGE_BART_ARRAY_AXIS_FLIPS", source
         )
 
-    def test_gre_placeholder_cannot_launch_reconstruction(self) -> None:
-        """Verify the deferred GRE adapter is explicitly non-runnable.
+    def test_mprage_orientation_policy_is_not_replaced_by_gre(self) -> None:
+        """Verify GRE integration leaves the validated MPRAGE flips unchanged.
 
         Returns:
             None.
         """
-        with self.assertRaisesRegex(NotImplementedError, "deferred"):
-            prepare_gre()
+
+        source = (SCRIPTS / "convert_mprage_bart_to_nifti.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("MPRAGE_BART_ARRAY_AXIS_FLIPS = (False, False, True)", source)
 
 
 if __name__ == "__main__":

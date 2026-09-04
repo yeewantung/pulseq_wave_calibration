@@ -1,4 +1,79 @@
-# MPRAGE reconstruction troubleshooting
+# Wave reconstruction troubleshooting
+
+## Single- and multi-echo GRE checks
+
+GRE support is code- and unit-tested but must not be described as real-data
+validated until the user visually confirms the outputs. Start with
+`normal/bart_inputs/manifest.json` and verify a positive ordered echo list,
+`sequence_echo_count_match=true`, `sequence_echo_times_match=true`, identical
+`shared_calibration_id` values, PSF shapes `1000 x 250 x 72`, and shared
+selected lambda `0.015`. Echoes still require distinct PSF, measured-k-space,
+BART-command, and NIfTI records. For the LIN low-resolution case, require
+matrix `250 x 148 x 72`, crop `[51:199]`, and LR CSM shape
+`250 x 148 x 72 x coil x 1`.
+
+`normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` must overlay raw `a/b/c`
+scatter samples on the processed curves. The shared coefficient archive stores
+processed keys `a/b/c` and raw keys `a_raw/b_raw/c_raw`. Reusing an older GRE
+preparation upgrades these fields from the retained projection caches and
+rewrites the plot.
+
+For Pulseq 3D scans, `sKSpace.lPartitions` may remain `1` even when MDH PAR
+counters cover the full volume. The manifest records this raw tag but resolves
+the partition matrix from sequence `Nz` plus exact measured MDH PAR support.
+Do not treat the raw tag alone as evidence of a single-partition acquisition.
+
+Every BART output echo directory must contain `wave_command.txt`, while the
+native map directory contains `ecalib_command.txt`. The conversion manifest
+records both commands and the exact BART restoration inputs. If magnitude
+scale or phase appears wrong, check the recorded formula:
+
+```text
+amplitude = kspace_norm * sqrt(extended_RO * LIN * PAR)
+phase = 1j * (-1)**(LIN//2)
+```
+
+The scientific complex arrays are under each NIfTI branch's
+`quantitative_complex/` directory. Magnitude NIfTIs are display-normalized
+using the echo-1 99th percentile shared across all echoes; phase NIfTIs
+are wrapped radians. NIfTIs must report stored axis codes RAS, with the
+conversion manifest recording logical roles `(readout, phase, slice)`, array
+flips `(false, true, false)`, and no interpolation. Do not troubleshoot
+measured GRE by adding the synthetic BET/brain-mask evaluation workflow;
+masking is a separate downstream presentation decision.
+
+## MPRAGE checks
+
+## `prepare_mprage_normal.py` is reported as `Killed`
+
+A bare shell `Killed` message normally means that the operating system or a
+memory cgroup sent `SIGKILL`; it is not a Python exception. MPRAGE preparation
+uses host RAM. The sample script's `-g` option applies to the later BART Wave
+commands and does not move TWIX preparation to the GPU.
+
+Integrated refscan arrays can be deceptively large because mapVBVD represents
+the sparse projection and ACS records on a dense five-set grid. For example,
+complex64 shape `(1024, 72, 72, 5, 52)` occupies about 10.3 GiB. The current
+preparation implementation consumes that reference before loading the image,
+checks unmeasured image samples in bounded readout blocks, reuses full-grid
+image storage for masking, and releases the 52-coil image immediately after
+compression. Do not restore whole-volume boolean selections or retain image
+and reference payloads together.
+
+After a failure, record available host memory and check the kernel log when
+permitted:
+
+```bash
+free -h
+cat /sys/fs/cgroup/memory.events 2>/dev/null || true
+journalctl -k --since "-10 min" 2>/dev/null | grep -Ei 'oom|out of memory|killed process'
+```
+
+On the next user-initiated preparation run, `/usr/bin/time -v` can record
+`Maximum resident set size`. A CUDA out-of-memory failure instead normally
+appears as an explicit CUDA/PyTorch/BART error rather than a bare shell
+`Killed` message. The pypulseq file-version warning is also independent of
+host-memory termination.
 
 ## Inspect the native R3x1 PSF coefficients first
 

@@ -4,6 +4,114 @@ This directory contains the R3 presentation-optimization, R1 parameter-
 refinement, and cross-dataset transfer workflow for synthetic Wave-MPRAGE
 reconstruction.
 
+## Two-echo synthetic-Wave GRE regularization sweep
+
+`gre_synthetic_wave_sweep.py` is the stage-oriented experiment entry point for
+a fully sampled two-echo GRE source. It does not reconstruct measured-Wave
+samples. The measured-Wave TWIX is restricted to geometry, metadata,
+orientation, and qualitative validation; the Wave operator is evaluated from
+the theoretical trajectory in the configured Pulseq file.
+
+The immutable logical geometry is:
+
+- source R1 GRE: `256 x 256 x 72` in `(RO, LIN, PAR)` order;
+- synthetic-Wave native grid: `250 x 250 x 72`, created by the centered
+  k-space crop `[3:253, 3:253, 0:72]`;
+- native FOV: `220 x 220 x 180 mm` and voxel size
+  `0.88 x 0.88 x 2.5 mm`;
+- LIN-low-resolution grid: `250 x 148 x 72`, created by the additional native
+  LIN crop `[51:199]`, with achieved LIN spacing `220 / 148 mm`;
+- theoretical Wave PSF readout: 1000 samples;
+- echoes: 10 ms and 20 ms, retained as separate preparation,
+  reconstruction, and evaluation groups.
+
+GRE orientation is handled by a GRE-specific policy: logical arrays remain in
+`(readout, phase, slice)` order, the DICOM-validated affine direction flags are
+`(false, true, false)`, and user-facing NIfTIs/figures are losslessly permuted
+and reversed into canonical RAS storage. Approved RAS BET masks are transformed
+back to logical GRE order for reconstruction metrics. This policy does not
+modify the separately validated MPRAGE axis roles or flip conventions.
+
+Only pure Cartesian image-lattice masks are accepted. Calibration data remain
+separate from reconstruction k-space. Native R3x1, native R3x2, and LIN-LR
+R3x2 use LIN/PAR residue `(2, 0)`. Exact mask counts and hashes are validated
+before synthetic k-space is exported.
+
+The coarse sweep contains one explicit GPU FISTA lambda-zero control, five
+Wavelet lambdas, and five LLR lambdas at each explicit block size 4, 8, and 16
+for every case and echo. This gives 21 jobs per group and 126 coarse jobs. No
+metric produces an automatic winner. Fine settings and final Wavelet/LLR
+selections are accepted only from explicit user review files.
+
+The independent `export-nifti` operation restores BART's input L2
+normalization, the unnormalized extended-grid FFT scale, and its deterministic
+`fftmod` global phase. It then applies the established MPRAGE display
+convention, mapping the positive-voxel magnitude p99 to one, and records the
+reversible scale in every candidate manifest. Quantitative metrics consume the
+restored complex CFL instead of the display-normalized image. Canonical-RAS
+float32 magnitude and wrapped-phase NIfTIs are written beside each CFL output.
+Candidate-level manifests make the export resumable without modifying
+reconstruction manifests. The local runner exposes this as `coarse-nifti` and
+`fine-nifti`; it requires only the completed corresponding sweep and can run
+independently of metric evaluation.
+
+GRE fine-sweep review files use `format_version: 2` and contain explicit,
+strictly increasing positive lambda lists. They do not infer trisection points
+or require adjacent coarse endpoints. An empty group means no fine jobs for
+that case/echo. The current local review runs Wavelet only at 0.005, 0.0075,
+0.01, 0.015, 0.02, 0.03, 0.04, and 0.05 for all six case/echo groups.
+
+After ordinary fine evaluation, `evaluate-shared-lambda` treats each geometry
+as one two-echo case and evaluates only echo-matched Wavelet candidates with an
+identical lambda. Magnitude and gradient NRMSE pool squared errors and reference
+energies across both echoes before division; NCC, circular phase error, and
+acquired-data residual are pooled using their corresponding sufficient
+statistics. Echo SSIM is reported as an equal mean, and the existing
+same-lambda cross-echo delta-B0 and magnitude-ratio metrics are retained.
+`plot-shared-lambda` writes one non-ranking curve panel per geometry. The local
+runner exposes these operations as `shared-lambda-evaluate` and
+`shared-lambda-plot`; neither operation changes the recorded final selection.
+
+Ordinary GRE BET candidates were rejected because increasing the threshold cut
+into the right brain while retaining left scalp. FSL's `-B` path was also
+rejected: its recursive robust-center pass crashed and FAST estimated an
+essentially unity bias field. The current GRE brain-mask stage therefore maps a
+previously approved same-subject MPRAGE mask into the GRE scanner geometry with
+nearest-neighbor interpolation. It validates the source approval and SHA-256,
+requires canonical RAS geometry, and rejects a physical-volume change above
+5%. The original GRE reference and metric inputs remain unchanged. A new
+canonical-RAS 3x3 QC figure must still be reviewed on the GRE reference.
+The stage provides the unchanged resampled mask and a
+`prior_approved_mprage_f0p59_d1_anterior-d1` variant expanded only one GRE
+voxel (0.88 mm) toward anterior. Approval requires one explicit candidate ID;
+no mask is selected automatically.
+
+Copy the tracked configuration examples to ignored `.local.json` files and
+set all private input/output paths there. Run the generated local launcher one
+operation at a time in an existing tmux session. It prompts before each
+operation and never creates a tmux session.
+
+```bash
+python tools/synthetic_wave_for_reg_baseline/scripts/gre_synthetic_wave_sweep.py \
+  --config tools/synthetic_wave_for_reg_baseline/configs/gre_synthetic_wave_sweep.local.json \
+  validate-config
+```
+
+Production-writing operations additionally require the exact approved run
+root through `--confirm-run-root`. The normal order is metadata, source,
+operator, full-sampling operator validation, CSM, references, BET candidate,
+explicit mask approval, case preparation, coarse
+validation/run/NIfTI export/evaluation/plotting, reviewed fine sweep, and explicit final
+selection. BART reconstruction is always invoked with `-g`; BART's internal
+input-norm scaling is recorded and restored before quantitative evaluation.
+
+Completed preparation operations are reused only after their configuration and
+embedded artifact hashes still match. An interrupted preparation operation is
+restarted at that named operation; it never causes a later operation to accept
+partial output. Reconstruction resume is finer grained: each candidate is
+reused independently only when its exact command, BART executable/hash,
+prepared-input manifest, configuration, and output payload hash match.
+
 Start with:
 
 - [`EXPERIMENT_PLAN.md`](EXPERIMENT_PLAN.md) for the active scientific plan;

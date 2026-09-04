@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "groups": {
+    "native_r3x1": {
+      "echo-01": {
+        "wavelet": {"lambda": 1e-4, "block_size": null},
+        "llr": {"lambda": 1e-5, "block_size": 4}
+      },
+      "echo-02": {
+        "wavelet": {"lambda": 1e-4, "block_size": null},
+        "llr": {"lambda": 1e-5, "block_size": 8}
+      }
+    },
+    "native_r3x2": {
+      "echo-01": {
+        "wavelet": {"lambda": 1e-4, "block_size": null},
+        "llr": {"lambda": 1e-5, "block_size": 4}
+      },
+      "echo-02": {
+        "wavelet": {"lambda": 1e-4, "block_size": null},
+        "llr": {"lambda": 1e-5, "block_size": 8}
+      }
+    },
+    "lin_low_resolution_r3x2": {
+      "echo-01": {
+        "wavelet": {"lambda": 1e-4, "block_size": null},
+        "llr": {"lambda": 1e-5, "block_size": 4}
+      },
+      "echo-02": {
+        "wavelet": {"lambda": 1e-4, "block_size": null},
+        "llr": {"lambda": 1e-5, "block_size": 8}
+      }
+    }
+  }
+}

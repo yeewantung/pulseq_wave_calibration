@@ -140,7 +140,7 @@ def resample_sensitivity_maps(
     ro, source_lin, source_par, coils, maps = shape[:5]
     target_lin, target_par = (int(value) for value in target_lin_par)
     if maps != 1 or any(value != 1 for value in shape[5:]):
-        raise ValueError("MPRAGE reconstruction accepts exactly one ESPIRiT map set.")
+        raise ValueError("Measured Wave reconstruction accepts exactly one ESPIRiT map set.")
     if target_lin > source_lin or target_par > source_par:
         raise ValueError("Retrospective CSM grids cannot exceed the native PE grid.")
     output = create_cfl(output_base, (ro, target_lin, target_par, coils, 1))

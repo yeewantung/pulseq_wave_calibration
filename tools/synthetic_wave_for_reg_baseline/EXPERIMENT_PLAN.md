@@ -436,7 +436,8 @@ The qualified R1 dataset replaced that temporary contract as follows:
 8. perform no composite scoring or automatic selection.
 
 The shared Wave exporter now produces canonical RAS with affine-axis flips
-`[true, false, true]`; R1 full-resolution geometry was explicitly validated.
+`[false, true, false]`; the GRE orientation sweep explicitly validated this
+full-resolution geometry.
 Retrospective low-resolution native grids differ by design, so compare native
 images in physical coordinates and label any matched-grid interpolation.
 

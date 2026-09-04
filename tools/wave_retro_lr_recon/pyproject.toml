@@ -1,7 +1,7 @@
 [project]
 name = "wave-retro-lr-recon"
 version = "0.3.0"
-description = "Measured Wave-MPRAGE BART input preparation and retrospective PE cropping"
+description = "Measured Wave-MPRAGE and multi-echo GRE BART preparation and retrospective PE cropping"
 requires-python = ">=3.11,<3.14"
 dependencies = []
 

@@ -1,0 +1,61 @@
+{
+  "format_version": 1,
+  "workflow": "synthetic_wave_gre_regularization_sweep",
+  "output_parent": "/path/to/approved/output_parent",
+  "run_name": "gre_sweep",
+  "inputs": {
+    "source_twix": "/path/to/fully_sampled_two_echo_gre.dat",
+    "sequence": "/path/to/two_echo_wave_gre.seq",
+    "measured_wave_twix": "/path/to/measured_wave_geometry_reference.dat",
+    "dicom_globs": [
+      "/path/to/dicom/Test.MR.EXAMPLE.5*",
+      "/path/to/dicom/Test.MR.EXAMPLE.6*"
+    ]
+  },
+  "geometry": {
+    "source_matrix_ro_lin_par": [256, 256, 72],
+    "native_matrix_ro_lin_par": [250, 250, 72],
+    "fov_mm_ro_lin_par": [220.0, 220.0, 180.0],
+    "extended_wave_readout": 1000,
+    "low_resolution_matrix_ro_lin_par": [250, 148, 72]
+  },
+  "sampling": {
+    "mask_kind": "pure_cartesian_image_lattice",
+    "residue_lin_par": [2, 0]
+  },
+  "coil_compression": {
+    "physical_coils": 44,
+    "virtual_coils": 12,
+    "partition_chunk": 4,
+    "readout_step": 4,
+    "covariance": "trace_balanced_across_two_echoes"
+  },
+  "csm": {
+    "calibration_echo": 1,
+    "calibration_size_ro_lin_par": [250, 32, 32],
+    "ecalib_maps": 1,
+    "ecalib_crop": 0.6,
+    "shared_across_echoes": true
+  },
+  "brain_mask": {
+    "source_case": "native_r3x1",
+    "source_echo": 1,
+    "bet_executable": "bet",
+    "fractional_intensity_threshold": 0.3,
+    "vertical_gradient": 0.0,
+    "robust_center": true,
+    "dilation_voxels": 0
+  },
+  "sweep": {
+    "wavelet_lambdas": [1e-6, 1e-5, 1e-4, 1e-3, 1e-2],
+    "llr_lambdas": [1e-6, 1e-5, 1e-4, 1e-3, 1e-2],
+    "llr_blocks": [4, 8, 16],
+    "iterations": 100,
+    "tolerance": 1e-6
+  },
+  "runtime": {
+    "backend": "gpu",
+    "bart": "bart",
+    "fft_workers": 4
+  }
+}

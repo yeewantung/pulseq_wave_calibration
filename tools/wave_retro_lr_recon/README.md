@@ -1,19 +1,40 @@
 # Wave retrospective reconstruction
 
-This repository tool prepares measured Wave data for BART reconstruction. The
-current supported user workflow is sagittal integrated Wave-MPRAGE; GRE is
-not yet implemented while its reviewed axial multi-echo adapter is planned.
-The confirmed future GRE contract uses native-grid normal R3x1 plus
-native-grid and LIN-cropped retrospective R3x2, with explicit unregularized
-FISTA (`-w -f -r 0`) for every case. These statements describe planned support
-and do not make the current GRE placeholder runnable.
+This repository tool prepares measured Wave data for explicit BART
+reconstruction. It supports the validated sagittal integrated Wave-MPRAGE
+workflow and a transverse Wave-GRE workflow for any positive echo count,
+including single echo. It supports normal native R3x1, retrospective native
+R3x2, and exact LIN-cropped R3x2 inputs. GRE code and unit contracts are
+complete, but GRE output is not claimed as real-data validated until the user
+visually reviews the generated magnitude and phase NIfTIs.
 
 The user-facing input is a Wave-encoded Siemens TWIX file plus its matching
 Pulseq sequence. Python validates and prepares BART inputs. The sample Bash
 scripts show every `bart ecalib` and `bart wave` command explicitly; Python
-does not launch BART in the new MPRAGE workflow.
+preparation and conversion modules never launch BART.
 
 ## Data and operator contract
+
+GRE uses logical `(RO, LIN, PAR)` roles `(readout, phase, slice)`. Both TWIX
+and sequence are required to describe matrix `250 x 250 x 72`, nominal FOV
+`220 x 220 x 180 mm`, and Wave grid `1000 x 250 x 72`. The echo count must be
+positive, Eco counters must be consecutive from zero, and sequence/TWIX echo
+counts and ordered TE values must agree exactly within the recorded tolerance.
+Historical encoded-slab-thickness, target-FOV, and `lPartitions` tags are not
+geometry inputs. Pulseq TWIX can retain `lPartitions=1` for a valid 3D scan;
+the raw value is recorded while sequence `Nz` is checked against the measured
+MDH PAR range. Every measured echo must contain the same complete residue-2
+R3x1 Cartesian lattice. The sparse Siemens phase-extent tag is likewise
+recorded but does not replace the logical 250 matrix.
+
+GRE fits one integrated-refscan `a/b/c` calibration solution and records one
+hash identity shared by all echoes. Each echo retains its own sequence
+trajectory and receives its own calibrated PSF. Native CSMs are estimated once
+and shared across echoes. The `250 x 148 x 72` case uses the exact centered LIN
+crop `[51:199]`; its CSMs are produced by centered Fourier PE resampling at
+unchanged FOV followed by coil-RSS normalization. All retrospective GRE
+k-space comes from direct measured-Wave cropping and pure Cartesian masking,
+never forward simulation from no-Wave data.
 
 For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical
 `(Z, Y, X)`. Readout and physical-Z resolution are never cropped.
@@ -106,13 +127,11 @@ The complete dual-branch normal, retrospective, NIfTI-conversion, and shared
 head-mask collection workflow passed representative real measured-MPRAGE
 visual validation on 2026-09-01. This closes the MPRAGE gate before GRE work.
 
-## GRE integration status and next step
+## Measured single- and multi-echo GRE workflow
 
-The reviewed upstream calibration change is published at `wave-gre-flow-comp`
-commit `d3772bd` and pinned in this parent repository at
-`external/wave-gre-flow-comp`. The parent tool's GRE placeholder remains
-non-runnable; the next code change is the concise normal/retrospective adapter,
-not another copy of the upstream scientific reconstruction entry point.
+The adapter imports the reviewed upstream calibration implementation from
+`external/wave-gre-flow-comp` commit `d3772bd`. It does not modify or duplicate
+that external submodule.
 
 The multi-echo calibration contract is:
 
@@ -126,32 +145,16 @@ The multi-echo calibration contract is:
 - validate identical image sampling, echo/TE ordering, finite inputs, and the
   shared calibration identity before exporting any per-echo BART inputs.
 
-The upstream coefficient-processing interface should match the reviewed
-MPRAGE policy: nine-sample `smooth` remains the default, `sine-line` without
+The upstream coefficient-processing interface matches the reviewed MPRAGE
+policy: nine-sample `smooth` remains the default, `sine-line` without
 bounds requests automatic range selection, and a complete half-open
 `[kx_min, kx_max)` pair is the reproducible manual override. Automatic
-selection must receive calibration-quality evidence, record its selected
-range and fit diagnostics, and fail explicitly instead of silently reverting
-to smooth. Shared PSF fitting logic should be factored or maintained as a
-byte-identical, versioned utility at one clear boundary rather than allowed to
-diverge between nearly identical MPRAGE and GRE implementations.
-
-Completed dependency sequence:
-
-1. the narrow upstream calibration change passed 22 focused tests;
-2. the user published upstream commit `d3772bd`;
-3. the parent added the public-HTTPS submodule and recursively verified its
-   nested dependency; and
-4. setup documentation retained the standard recursive sync/update commands.
-
-Next, replace the local GRE placeholder with concise normal R3x1 and
-retrospective native/LR R3x2 adapters, keeping explicit
-`bart wave -w -f -r 0` commands in the sample scripts.
+selection receives calibration-quality evidence, records its selected range
+and fit diagnostics, and fails explicitly instead of silently reverting to
+smooth.
 
 The default must not move from smooth to automatic sine-line until both paths
-have been tested on representative real multi-echo GRE data. Upstream and
-parent commits remain separate: publish upstream first, then update the parent
-pin.
+have been tested on representative real multi-echo GRE data.
 
 LR CSMs are derived from the one accepted native ecalib map set by centered
 Fourier resampling in PE at unchanged FOV, followed by coil-RSS
@@ -160,8 +163,56 @@ magnitude and phase NIfTI files. Exact shell-escaped `ecalib` and `wave`
 commands are retained beside the BART outputs and copied into the NIfTI JSON
 sidecars; an existing CSM is reused only when its command record matches.
 
-Reconstruction and presentation masking are separate workflows. The normal
-and retrospective reconstruction scripts write canonical NIfTIs below the
+Each case and echo has both `fista_r0` and `selected_wavelet` branches. The
+Wavelet method and lambda `0.015` originate from
+`wavelet_shared_echo_selection.json` with SHA-256
+`0c43a9d31672e90ad851decfca66c253c362cbd67ca5ba97c4fd8ef1f5a61afd`.
+The runtime policy applies that shared value unchanged to every validated
+echo:
+
+| GRE case | Shared lambda for every echo |
+| --- | ---: |
+| native R3x1 | `0.015` |
+| native R3x2 | `0.015` |
+| LIN-low-resolution R3x2 | `0.015` |
+
+The shared value does not couple echoes: BART runs separately with distinct
+PSF, measured k-space, TE, output, phase, and NIfTI provenance for each echo.
+No LLR selection is inferred. The converter restores BART output with
+`amplitude = kspace_norm * sqrt(extended_RO * LIN * PAR)` and
+`phase = 1j * (-1)**(LIN//2)`. Restored quantitative complex arrays are saved
+separately from display-normalized magnitude and wrapped-phase NIfTIs. GRE
+first applies logical roles `(readout, phase, slice)` and the GRE orientation-
+sweep-validated flips `(False, True, False)`, then uses only axis
+permutation/flips to store canonical RAS without interpolation. No
+reconstruction-stage brain mask or BET step is included.
+
+## GRE head-mask parameter derivation
+
+The MPRAGE NIfTI collection command is intentionally not used for GRE. Before
+adding the GRE collection, derive and visually approve a separate GRE default
+from the corrected canonical-RAS normal/native-R3x1, selected-Wavelet, echo-1
+magnitude. The derivation command creates an unranked parameter grid; each
+candidate receives a NIfTI mask and a nine-panel overlay covering 25%, 50%,
+and 75% positions in all three anatomical planes:
+
+```bash
+scripts/derive_gre_head_mask_parameters.py \
+    /exact/path/to/normal/nifti/selected_wavelet/echo-01_part-mag.nii.gz \
+    /exact/new/gre_head_mask_parameter_sweep
+```
+
+The destination must be a new user-confirmed directory. The command never
+selects a winner. Review every file under `overlays/`, then record one explicit
+candidate ID as the GRE default. A later GRE-specific collection will derive
+one mask on this normal echo-1 grid, apply it identically to every echo and
+reconstruction branch, and map it to different retrospective grids only with
+nearest-neighbor physical-space mask resampling.
+
+## MPRAGE presentation masking
+
+MPRAGE reconstruction and presentation masking are separate workflows. The
+normal and retrospective reconstruction scripts write canonical NIfTIs below the
 `fista_r0` and `optimal_wavelet` branches. The optional collection script
 creates byte-identical canonical copies and
 whole-head-masked derivatives beneath `OUTPUT_ROOT/nifti_collection`. The
@@ -187,7 +238,34 @@ or CUDA-enabled BART compilation, and runtime validation. The sample scripts
 resolve `python` and `bart` from `PATH`; complete that setup before using the
 commands below.
 
-## Normal measured-data command
+## GRE commands awaiting visual validation
+
+After confirming a new exact output root, run native R3x1 in the configured
+tmux shell:
+
+```bash
+scripts/sample_gre_normal_recon.sh \
+    /path/to/measured_wave_gre.dat \
+    /path/to/confirmed_output_root \
+    /path/to/matching_wave_gre.seq \
+    -g
+```
+
+Run both retrospective R3x2 cases with the same inputs and output root:
+
+```bash
+scripts/sample_gre_retro_lr_recon.sh \
+    /path/to/measured_wave_gre.dat \
+    /path/to/confirmed_output_root \
+    /path/to/matching_wave_gre.seq \
+    -g
+```
+
+Omit `-g` for CPU BART Wave. Both samples accept the same optional smooth or
+sine-line PSF settings documented below for MPRAGE. Inspect every echo and
+both branches before describing GRE as real-data validated.
+
+## MPRAGE normal measured-data command
 
 Choose a new output root, then run:
 
@@ -333,8 +411,9 @@ preferred overrides may be kept in an ignored `.local.sh` wrapper.
 - `wave_retro_lr/psf.py`: direct calibrated PSF evaluation;
 - `wave_retro_lr/retrospective.py`: measured-Wave crop, CSM resampling, and the
   explicitly named synthetic no-Wave utility;
-- `wave_retro_lr/gre.py`: non-runnable GRE adapter placeholder pending the
-  parent integration of pinned upstream commit `d3772bd`;
+- `wave_retro_lr/gre.py`: measured multi-echo GRE geometry, sampling, shared
+  calibration, direct retrospective crop, CSM, command, and normalization
+  contracts;
 - `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
   split-complex output recombination;
 - `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,
@@ -360,3 +439,6 @@ python -m unittest discover \
     -s tools/wave_retro_lr_recon/tests \
     -p 'test_*.py'
 ```
+
+On `macha`, activate `cuda133py312-macha` and source `bart_startup.sh` first,
+as shown in `SETUP.md`.

@@ -22,10 +22,10 @@ git submodule update --init --recursive
 cd tools/wave_retro_lr_recon
 ```
 
-The MPRAGE adapter imports focused TWIX, calibration, geometry, and NIfTI
-helpers from `external/wave-mprage`. The GRE adapter will use the independently
-versioned axial/multi-echo implementation in `external/wave-gre-flow-comp`
-once the currently non-runnable placeholder is replaced.
+The MPRAGE adapter imports focused helpers from `external/wave-mprage`. The
+measured single- or multi-echo GRE adapter imports the independently versioned calibration,
+TWIX, coil-compression, trajectory, and NIfTI helpers from the pinned
+`external/wave-gre-flow-comp` implementation.
 Separately installed packages or unrelated sibling checkouts are not
 substitutes for these pinned sources. The tracked submodule URLs use public
 HTTPS so read-only users do not need GitHub SSH keys.
@@ -235,7 +235,25 @@ mean that the GPU is available only inside a scheduled allocation.
 After setup, review the dataset-independent commands in `README.md` or run:
 
 ```bash
+scripts/sample_gre_normal_recon.sh --help
+scripts/sample_gre_retro_lr_recon.sh --help
 scripts/sample_mprage_normal_recon.sh --help
 scripts/sample_mprage_retro_lr_recon.sh --help
 scripts/sample_mprage_nifti_collection.sh --help
 ```
+
+## Macha environment
+
+On host `macha`, use the site environment and compatible host BART build:
+
+```bash
+source ~/cluster/miniforge3/etc/profile.d/conda.sh
+conda activate cuda133py312-macha
+source ~/cluster/bart/bart_startup.sh
+command -v python
+command -v bart
+```
+
+Run tests before entering the production commands in tmux. The agent does not
+launch measured reconstruction or choose an output directory; the user must
+confirm the exact output root supplied to either sample script.
