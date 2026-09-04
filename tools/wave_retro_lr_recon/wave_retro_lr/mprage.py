@@ -17,11 +17,24 @@ import numpy as np
 from .bart_io import create_cfl, open_cfl, read_shape, sha256_file
 from .core import CaseSpec, Geometry, resolve_case
 from .psf import (
+    PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
     PSF_COEFFICIENT_PLOT_NAME,
     PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME,
+    PSF_COEFFICIENT_REJECTED_FULL_RANGE_PLOT_NAME,
     PSF_COEFFICIENT_REJECTED_PLOT_NAME,
+    PSF_PLANE_COMPARISON_PLOT_NAME,
+    PSF_PLANE_REJECTED_DIAGNOSTICS_NAME,
+    PSF_PLANE_REJECTED_PLOT_NAME,
     evaluate_calibrated_psf,
     write_psf_coefficient_plot,
+    write_psf_plane_comparison_plot,
+)
+from .projection_psf import (
+    SPATIAL_SELECTION_VERSION,
+    AutomaticSpatialRegionRejected,
+    align_constant_phase_branch,
+    centered_spatial_core_bounds,
+    select_spatial_projection_region,
 )
 from .retrospective import resample_sensitivity_maps, write_measured_wave_crop
 from .sampling import SamplingPattern, inspect_twix_sampling
@@ -36,6 +49,10 @@ RETRO_CASES = (
     ("lr_xy_1p25mm_r3x2", (1.25, 1.25)),
 )
 AUTOMATIC_C_RECOVERY_VERSION = 1
+AUTOMATIC_Y_CORE_RETRY_VERSION = 1
+SUSTAINED_COEFFICIENT_CORRUPTION_ERROR = (
+    "Automatic PSF range selection detected sustained coefficient corruption"
+)
 AB_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE = 0.02
 SEQUENCE_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE = 0.03
 C_FIXED_FREQUENCY_MAXIMUM_CONDITION_NUMBER = 1.0e8
@@ -53,6 +70,7 @@ class AutomaticPsfFitRejected(ValueError):
         raw_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray],
         candidate_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray] | None,
         diagnostics: Mapping[str, Any],
+        plane_diagnostics: Mapping[str, Mapping[str, object]] | None = None,
     ) -> None:
         """Initialize an automatic-fit rejection with diagnostic payloads.
 
@@ -62,6 +80,8 @@ class AutomaticPsfFitRejected(ValueError):
             candidate_coefficients: Reconstructed rejected fit curves when
                 upstream parameter diagnostics are available.
             diagnostics: Upstream automatic range and validation details.
+            plane_diagnostics: Optional theoretical/measured/fitted projection
+                planes retained when later coefficient processing is rejected.
 
         Returns:
             None.
@@ -70,6 +90,10 @@ class AutomaticPsfFitRejected(ValueError):
         self.raw_coefficients = raw_coefficients
         self.candidate_coefficients = candidate_coefficients
         self.diagnostics = dict(diagnostics)
+        self.plane_diagnostics = {
+            str(name): dict(record)
+            for name, record in (plane_diagnostics or {}).items()
+        }
 
 
 def _normalize_psf_coefficient_settings(
@@ -124,6 +148,53 @@ def _normalize_psf_coefficient_settings(
         "fit_range_selection": "manual",
         "requested_fit_kx_range": [lower, upper],
         "fit_kx_range_convention": "half-open",
+    }
+
+
+def _normalize_psf_spatial_settings(
+    fit_y_min: int | None,
+    fit_y_max: int | None,
+    fit_z_min: int | None,
+    fit_z_max: int | None,
+) -> dict[str, Any]:
+    """Normalize global projection-space fit-region settings.
+
+    Args:
+        fit_y_min: Optional inclusive manual sin-projection index.
+        fit_y_max: Optional exclusive manual sin-projection index.
+        fit_z_min: Optional inclusive manual cos-projection index.
+        fit_z_max: Optional exclusive manual cos-projection index.
+
+    Returns:
+        JSON-compatible automatic/manual region-selection request.
+
+    Raises:
+        ValueError: If either manual interval is incomplete or empty.
+    """
+    bounds = {}
+    for axis, lower, upper in (
+        ("y", fit_y_min, fit_y_max),
+        ("z", fit_z_min, fit_z_max),
+    ):
+        if (lower is None) != (upper is None):
+            raise ValueError(
+                f"Manual PSF {axis} spatial fitting requires both min and max bounds."
+            )
+        if lower is not None:
+            normalized = (int(lower), int(upper))
+            if normalized[0] < 0 or normalized[1] <= normalized[0]:
+                raise ValueError(
+                    f"PSF {axis} spatial bounds must satisfy 0 <= min < max."
+                )
+            bounds[axis] = list(normalized)
+        else:
+            bounds[axis] = None
+    return {
+        "spatial_region_selection": "global-automatic-with-manual-override",
+        "spatial_region_selection_version": SPATIAL_SELECTION_VERSION,
+        "requested_fit_y_range": bounds["y"],
+        "requested_fit_z_range": bounds["z"],
+        "fit_spatial_range_convention": "half-open calibration-image indices",
     }
 
 
@@ -223,6 +294,9 @@ def _psf_processing_implementation_identity() -> dict[str, Any]:
         Path("external/wave-mprage/recon/recon_wave_mprage_from_twix_integrated_nifti.py"),
         Path("external/wave-mprage/recon/utils/psf_coefficient_processing.py"),
         Path("external/wave-mprage/recon/utils/psf_wrapped_phase_fit.py"),
+        Path("tools/wave_retro_lr_recon/wave_retro_lr/mprage.py"),
+        Path("tools/wave_retro_lr_recon/wave_retro_lr/projection_psf.py"),
+        Path("tools/wave_retro_lr_recon/wave_retro_lr/psf.py"),
     )
     files = {}
     for relative_path in relative_paths:
@@ -258,6 +332,7 @@ def load_wave_mprage_helpers() -> Any:
     coil_compression = importlib.import_module("utils.coil_compression_kspace")
     native = importlib.import_module("recon_wave_mprage_from_twix_integrated_nifti")
     return SimpleNamespace(
+        supports_spatial_projection_selection=True,
         load_img=twix_import.load_img,
         load_ref=twix_import.load_ref,
         estimate_cc_matrix_coillast=coil_compression.estimate_cc_matrix_coillast,
@@ -265,6 +340,11 @@ def load_wave_mprage_helpers() -> Any:
         fit_wave_psf_deviation_from_projection=(
             native.fit_wave_psf_deviation_from_projection
         ),
+        fit_wrapped_phase_planes=native.fit_wrapped_phase_planes,
+        _projection_fit_quality_summary=native._projection_fit_quality_summary,
+        _get_fov_yz=native._get_fov_yz,
+        ifft3call=native.ifft3call,
+        fftc_dim=native.fftc_dim,
         generate_theoretical_wave_trajectory=(
             native.generate_theoretical_wave_trajectory
         ),
@@ -797,6 +877,370 @@ def _recover_c_only_automatic_rejection(
     )
 
 
+def _fit_projection_coefficients_with_spatial_selection(
+    native: Any,
+    *,
+    twix_path: Path,
+    sequence_path: Path,
+    ncalib: int,
+    nacs: int,
+    fit_y_bounds: tuple[int, int] | None,
+    fit_z_bounds: tuple[int, int] | None,
+) -> tuple[
+    Any,
+    Any,
+    Any,
+    int,
+    dict[str, Any],
+    dict[str, dict[str, object]],
+    dict[str, Any] | None,
+]:
+    """Fit integrated projection planes with global spatial-region selection.
+
+    The parent adapter retains the pinned upstream TWIX, trajectory, Fourier,
+    and wrapped-plane implementations. It adds one fixed spatial interval per
+    projection because the upstream high-level helper does not expose that
+    selection boundary.
+
+    Args:
+        native: Focused pinned Wave-MPRAGE helper namespace.
+        twix_path: Integrated measured TWIX file.
+        sequence_path: Matching Pulseq sequence.
+        ncalib: Projection calibration matrix width.
+        nacs: Integrated ACS matrix width.
+        fit_y_bounds: Optional manual sin-projection interval.
+        fit_z_bounds: Optional manual cos-projection interval.
+
+    Returns:
+        Raw ``a``, ``b``, and total ``c`` coefficients, calibration ADC count,
+        structured quality evidence, plot-ready sin/cos PSF planes, and an
+        optional cached central-y retry payload for automatic kx rejection.
+
+    Raises:
+        AutomaticSpatialRegionRejected: If no reliable automatic spatial
+            interval exists for either projection.
+        ValueError: If refscan or trajectory dimensions are incompatible.
+    """
+    import pypulseq as pp
+    import torch
+
+    reference = native.load_ref(str(twix_path))
+    native._check_integrated_refscan_shape(reference, Nacs=nacs, Ncalib=ncalib)
+    readout_oversampled = int(reference.shape[0])
+    sequence = pp.Sequence()
+    sequence.read(str(sequence_path), remove_duplicates=False)
+    definitions = sequence.definitions
+    trajectory_adc, _, _, _, _ = sequence.calculate_kspace()
+    calibration_samples = int(readout_oversampled * (ncalib * 4 + nacs * nacs))
+    if trajectory_adc.shape[1] < calibration_samples:
+        raise ValueError("Sequence trajectory is shorter than its integrated calibration tail.")
+    trajectory = np.asarray(
+        trajectory_adc[:, -calibration_samples:], dtype=np.float64
+    ).reshape(3, -1, readout_oversampled)
+    fov_y, fov_z = native._get_fov_yz(definitions, slice_orientation="SAG")
+
+    coefficient_results = []
+    projection_quality = {}
+    selection_records = {}
+    plane_records: dict[str, dict[str, object]] = {}
+    y_core_retry_component: dict[str, Any] | None = None
+    for wave_mode in ("sin", "cos"):
+        if wave_mode == "sin":
+            nowave_kspace = reference[:, :ncalib, :1, 0, :]
+            wave_kspace = reference[:, :ncalib, :1, 1, :]
+            delta = trajectory[1, ncalib : 2 * ncalib][ncalib // 2] * fov_y
+            y_coordinates = (np.arange(ncalib) - ncalib / 2.0) / ncalib
+            z_coordinates = np.array([0.0])
+            theoretical = np.exp(
+                1j * 2.0 * np.pi * delta[:, None] * y_coordinates[None, :]
+            ).astype(np.complex64)[..., None]
+            axis_name = "y"
+            manual_bounds = fit_y_bounds
+        else:
+            nowave_kspace = reference[:, :1, :ncalib, 2, :]
+            wave_kspace = reference[:, :1, :ncalib, 3, :]
+            delta = trajectory[0, 3 * ncalib : 4 * ncalib][ncalib // 2] * fov_z
+            y_coordinates = np.array([0.0])
+            z_coordinates = (np.arange(ncalib) - ncalib / 2.0) / ncalib
+            theoretical = np.exp(
+                1j * 2.0 * np.pi * delta[:, None] * z_coordinates[None, :]
+            ).astype(np.complex64)[:, None, :]
+            axis_name = "z"
+            manual_bounds = fit_z_bounds
+
+        image_nowave = native.ifft3call(nowave_kspace)
+        image_wave = native.ifft3call(wave_kspace)
+        hybrid_nowave = native.fftc_dim(image_nowave, dim=0)
+        hybrid_wave = native.fftc_dim(image_wave, dim=0)
+        cross = hybrid_wave * torch.conj(hybrid_nowave) / (
+            1e-8 + hybrid_nowave * torch.conj(hybrid_nowave)
+        )
+        measured = torch.exp(1j * torch.angle(cross.mean(dim=-1)))
+        theoretical_tensor = torch.as_tensor(theoretical, device=measured.device)
+        psf_difference = torch.angle(torch.conj(theoretical_tensor) * measured)
+        fit_cache: dict[tuple[int, int], Mapping[str, Any]] = {}
+
+        def fit_region(bounds: tuple[int, int]) -> Mapping[str, Any]:
+            """Run the pinned fitter on one original-coordinate interval.
+
+            Args:
+                bounds: Half-open spatial calibration interval.
+
+            Returns:
+                Upstream wrapped-plane fit result.
+            """
+            if bounds in fit_cache:
+                return fit_cache[bounds]
+            lower, upper = bounds
+            if axis_name == "y":
+                difference_subset = psf_difference[:, lower:upper, :]
+                hybrid_subset = hybrid_nowave[:, lower:upper, :, :]
+                y_subset = y_coordinates[lower:upper]
+                z_subset = z_coordinates
+            else:
+                difference_subset = psf_difference[:, :, lower:upper]
+                hybrid_subset = hybrid_nowave[:, :, lower:upper, :]
+                y_subset = y_coordinates
+                z_subset = z_coordinates[lower:upper]
+            fitted_region = native.fit_wrapped_phase_planes(
+                psf_diff=difference_subset,
+                hyb_nowave=hybrid_subset,
+                y_norm=y_subset,
+                z_norm=z_subset,
+                mask_mode="combined",
+                mag_abs_floor=0.0,
+                local_window_size=5,
+                coherence_threshold=0.75,
+                use_phase_coherence_weight=True,
+                phase_weight_power=2.0,
+                use_residual_coherence_refinement=True,
+                residual_window_size=5,
+                residual_coherence_threshold=0.75,
+                use_residual_coherence_weight=True,
+                residual_weight_power=2.0,
+                n_irls=10,
+                huber_delta=0.7,
+                return_quality_maps=True,
+                verbose=False,
+            )
+            fit_cache[bounds] = fitted_region
+            return fitted_region
+
+        spatial_coordinates = y_coordinates if axis_name == "y" else z_coordinates
+        try:
+            result, selection = select_spatial_projection_region(
+                psf_difference,
+                hybrid_nowave,
+                spatial_coordinates,
+                axis_name=axis_name,
+                fit_region=fit_region,
+                manual_bounds=manual_bounds,
+            )
+        except AutomaticSpatialRegionRejected as exc:
+            full_result = exc.plane.get("full_result")
+            if isinstance(full_result, Mapping):
+                slope_key = "a_fit_all" if axis_name == "y" else "b_fit_all"
+                slope = np.asarray(full_result[slope_key], dtype=np.float64)
+                constant = np.asarray(full_result["c_fit_all"], dtype=np.float64)
+                prediction = slope[:, None] * spatial_coordinates[None, :] + constant[:, None]
+                fitted = np.squeeze(theoretical) * np.exp(1j * prediction)
+            else:
+                fitted = np.squeeze(theoretical)
+            exc.plane.update(
+                {
+                    "theoretical": np.squeeze(theoretical),
+                    "measured": np.squeeze(measured.detach().cpu().numpy()),
+                    "fitted": fitted,
+                    "residual": np.conj(fitted)
+                    * np.squeeze(measured.detach().cpu().numpy()),
+                }
+            )
+            raise
+
+        coefficient_results.append(result)
+        projection_quality[wave_mode] = native._projection_fit_quality_summary(result)
+        selection_records[wave_mode] = selection
+        slope_key = "a_fit_all" if axis_name == "y" else "b_fit_all"
+        slope = np.asarray(result[slope_key].detach().cpu(), dtype=np.float64)
+        constant = np.asarray(result["c_fit_all"].detach().cpu(), dtype=np.float64)
+        prediction = slope[:, None] * spatial_coordinates[None, :] + constant[:, None]
+        theoretical_2d = np.squeeze(theoretical)
+        measured_2d = np.squeeze(measured.detach().cpu().numpy())
+        fitted_2d = theoretical_2d * np.exp(1j * prediction)
+        plane_records[wave_mode] = {
+            "theoretical": theoretical_2d,
+            "measured": measured_2d,
+            "fitted": fitted_2d,
+            "residual": np.conj(fitted_2d) * measured_2d,
+            "selected_bounds": tuple(selection["selected_bounds"]),
+        }
+
+        # Cache the already evaluated central-y model for one downstream
+        # retry without reloading the large integrated reference scan.
+        if (
+            wave_mode == "sin"
+            and manual_bounds is None
+            and selection.get("outcome") == "full_region_preserved"
+        ):
+            core_bounds = centered_spatial_core_bounds(spatial_coordinates.size)
+            core_result = fit_cache.get(core_bounds)
+            core_quality = selection.get("central_core_quality")
+            if isinstance(core_result, Mapping) and isinstance(core_quality, Mapping):
+                core_is_reliable = (
+                    float(core_quality.get("valid_readout_fraction", 0.0))
+                    >= float(selection["minimum_valid_readout_fraction"])
+                    and float(core_quality.get("median_wrapped_rms_rad", float("inf")))
+                    <= float(selection["maximum_median_wrapped_rms_rad"])
+                )
+                if core_is_reliable:
+                    core_slope = np.asarray(
+                        core_result["a_fit_all"].detach().cpu(), dtype=np.float64
+                    )
+                    core_constant = np.asarray(
+                        core_result["c_fit_all"].detach().cpu(), dtype=np.float64
+                    )
+                    core_prediction = (
+                        core_slope[:, None] * spatial_coordinates[None, :]
+                        + core_constant[:, None]
+                    )
+                    core_fitted = theoretical_2d * np.exp(1j * core_prediction)
+                    y_core_retry_component = {
+                        "bounds": core_bounds,
+                        "result": core_result,
+                        "projection_quality": native._projection_fit_quality_summary(
+                            core_result
+                        ),
+                        "selection": {
+                            **selection,
+                            "selection": "automatic-fallback",
+                            "outcome": "centered_y_core_retry",
+                            "selected_bounds": list(core_bounds),
+                            "selected_quality": dict(core_quality),
+                            "clean_case_no_op": False,
+                        },
+                        "plane": {
+                            "theoretical": theoretical_2d,
+                            "measured": measured_2d,
+                            "fitted": core_fitted,
+                            "residual": np.conj(core_fitted) * measured_2d,
+                            "selected_bounds": core_bounds,
+                        },
+                    }
+
+    sin_result, cos_result = coefficient_results
+    a_raw = sin_result["a_fit_all"]
+    b_raw = cos_result["b_fit_all"]
+    c_raw = sin_result["c_fit_all"] + cos_result["c_fit_all"]
+    evidence = {
+        "readout_index": np.arange(readout_oversampled, dtype=np.int64),
+        "projection_quality": projection_quality,
+        "spatial_region_selection": selection_records,
+        "component_projection_sources": {
+            "a": ["sin"],
+            "b": ["cos"],
+            "c": ["sin", "cos"],
+        },
+    }
+    y_core_retry = None
+    if y_core_retry_component is not None:
+        core_sin_result = y_core_retry_component["result"]
+        y_core_retry = {
+            "bounds": y_core_retry_component["bounds"],
+            "raw_coefficients": (
+                core_sin_result["a_fit_all"],
+                cos_result["b_fit_all"],
+                core_sin_result["c_fit_all"] + cos_result["c_fit_all"],
+            ),
+            "calibration_evidence": {
+                **evidence,
+                "projection_quality": {
+                    **projection_quality,
+                    "sin": y_core_retry_component["projection_quality"],
+                },
+                "spatial_region_selection": {
+                    **selection_records,
+                    "sin": y_core_retry_component["selection"],
+                },
+            },
+            "plane_diagnostics": {
+                **plane_records,
+                "sin": y_core_retry_component["plane"],
+            },
+        }
+    return (
+        a_raw,
+        b_raw,
+        c_raw,
+        calibration_samples,
+        evidence,
+        plane_records,
+        y_core_retry,
+    )
+
+
+def _coefficient_processing_inputs(
+    a_raw: Any,
+    b_raw: Any,
+    c_raw: Any,
+    *,
+    readout_oversampled: int,
+) -> tuple[
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    tuple[Any, Any, Any],
+    np.ndarray,
+    dict[str, Any],
+]:
+    """Prepare raw coefficient vectors for smoothing or sine-line fitting.
+
+    Args:
+        a_raw: Raw LIN slope coefficients on the oversampled readout grid.
+        b_raw: Raw PAR slope coefficients on the oversampled readout grid.
+        c_raw: Raw constant phase coefficients on the same grid.
+        readout_oversampled: Required coefficient-vector length.
+
+    Returns:
+        Original NumPy vectors, branch-aligned processing vectors, native
+        processing inputs, integer c branch turns, and alignment provenance.
+
+    Raises:
+        ValueError: If any raw coefficient has an unexpected length.
+    """
+    raw_vectors = tuple(
+        np.asarray(value, dtype=np.float64).reshape(-1)
+        for value in (a_raw, b_raw, c_raw)
+    )
+    if any(value.size != readout_oversampled for value in raw_vectors):
+        raise ValueError(
+            "Raw calibrated PSF vectors do not match the oversampled readout."
+        )
+    c_aligned, c_branch_turns = align_constant_phase_branch(raw_vectors[2])
+    processing_vectors = (raw_vectors[0], raw_vectors[1], c_aligned)
+    if hasattr(c_raw, "detach"):
+        import torch
+
+        c_processing_input = torch.as_tensor(
+            c_aligned, dtype=c_raw.dtype, device=c_raw.device
+        )
+    else:
+        c_processing_input = np.asarray(c_aligned, dtype=np.asarray(c_raw).dtype)
+    native_processing_vectors = (a_raw, b_raw, c_processing_input)
+    branch_alignment_record = {
+        "method": "center-anchored-continuous-modulo-2pi",
+        "complex_phase_invariant": True,
+        "nonzero_shift_count": int(np.count_nonzero(c_branch_turns)),
+        "minimum_turns": int(np.min(c_branch_turns)),
+        "maximum_turns": int(np.max(c_branch_turns)),
+    }
+    return (
+        raw_vectors,  # type: ignore[return-value]
+        processing_vectors,
+        native_processing_vectors,
+        c_branch_turns,
+        branch_alignment_record,
+    )
+
+
 def _calibrated_psf_inputs(
     native: Any,
     *,
@@ -808,6 +1252,8 @@ def _calibrated_psf_inputs(
     coefficient_processing: str,
     fit_kx_min: int | None,
     fit_kx_max: int | None,
+    fit_y_bounds: tuple[int, int] | None = None,
+    fit_z_bounds: tuple[int, int] | None = None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -815,7 +1261,10 @@ def _calibrated_psf_inputs(
     np.ndarray,
     np.ndarray,
     tuple[np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray],
+    np.ndarray,
     dict[str, Any],
+    dict[str, dict[str, object]],
 ]:
     """Fit ``a,b,c`` and return them with the sequence Wave trajectories.
 
@@ -829,12 +1278,14 @@ def _calibrated_psf_inputs(
         coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
         fit_kx_min: Inclusive first sine-line fitting index, if selected.
         fit_kx_max: Exclusive final sine-line fitting index, if selected.
+        fit_y_bounds: Optional manual sin-projection spatial interval.
+        fit_z_bounds: Optional manual cos-projection spatial interval.
 
     Returns:
         ``delta_lin``, ``delta_par``, and fitted ``a``, ``b``, ``c`` vectors,
-        followed by the three original coefficient vectors and the upstream
-        coefficient-processing diagnostics. All vectors use the oversampled
-        readout grid.
+        followed by original coefficients, branch-aligned processing inputs,
+        integer ``c`` branch turns, processing diagnostics, and plot-ready
+        projection planes. All vectors use the oversampled readout grid.
 
     Raises:
         AutomaticPsfFitRejected: If an automatic sine-line candidate fails
@@ -842,34 +1293,49 @@ def _calibrated_psf_inputs(
         ValueError: If any returned vector has an unexpected length.
     """
 
-    with tempfile.TemporaryDirectory(prefix="wave_mprage_psf_") as temporary:
-        output_prefix = str(Path(temporary)) + "/"
+    plane_diagnostics: dict[str, dict[str, object]] = {}
+    y_core_retry: dict[str, Any] | None = None
+    if getattr(native, "supports_spatial_projection_selection", False) is True:
         (
             a_raw,
             b_raw,
             c_raw,
             calibration_samples,
             calibration_evidence,
-        ) = native.fit_wave_psf_deviation_from_projection(
-            mprage_data_file=str(twix_path),
-            mprage_seq_file=str(sequence_path),
-            out_folder=output_prefix,
-            file_tag="temporary",
-            yflip=-1,
-            zflip=-1,
-            Ncalib=ncalib,
-            Nacs=nacs,
-            slice_orientation="SAG",
-            return_diagnostics=True,
+            plane_diagnostics,
+            y_core_retry,
+        ) = _fit_projection_coefficients_with_spatial_selection(
+            native,
+            twix_path=twix_path,
+            sequence_path=sequence_path,
+            ncalib=ncalib,
+            nacs=nacs,
+            fit_y_bounds=fit_y_bounds,
+            fit_z_bounds=fit_z_bounds,
         )
-    raw_vectors = tuple(
-        np.asarray(value, dtype=np.float64).reshape(-1)
-        for value in (a_raw, b_raw, c_raw)
-    )
-    if any(value.size != readout_oversampled for value in raw_vectors):
-        raise ValueError(
-            "Raw calibrated PSF vectors do not match the oversampled readout."
-        )
+    else:
+        # Test doubles and legacy focused namespaces retain the pinned
+        # high-level behavior; production helpers always use spatial selection.
+        with tempfile.TemporaryDirectory(prefix="wave_mprage_psf_") as temporary:
+            output_prefix = str(Path(temporary)) + "/"
+            (
+                a_raw,
+                b_raw,
+                c_raw,
+                calibration_samples,
+                calibration_evidence,
+            ) = native.fit_wave_psf_deviation_from_projection(
+                mprage_data_file=str(twix_path),
+                mprage_seq_file=str(sequence_path),
+                out_folder=output_prefix,
+                file_tag="temporary",
+                yflip=-1,
+                zflip=-1,
+                Ncalib=ncalib,
+                Nacs=nacs,
+                slice_orientation="SAG",
+                return_diagnostics=True,
+            )
     delta_lin, delta_par = native.generate_theoretical_wave_trajectory(
         fn_seq=str(sequence_path),
         Nx_os=readout_oversampled,
@@ -880,59 +1346,135 @@ def _calibrated_psf_inputs(
         np.asarray(value, dtype=np.float64).reshape(-1)
         for value in (delta_lin, delta_par)
     )
-    with tempfile.TemporaryDirectory(prefix="wave_mprage_psf_processing_") as temporary:
-        diagnostic_path = Path(temporary) / "psf_sine_line_fit_automatic_candidate.json"
-        try:
-            a_fit, b_fit, c_fit, processing_diagnostics = (
-                native._process_psf_coefficients(
-                    a_raw,
-                    b_raw,
-                    c_raw,
-                    Nx_os=readout_oversampled,
-                    coefficient_processing=coefficient_processing,
-                    fit_kx_min=fit_kx_min,
-                    fit_kx_max=fit_kx_max,
-                    fit_quality=calibration_evidence["projection_quality"],
-                    out_folder=temporary,
-                    file_tag="automatic_candidate",
-                    return_diagnostics=True,
-                )
-            )
-        except ValueError as exc:
-            is_automatic_sine_line = (
-                str(coefficient_processing).strip().lower() == "sine-line"
-                and fit_kx_min is None
-                and fit_kx_max is None
-            )
-            if not is_automatic_sine_line:
-                raise
-            try:
-                rejected_diagnostics = (
-                    _load_json(diagnostic_path) if diagnostic_path.is_file() else {}
-                )
-            except (OSError, ValueError):
-                rejected_diagnostics = {}
-            candidate_coefficients = _candidate_curves_from_fit_diagnostics(
-                rejected_diagnostics, readout_oversampled
+    automatic_spatial_fallback: dict[str, Any] | None = None
+    while True:
+        (
+            raw_vectors,
+            processing_vectors,
+            native_processing_vectors,
+            c_branch_turns,
+            branch_alignment_record,
+        ) = _coefficient_processing_inputs(
+            a_raw,
+            b_raw,
+            c_raw,
+            readout_oversampled=readout_oversampled,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="wave_mprage_psf_processing_"
+        ) as temporary:
+            diagnostic_path = (
+                Path(temporary) / "psf_sine_line_fit_automatic_candidate.json"
             )
             try:
-                recovery = _recover_c_only_automatic_rejection(
-                    native,
-                    raw_coefficients=raw_vectors,
-                    rejected_diagnostics=rejected_diagnostics,
-                    delta_lin=delta_vectors[0],
-                    delta_par=delta_vectors[1],
+                a_fit, b_fit, c_fit, processing_diagnostics = (
+                    native._process_psf_coefficients(
+                        *native_processing_vectors,
+                        Nx_os=readout_oversampled,
+                        coefficient_processing=coefficient_processing,
+                        fit_kx_min=fit_kx_min,
+                        fit_kx_max=fit_kx_max,
+                        fit_quality=calibration_evidence["projection_quality"],
+                        out_folder=temporary,
+                        file_tag="automatic_candidate",
+                        return_diagnostics=True,
+                    )
                 )
-            except ValueError:
-                recovery = None
-            if recovery is None:
+            except ValueError as exc:
+                is_automatic_sine_line = (
+                    str(coefficient_processing).strip().lower() == "sine-line"
+                    and fit_kx_min is None
+                    and fit_kx_max is None
+                )
+                if not is_automatic_sine_line:
+                    raise
+                try:
+                    rejected_diagnostics = (
+                        _load_json(diagnostic_path)
+                        if diagnostic_path.is_file()
+                        else {}
+                    )
+                except (OSError, ValueError):
+                    rejected_diagnostics = {}
+                candidate_coefficients = _candidate_curves_from_fit_diagnostics(
+                    rejected_diagnostics, readout_oversampled
+                )
+                try:
+                    recovery = _recover_c_only_automatic_rejection(
+                        native,
+                        raw_coefficients=processing_vectors,
+                        rejected_diagnostics=rejected_diagnostics,
+                        delta_lin=delta_vectors[0],
+                        delta_par=delta_vectors[1],
+                    )
+                except ValueError:
+                    recovery = None
+                if recovery is not None:
+                    (a_fit, b_fit, c_fit), processing_diagnostics = recovery
+                    break
+
+                should_retry_y_core = (
+                    automatic_spatial_fallback is None
+                    and fit_y_bounds is None
+                    and y_core_retry is not None
+                    and SUSTAINED_COEFFICIENT_CORRUPTION_ERROR in str(exc)
+                )
+                if should_retry_y_core:
+                    initial_spatial_selection = calibration_evidence.get(
+                        "spatial_region_selection"
+                    )
+                    automatic_spatial_fallback = {
+                        "version": AUTOMATIC_Y_CORE_RETRY_VERSION,
+                        "trigger": "automatic-kx-sustained-coefficient-corruption",
+                        "axis": "y",
+                        "initial_error": str(exc),
+                        "initial_spatial_region_selection": copy.deepcopy(
+                            initial_spatial_selection
+                        ),
+                        "fallback_bounds": list(y_core_retry["bounds"]),
+                        "outcome": "retry_in_progress",
+                        "fallback_was_silent": False,
+                    }
+                    a_raw, b_raw, c_raw = y_core_retry["raw_coefficients"]
+                    calibration_evidence = y_core_retry["calibration_evidence"]
+                    plane_diagnostics = y_core_retry["plane_diagnostics"]
+                    continue
+
+                rejected_diagnostics["c_phase_branch_alignment"] = (
+                    branch_alignment_record
+                )
+                spatial_selection = calibration_evidence.get(
+                    "spatial_region_selection"
+                )
+                if isinstance(spatial_selection, Mapping):
+                    rejected_diagnostics["spatial_region_selection"] = dict(
+                        spatial_selection
+                    )
+                if automatic_spatial_fallback is not None:
+                    automatic_spatial_fallback["outcome"] = "retry_rejected"
+                    rejected_diagnostics["automatic_spatial_fallback"] = (
+                        automatic_spatial_fallback
+                    )
                 raise AutomaticPsfFitRejected(
                     str(exc),
                     raw_coefficients=raw_vectors,
                     candidate_coefficients=candidate_coefficients,
                     diagnostics=rejected_diagnostics,
+                    plane_diagnostics=plane_diagnostics,
                 ) from exc
-            (a_fit, b_fit, c_fit), processing_diagnostics = recovery
+            else:
+                break
+    processing_diagnostics = dict(processing_diagnostics)
+    if automatic_spatial_fallback is not None:
+        automatic_spatial_fallback["outcome"] = "centered_y_core_retry_accepted"
+        automatic_spatial_fallback["validation_passed"] = True
+        processing_diagnostics["automatic_spatial_fallback"] = (
+            automatic_spatial_fallback
+        )
+    processing_diagnostics["c_phase_branch_alignment"] = branch_alignment_record
+    spatial_selection = calibration_evidence.get("spatial_region_selection")
+    if isinstance(spatial_selection, Mapping):
+        processing_diagnostics["spatial_region_selection"] = dict(spatial_selection)
     vectors = tuple(
         np.asarray(value, dtype=np.float64).reshape(-1)
         for value in (*delta_vectors, a_fit, b_fit, c_fit)
@@ -941,7 +1483,14 @@ def _calibrated_psf_inputs(
         value.size != readout_oversampled for value in (*vectors, *raw_vectors)
     ):
         raise ValueError("Calibrated PSF vectors do not match the oversampled readout.")
-    return (*vectors, raw_vectors, processing_diagnostics)  # type: ignore[return-value]
+    return (
+        *vectors,
+        raw_vectors,
+        processing_vectors,
+        c_branch_turns,
+        processing_diagnostics,
+        plane_diagnostics,
+    )  # type: ignore[return-value]
 
 
 def _write_real_vectors(base: Path, vectors: tuple[np.ndarray, ...]) -> None:
@@ -1020,6 +1569,7 @@ def _ensure_r3x1_psf_coefficient_plot(
     if sampling_name != "R3x1":
         return None
     destination = normal_directory / PSF_COEFFICIENT_PLOT_NAME
+    full_range_destination = normal_directory / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME
     fit_range = psf_settings.get("fit_kx_range")
     normalized_range = (
         None if fit_range is None else (int(fit_range[0]), int(fit_range[1]))
@@ -1067,7 +1617,21 @@ def _ensure_r3x1_psf_coefficient_plot(
             comparison_coefficients=comparison_coefficients,
             comparison_labels=comparison_labels,
         )
+    if overwrite or not full_range_destination.is_file():
+        write_psf_coefficient_plot(
+            *coefficient_vectors,
+            full_range_destination,
+            processing=plot_processing,
+            fit_kx_range=normalized_range,
+            fit_range_selection=psf_settings.get("fit_range_selection"),
+            raw_coefficients=raw_coefficient_vectors,
+            curve_labels=curve_labels,
+            comparison_coefficients=comparison_coefficients,
+            comparison_labels=comparison_labels,
+            full_range=True,
+        )
     print(f"PSF coefficient visual-assessment plot: {destination}")
+    print(f"PSF coefficient full-range plot: {full_range_destination}")
     print(
         "If reconstruction has unexpected artifacts, inspect this plot and "
         "tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
@@ -1108,6 +1672,25 @@ def _write_automatic_psf_rejection_diagnostics(
         raw_coefficients=rejection.raw_coefficients,
         accepted_for_reconstruction=False,
     )
+    full_range_plot_path = (
+        normal_directory / PSF_COEFFICIENT_REJECTED_FULL_RANGE_PLOT_NAME
+    )
+    write_psf_coefficient_plot(
+        *(candidate if candidate is not None else (None, None, None)),
+        full_range_plot_path,
+        processing="sine-line",
+        fit_kx_range=normalized_range,
+        fit_range_selection="automatic",
+        raw_coefficients=rejection.raw_coefficients,
+        accepted_for_reconstruction=False,
+        full_range=True,
+    )
+    plane_plot_path = None
+    if rejection.plane_diagnostics:
+        plane_plot_path = write_psf_plane_comparison_plot(
+            rejection.plane_diagnostics,
+            normal_directory / PSF_PLANE_COMPARISON_PLOT_NAME,
+        )
     json_path = normal_directory / PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME
     _write_json(
         json_path,
@@ -1123,12 +1706,70 @@ def _write_automatic_psf_rejection_diagnostics(
             "plot_relative_to_output_root": (
                 f"normal/{PSF_COEFFICIENT_REJECTED_PLOT_NAME}"
             ),
+            "full_range_plot_relative_to_output_root": (
+                f"normal/{PSF_COEFFICIENT_REJECTED_FULL_RANGE_PLOT_NAME}"
+            ),
             "accepted_for_reconstruction": False,
+            **(
+                {
+                    "plane_comparison_plot_relative_to_output_root": (
+                        f"normal/{PSF_PLANE_COMPARISON_PLOT_NAME}"
+                    )
+                }
+                if plane_plot_path is not None
+                else {}
+            ),
             "manual_override": {
                 "fit_kx_range_convention": "half-open [min, max)",
                 "required_arguments": ["--psf-fit-kx-min", "--psf-fit-kx-max"],
             },
             "upstream_fit_diagnostics": rejection.diagnostics,
+        },
+    )
+    return plot_path, json_path
+
+
+def _write_spatial_region_rejection_diagnostics(
+    normal_directory: Path,
+    rejection: AutomaticSpatialRegionRejected,
+    *,
+    twix_path: Path,
+    sequence_path: Path,
+) -> tuple[Path, Path]:
+    """Persist a rejected spatial-region selection before BART input export.
+
+    Args:
+        normal_directory: Dataset ``normal`` output directory.
+        rejection: Automatic spatial selector rejection and plane evidence.
+        twix_path: Measured TWIX source.
+        sequence_path: Matching Pulseq source.
+
+    Returns:
+        Rejected plane-comparison PNG and JSON paths.
+    """
+    plane_name = str(rejection.diagnostics.get("axis", "y"))
+    mode = "sin" if plane_name == "y" else "cos"
+    plot_path = normal_directory / PSF_PLANE_REJECTED_PLOT_NAME
+    write_psf_plane_comparison_plot({mode: rejection.plane}, plot_path)
+    json_path = normal_directory / PSF_PLANE_REJECTED_DIAGNOSTICS_NAME
+    _write_json(
+        json_path,
+        {
+            "format_version": 1,
+            "status": "automatic_projection_spatial_region_rejected",
+            "created_utc": _utc_now(),
+            "error": str(rejection),
+            "source": {
+                "twix": _file_identity(twix_path),
+                "sequence": _file_identity(sequence_path, include_hash=True),
+            },
+            "plot_relative_to_output_root": f"normal/{PSF_PLANE_REJECTED_PLOT_NAME}",
+            "selection_diagnostics": rejection.diagnostics,
+            "manual_override": {
+                "fit_spatial_range_convention": "half-open calibration-image indices",
+                "y_arguments": ["--psf-fit-y-min", "--psf-fit-y-max"],
+                "z_arguments": ["--psf-fit-z-min", "--psf-fit-z-max"],
+            },
         },
     )
     return plot_path, json_path
@@ -1175,6 +1816,15 @@ def _native_manifest_matches(
         "fit_kx_range_convention": recorded_psf.get(
             "fit_kx_range_convention", "half-open"
         ),
+        "spatial_region_selection": recorded_psf.get("spatial_region_selection"),
+        "spatial_region_selection_version": recorded_psf.get(
+            "spatial_region_selection_version"
+        ),
+        "requested_fit_y_range": recorded_psf.get("requested_fit_y_range"),
+        "requested_fit_z_range": recorded_psf.get("requested_fit_z_range"),
+        "fit_spatial_range_convention": recorded_psf.get(
+            "fit_spatial_range_convention"
+        ),
         "processing_implementation": recorded_psf.get("processing_implementation"),
     }
     return (
@@ -1194,6 +1844,10 @@ def prepare_normal_mprage(
     psf_coefficient_processing: str = "smooth",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
+    psf_fit_y_min: int | None = None,
+    psf_fit_y_max: int | None = None,
+    psf_fit_z_min: int | None = None,
+    psf_fit_z_max: int | None = None,
     reuse: bool = True,
 ) -> dict[str, Any]:
     """Prepare native measured-Wave k-space, calibration k-space, and PSF.
@@ -1205,6 +1859,10 @@ def prepare_normal_mprage(
         psf_coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
         psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
         psf_fit_kx_max: Exclusive final sine-line fitting index, if selected.
+        psf_fit_y_min: Optional inclusive manual sin-projection spatial index.
+        psf_fit_y_max: Optional exclusive manual sin-projection spatial index.
+        psf_fit_z_min: Optional inclusive manual cos-projection spatial index.
+        psf_fit_z_max: Optional exclusive manual cos-projection spatial index.
         reuse: Reuse compatible inputs already present under ``output_root``.
 
     Returns:
@@ -1222,6 +1880,14 @@ def prepare_normal_mprage(
     sequence_path = Path(sequence).expanduser().resolve()
     psf_settings = _normalize_psf_coefficient_settings(
         psf_coefficient_processing, psf_fit_kx_min, psf_fit_kx_max
+    )
+    psf_settings.update(
+        _normalize_psf_spatial_settings(
+            psf_fit_y_min,
+            psf_fit_y_max,
+            psf_fit_z_min,
+            psf_fit_z_max,
+        )
     )
     psf_settings["processing_implementation"] = (
         _psf_processing_implementation_identity()
@@ -1241,6 +1907,8 @@ def prepare_normal_mprage(
             "psf",
             "wave_trajectory",
             "psf_coefficients",
+            "psf_coefficients_processing_input",
+            "psf_coefficient_c_branch_turns",
         ):
             read_shape(destination / name)
         a_fit, b_fit, c_fit = _read_real_vectors(destination / "psf_coefficients", 3)
@@ -1266,14 +1934,24 @@ def prepare_normal_mprage(
         )
         if diagnostic is not None:
             expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+            expected_full_relative = (
+                f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
+            )
             calibration = existing.setdefault("psf_calibration", {})
             recorded_relative = calibration.get(
                 "visual_assessment_plot_relative_to_output_root"
             )
-            if recorded_relative != expected_relative:
+            if (
+                recorded_relative != expected_relative
+                or calibration.get("full_range_plot_relative_to_output_root")
+                != expected_full_relative
+            ):
                 calibration[
                     "visual_assessment_plot_relative_to_output_root"
                 ] = expected_relative
+                calibration["full_range_plot_relative_to_output_root"] = (
+                    expected_full_relative
+                )
                 _write_json(manifest_path, existing)
         print(f"Reusing compatible normal BART inputs: {destination}")
         return existing
@@ -1295,6 +1973,13 @@ def prepare_normal_mprage(
         raise ValueError(
             f"PSF fit kx max {requested_fit_kx_range[1]} exceeds oversampled readout {ro_os}."
         )
+    for axis in ("y", "z"):
+        requested = psf_settings[f"requested_fit_{axis}_range"]
+        if requested is not None and int(requested[1]) > ncalib:
+            raise ValueError(
+                f"PSF {axis} spatial fit max {requested[1]} exceeds calibration "
+                f"matrix {ncalib}."
+            )
     native._resolve_mprage_wave_mode(
         "wave", str(sequence_path), ro_os, ncalib, nacs, slice_orientation="SAG"
     )
@@ -1358,7 +2043,10 @@ def prepare_normal_mprage(
             b_fit,
             c_fit,
             raw_coefficients,
+            processing_input_coefficients,
+            c_branch_turns,
             psf_processing_diagnostics,
+            projection_planes,
         ) = _calibrated_psf_inputs(
             native,
             twix_path=twix_path,
@@ -1373,7 +2061,30 @@ def prepare_normal_mprage(
             fit_kx_max=(
                 None if requested_fit_kx_range is None else requested_fit_kx_range[1]
             ),
+            fit_y_bounds=(
+                None
+                if psf_settings["requested_fit_y_range"] is None
+                else tuple(psf_settings["requested_fit_y_range"])
+            ),
+            fit_z_bounds=(
+                None
+                if psf_settings["requested_fit_z_range"] is None
+                else tuple(psf_settings["requested_fit_z_range"])
+            ),
         )
+    except AutomaticSpatialRegionRejected as exc:
+        plot_path, json_path = _write_spatial_region_rejection_diagnostics(
+            destination.parent,
+            exc,
+            twix_path=twix_path,
+            sequence_path=sequence_path,
+        )
+        raise ValueError(
+            f"{exc} Rejected plane PNG: {plot_path}. Selection diagnostics: "
+            f"{json_path}. Review the plane comparison, then provide the matching "
+            "--psf-fit-y-min/--psf-fit-y-max or "
+            "--psf-fit-z-min/--psf-fit-z-max manual interval."
+        ) from exc
     except AutomaticPsfFitRejected as exc:
         plot_path, json_path = _write_automatic_psf_rejection_diagnostics(
             destination.parent,
@@ -1386,6 +2097,15 @@ def prepare_normal_mprage(
             "Review the raw samples and shaded interval, then rerun with both "
             "--psf-fit-kx-min and --psf-fit-kx-max for a manual half-open range."
         ) from exc
+    automatic_spatial_fallback = psf_processing_diagnostics.get(
+        "automatic_spatial_fallback"
+    )
+    if isinstance(automatic_spatial_fallback, Mapping):
+        bounds = automatic_spatial_fallback["fallback_bounds"]
+        print(
+            "Accepted automatic centered-y PSF retry after full-region "
+            f"coefficient corruption: [{bounds[0]}, {bounds[1]})"
+        )
     selected_fit_kx_range = psf_processing_diagnostics.get("kx_range")
     effective_psf_settings = {
         **psf_settings,
@@ -1417,6 +2137,20 @@ def prepare_normal_mprage(
     _write_real_vectors(destination / "wave_trajectory", (delta_lin, delta_par))
     _write_real_vectors(destination / "psf_coefficients", (a_fit, b_fit, c_fit))
     _write_real_vectors(destination / "psf_coefficients_raw", raw_coefficients)
+    _write_real_vectors(
+        destination / "psf_coefficients_processing_input",
+        processing_input_coefficients,
+    )
+    _write_real_vectors(
+        destination / "psf_coefficient_c_branch_turns",
+        (c_branch_turns.astype(np.float64),),
+    )
+    plane_diagnostic = None
+    if projection_planes:
+        plane_diagnostic = write_psf_plane_comparison_plot(
+            projection_planes,
+            destination.parent / PSF_PLANE_COMPARISON_PLOT_NAME,
+        )
     diagnostic = _ensure_r3x1_psf_coefficient_plot(
         destination.parent,
         sampling.name,
@@ -1470,6 +2204,11 @@ def prepare_normal_mprage(
             "wave_trajectory": "wave_trajectory",
             "psf_coefficients": "psf_coefficients",
             "raw_psf_coefficients": "psf_coefficients_raw",
+            "processing_input_psf_coefficients": (
+                "psf_coefficients_processing_input"
+            ),
+            "c_phase_branch_turns": "psf_coefficient_c_branch_turns",
+            "c_phase_branch_turn_units": "integer multiples of 2*pi radians",
             **(
                 {
                     "visual_assessment_plot_relative_to_output_root": (
@@ -1478,6 +2217,22 @@ def prepare_normal_mprage(
                 }
                 if diagnostic is not None
                 else {}
+            ),
+            **(
+                {
+                    "full_range_plot_relative_to_output_root": (
+                        f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
+                    ),
+                    "plane_comparison_plot_relative_to_output_root": (
+                        f"normal/{PSF_PLANE_COMPARISON_PLOT_NAME}"
+                    ),
+                }
+                if plane_diagnostic is not None
+                else {
+                    "full_range_plot_relative_to_output_root": (
+                        f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
+                    )
+                }
             ),
         },
         "dimension_order": ["READ", "PHS1", "PHS2", "COIL", "MAPS"],
@@ -1531,6 +2286,10 @@ def prepare_retro_mprage(
     psf_coefficient_processing: str = "smooth",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
+    psf_fit_y_min: int | None = None,
+    psf_fit_y_max: int | None = None,
+    psf_fit_z_min: int | None = None,
+    psf_fit_z_max: int | None = None,
 ) -> list[dict[str, Any]]:
     """Prepare native R3x2 and three direct-crop LR R3x2 BART input sets.
 
@@ -1541,6 +2300,10 @@ def prepare_retro_mprage(
         psf_coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
         psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
         psf_fit_kx_max: Exclusive final sine-line fitting index, if selected.
+        psf_fit_y_min: Optional inclusive manual sin-projection spatial index.
+        psf_fit_y_max: Optional exclusive manual sin-projection spatial index.
+        psf_fit_z_min: Optional inclusive manual cos-projection spatial index.
+        psf_fit_z_max: Optional exclusive manual cos-projection spatial index.
 
     Returns:
         One manifest per resolved native or low-resolution case.
@@ -1559,6 +2322,10 @@ def prepare_retro_mprage(
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
+        psf_fit_y_min=psf_fit_y_min,
+        psf_fit_y_max=psf_fit_y_max,
+        psf_fit_z_min=psf_fit_z_min,
+        psf_fit_z_max=psf_fit_z_max,
         reuse=True,
     )
     normal_inputs = output_path / NORMAL_INPUT_RELATIVE

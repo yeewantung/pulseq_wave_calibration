@@ -31,6 +31,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         psf_coefficient_processing=args.psf_coefficient_processing,
         psf_fit_kx_min=args.psf_fit_kx_min,
         psf_fit_kx_max=args.psf_fit_kx_max,
+        psf_fit_y_min=args.psf_fit_y_min,
+        psf_fit_y_max=args.psf_fit_y_max,
+        psf_fit_z_min=args.psf_fit_z_min,
+        psf_fit_z_max=args.psf_fit_z_max,
         reuse=True,
     )
     return 0
@@ -66,6 +70,18 @@ def _parser() -> argparse.ArgumentParser:
         "--psf-fit-kx-max",
         type=int,
         help="Exclusive manual sine-line readout index; omit both bounds for automatic selection.",
+    )
+    parser.add_argument(
+        "--psf-fit-y-min", type=int, help="Inclusive manual sin-projection spatial index."
+    )
+    parser.add_argument(
+        "--psf-fit-y-max", type=int, help="Exclusive manual sin-projection spatial index."
+    )
+    parser.add_argument(
+        "--psf-fit-z-min", type=int, help="Inclusive manual cos-projection spatial index."
+    )
+    parser.add_argument(
+        "--psf-fit-z-max", type=int, help="Exclusive manual cos-projection spatial index."
     )
     return parser
 

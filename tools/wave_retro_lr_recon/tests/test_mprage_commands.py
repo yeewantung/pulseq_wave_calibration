@@ -39,6 +39,10 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn("--psf-coefficient-processing sine-line", source)
         self.assertIn('--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source)
         self.assertIn('--psf-fit-kx-max "$PSF_FIT_KX_MAX"', source)
+        self.assertIn('--psf-fit-y-min "$PSF_FIT_Y_MIN"', source)
+        self.assertIn('--psf-fit-y-max "$PSF_FIT_Y_MAX"', source)
+        self.assertIn('--psf-fit-z-min "$PSF_FIT_Z_MIN"', source)
+        self.assertIn('--psf-fit-z-max "$PSF_FIT_Z_MAX"', source)
         self.assertEqual(sum(line.startswith("bart wave -g -w -f -r 0 ") for line in commands), 2)
         self.assertEqual(sum(line.startswith("bart wave -w -f -r 0 ") for line in commands), 2)
         self.assertIn('bart wave -g -w -f -r "$R3_LAMBDA" ', source)
@@ -71,6 +75,10 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn("--psf-coefficient-processing sine-line", source)
         self.assertIn('--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source)
         self.assertIn('--psf-fit-kx-max "$PSF_FIT_KX_MAX"', source)
+        self.assertIn('--psf-fit-y-min "$PSF_FIT_Y_MIN"', source)
+        self.assertIn('--psf-fit-y-max "$PSF_FIT_Y_MAX"', source)
+        self.assertIn('--psf-fit-z-min "$PSF_FIT_Z_MIN"', source)
+        self.assertIn('--psf-fit-z-max "$PSF_FIT_Z_MAX"', source)
         self.assertEqual(sum(line.startswith("bart wave -g -w -f -r 0 ") for line in commands), 4)
         self.assertEqual(sum(line.startswith("bart wave -w -f -r 0 ") for line in commands), 4)
         self.assertEqual(sum("bart wave -g -w -f -r 3.5e-2 " in line for line in commands), 1)
@@ -111,6 +119,8 @@ class SampleCommandTests(unittest.TestCase):
                 self.assertIn("[-g]", completed.stdout)
                 self.assertIn("--psf-coefficient-processing", completed.stdout)
                 self.assertIn("--psf-fit-kx-min", completed.stdout)
+                self.assertIn("--psf-fit-y-min", completed.stdout)
+                self.assertIn("--psf-fit-z-min", completed.stdout)
 
         defaults = HeadMaskParameters()
         self.assertEqual(defaults.relative_threshold, 0.02)
@@ -129,6 +139,7 @@ class SampleCommandTests(unittest.TestCase):
         """
         measured_sources = [
             TOOL_ROOT / "wave_retro_lr" / "mprage.py",
+            TOOL_ROOT / "wave_retro_lr" / "projection_psf.py",
             SCRIPTS / "prepare_mprage_normal.py",
             SCRIPTS / "prepare_mprage_retro.py",
             SCRIPTS / "prepare_mprage_retro_maps.py",

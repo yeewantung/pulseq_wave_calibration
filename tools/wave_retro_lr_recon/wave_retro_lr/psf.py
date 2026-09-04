@@ -7,10 +7,17 @@ from pathlib import Path
 import numpy as np
 
 PSF_COEFFICIENT_PLOT_NAME = "PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
+PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME = "PSF_COEFFICIENTS_FULL_RANGE.png"
 PSF_COEFFICIENT_REJECTED_PLOT_NAME = "PSF_COEFFICIENTS_AUTOMATIC_FIT_REJECTED.png"
+PSF_COEFFICIENT_REJECTED_FULL_RANGE_PLOT_NAME = (
+    "PSF_COEFFICIENTS_AUTOMATIC_FIT_REJECTED_FULL_RANGE.png"
+)
 PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME = (
     "PSF_COEFFICIENTS_AUTOMATIC_FIT_REJECTED.json"
 )
+PSF_PLANE_COMPARISON_PLOT_NAME = "PSF_PLANE_COMPARISON.png"
+PSF_PLANE_REJECTED_PLOT_NAME = "PSF_PLANE_AUTOMATIC_REGION_REJECTED.png"
+PSF_PLANE_REJECTED_DIAGNOSTICS_NAME = "PSF_PLANE_AUTOMATIC_REGION_REJECTED.json"
 
 
 def write_psf_coefficient_plot(
@@ -30,6 +37,7 @@ def write_psf_coefficient_plot(
     ]
     | None = None,
     comparison_labels: tuple[str, str, str] | None = None,
+    full_range: bool = False,
 ) -> Path:
     """Plot raw and processed PSF phase coefficients against readout index.
 
@@ -54,6 +62,8 @@ def write_psf_coefficient_plot(
         comparison_coefficients: Optional rejected or alternative curves to
             overlay without identifying them as reconstruction inputs.
         comparison_labels: Optional per-coefficient comparison-curve labels.
+        full_range: Allow each subplot to autoscale to all supplied values.
+            The default fixed phase range supports comparison across datasets.
 
     Returns:
         The resolved path of the written PNG diagnostic.
@@ -200,7 +210,8 @@ def write_psf_coefficient_plot(
         axis.axvline(readout_size // 2, color="black", linewidth=0.8, linestyle=":")
         if fit_kx_range is not None:
             axis.axvspan(lower, upper, color="tab:purple", alpha=0.12)
-        axis.set_ylim(-2.0 * np.pi, 2.0 * np.pi)
+        if not full_range:
+            axis.set_ylim(-2.0 * np.pi, 2.0 * np.pi)
         axis.set_ylabel(f"{name} (rad)")
         axis.grid(alpha=0.2)
         if raw_vectors is not None or vectors is not None:
@@ -214,7 +225,88 @@ def write_psf_coefficient_plot(
         if accepted_for_reconstruction
         else "REJECTED automatic PSF fit — not used for reconstruction"
     )
-    figure.suptitle(f"{status}\nprocessing: {mode}{selection}{interval}")
+    range_label = "full data range" if full_range else "fixed range [-2π, 2π]"
+    figure.suptitle(
+        f"{status}\nprocessing: {mode}{selection}{interval}; {range_label}"
+    )
+    temporary = destination.with_name(f".{destination.stem}.tmp{destination.suffix}")
+    figure.savefig(temporary, dpi=160, format="png")
+    temporary.replace(destination)
+    return destination
+
+
+def write_psf_plane_comparison_plot(
+    planes: dict[str, dict[str, object]],
+    output_path: str | Path,
+) -> Path:
+    """Plot theoretical, measured, fitted, and residual projection PSFs.
+
+    Args:
+        planes: One or both ``sin`` and ``cos`` plane records containing two-dimensional
+            unit-magnitude complex arrays named ``theoretical``, ``measured``,
+            ``fitted``, and ``residual``, plus a half-open ``selected_bounds``.
+        output_path: Destination PNG path.
+
+    Returns:
+        The resolved path of the written PNG diagnostic.
+
+    Raises:
+        ValueError: If a plane is absent or its arrays and bounds disagree.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    normalized: list[tuple[str, list[np.ndarray], tuple[int, int]]] = []
+    for name in ("sin", "cos"):
+        if name not in planes:
+            continue
+        record = planes[name]
+        arrays = [
+            np.asarray(record[key], dtype=np.complex64)
+            for key in ("theoretical", "measured", "fitted", "residual")
+        ]
+        if any(array.ndim != 2 for array in arrays) or len(
+            {array.shape for array in arrays}
+        ) != 1:
+            raise ValueError(f"{name} projection PSF arrays must share one 2D shape.")
+        lower, upper = (int(value) for value in record["selected_bounds"])
+        if not (0 <= lower < upper <= arrays[0].shape[1]):
+            raise ValueError(f"{name} projection PSF bounds are invalid.")
+        normalized.append((name, arrays, (lower, upper)))
+    if not normalized:
+        raise ValueError("At least one projection PSF diagnostic is required.")
+
+    destination = Path(output_path).expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    figure = Figure(figsize=(13, 10), constrained_layout=True)
+    FigureCanvasAgg(figure)
+    axes = figure.subplots(len(normalized), 4, squeeze=False)
+    titles = (
+        "theoretical phase",
+        "measured phase",
+        "fitted/calibrated phase",
+        "wrapped residual",
+    )
+    for row, (name, arrays, bounds) in enumerate(normalized):
+        for column, (array, title) in enumerate(zip(arrays, titles, strict=True)):
+            axis = axes[row, column]
+            axis.imshow(
+                np.angle(array),
+                cmap="twilight",
+                vmin=-np.pi,
+                vmax=np.pi,
+                aspect="auto",
+                origin="lower",
+            )
+            axis.axvline(bounds[0] - 0.5, color="white", linewidth=0.8)
+            axis.axvline(bounds[1] - 0.5, color="white", linewidth=0.8)
+            axis.set_title(title)
+            axis.set_xlabel(f"{('y' if name == 'sin' else 'z')} calibration index")
+            if column == 0:
+                axis.set_ylabel(f"{name} projection: kx index")
+    figure.suptitle(
+        "Projection PSF comparison; white lines delimit the selected spatial fit region"
+    )
     temporary = destination.with_name(f".{destination.stem}.tmp{destination.suffix}")
     figure.savefig(temporary, dpi=160, format="png")
     temporary.replace(destination)

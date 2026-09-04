@@ -8,6 +8,7 @@ usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [-g]"
     echo "       [--psf-coefficient-processing smooth|sine-line]"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
+    echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -22,12 +23,20 @@ USE_GPU=false
 PSF_COEFFICIENT_PROCESSING="smooth"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
+PSF_FIT_Y_MIN=""
+PSF_FIT_Y_MAX=""
+PSF_FIT_Z_MIN=""
+PSF_FIT_Z_MAX=""
 while (($#)); do
     case "$1" in
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --psf-coefficient-processing) PSF_COEFFICIENT_PROCESSING="$2"; shift 2 ;;
         --psf-fit-kx-min) PSF_FIT_KX_MIN="$2"; shift 2 ;;
         --psf-fit-kx-max) PSF_FIT_KX_MAX="$2"; shift 2 ;;
+        --psf-fit-y-min) PSF_FIT_Y_MIN="$2"; shift 2 ;;
+        --psf-fit-y-max) PSF_FIT_Y_MAX="$2"; shift 2 ;;
+        --psf-fit-z-min) PSF_FIT_Z_MIN="$2"; shift 2 ;;
+        --psf-fit-z-max) PSF_FIT_Z_MAX="$2"; shift 2 ;;
         -g) USE_GPU=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
@@ -43,15 +52,27 @@ ECALIB_RECORD="$NORMAL_OUTPUT/ecalib_command.txt"
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
+SPATIAL_ARGS=()
+if [[ -n "$PSF_FIT_Y_MIN" && -n "$PSF_FIT_Y_MAX" ]]; then
+    SPATIAL_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")
+elif [[ -n "$PSF_FIT_Y_MIN" || -n "$PSF_FIT_Y_MAX" ]]; then
+    echo "Error: manual PSF y fitting requires both bounds." >&2; exit 2
+fi
+if [[ -n "$PSF_FIT_Z_MIN" && -n "$PSF_FIT_Z_MAX" ]]; then
+    SPATIAL_ARGS+=(--psf-fit-z-min "$PSF_FIT_Z_MIN" --psf-fit-z-max "$PSF_FIT_Z_MAX")
+elif [[ -n "$PSF_FIT_Z_MIN" || -n "$PSF_FIT_Z_MAX" ]]; then
+    echo "Error: manual PSF z fitting requires both bounds." >&2; exit 2
+fi
+
 # This reuses compatible normal inputs, or prepares them from TWIX when absent.
 if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" ]]; then
     [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]] || { echo "Error: PSF kx bounds require sine-line processing." >&2; exit 2; }
-    python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth
+    python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth "${SPATIAL_ARGS[@]}"
 elif [[ "$PSF_COEFFICIENT_PROCESSING" == "sine-line" ]]; then
     if [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]]; then
-        python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line
+        python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line "${SPATIAL_ARGS[@]}"
     elif [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
-        python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line --psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX"
+        python "$SCRIPT_DIR/prepare_mprage_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line --psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX" "${SPATIAL_ARGS[@]}"
     else
         echo "Error: manual sine-line processing requires both PSF kx bounds; omit both for automatic selection." >&2
         exit 2
@@ -172,5 +193,7 @@ python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/
 echo "Retrospective MPRAGE reconstructions complete: $RETRO_ROOT"
 if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then
     echo "PSF visual-assessment plot: $OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
+    echo "PSF full-range plot: $OUTPUT_ROOT/normal/PSF_COEFFICIENTS_FULL_RANGE.png"
+    echo "PSF plane comparison: $OUTPUT_ROOT/normal/PSF_PLANE_COMPARISON.png"
     echo "For unexpected reconstruction artifacts, review that plot and tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
 fi

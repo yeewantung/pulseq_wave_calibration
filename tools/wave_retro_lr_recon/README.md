@@ -75,14 +75,19 @@ JSON diagnostics under `OUTPUT_ROOT/normal`, explicitly labeled as not used
 for reconstruction; see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 For native R3x1 input, preparation also writes the processed coefficients used
-by reconstruction as an immediately visible diagnostic:
+by reconstruction as complementary fixed- and full-range diagnostics:
 `OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png`. The plot shows
 `a`, `b`, and `c` against the oversampled kx readout index, marks the readout
-center, and shades the selected sine-line fit interval when applicable. It is
-also backfilled when compatible older BART inputs are reused. The sample
-scripts print a reminder to inspect it when reconstruction has unexpected
-artifacts. See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for interpretation;
-the plot is diagnostic and does not automatically accept or reject a PSF.
+center, and shades the selected sine-line fit interval when applicable. Its
+y limits remain fixed at `[-2*pi, 2*pi]`; `PSF_COEFFICIENTS_FULL_RANGE.png`
+autoscales each coefficient so clipped branch changes and blow-up values remain
+visible. `PSF_PLANE_COMPARISON.png` compares theoretical, directly measured,
+fitted, and residual phase for the kx-y and kx-z calibration planes. It is
+created with each new preparation; the coefficient plots are also backfilled
+when compatible BART inputs are reused. The sample scripts print a reminder to
+inspect them when reconstruction has unexpected artifacts. See
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for interpretation; the plots are
+diagnostic and do not automatically accept or reject a PSF.
 
 LR PSFs are neither cropped nor interpolated. Measured-Wave LR k-space is
 created by direct centered LIN/PAR cropping, preservation of the measured LIN
@@ -316,6 +321,37 @@ Replace `START_INDEX` and `END_INDEX` with integers satisfying
 changing the PSF processing settings; incompatible prepared inputs are rejected
 rather than overwritten. Always inspect the newly generated coefficient PNG;
 automatic sine-line is optional and does not change the default from smooth.
+
+Projection-space region selection is global and independent of the kx
+sine-line interval. Every preparation compares each full y/z projection with
+a center-containing core. A clean full-region fit is preserved exactly; only
+a materially inconsistent plane searches for the widest stable inner region.
+The selected half-open calibration-image indices are recorded in the manifest
+and drawn on `PSF_PLANE_COMPARISON.png`. A reviewed manual override is:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/a_new_output_root \
+    /path/to/matching_wave_mprage.seq \
+    --psf-fit-y-min Y_START --psf-fit-y-max Y_END \
+    --psf-fit-z-min Z_START --psf-fit-z-max Z_END
+```
+
+The original full-FOV normalized coordinates are retained after selecting an
+inner region. The constant coefficient is aligned only by integer multiples of
+`2*pi` before smoothing or sine-line fitting; this is exactly invariant in
+complex phase. Raw coefficients, aligned processing inputs, and integer branch
+turns are stored separately.
+
+If a nominally clean full-y fit later makes automatic kx selection reject
+sustained coefficient corruption, preparation retries once with the central
+50% of the y calibration plane. For the standard 72-sample calibration this is
+the exact half-open interval `[18, 54)`. The cached central fit is reused, so
+the integrated refscan is not loaded again. The retry must pass the unchanged
+kx and coefficient gates; otherwise preparation still fails. Explicit manual
+y bounds disable this fallback, and every accepted retry is recorded under
+`processing_diagnostics.automatic_spatial_fallback`.
 
 These examples use CPU BART. Add `-g` after the other arguments to request GPU
 execution from a CUDA-enabled BART build:

@@ -81,6 +81,8 @@ Native R3x1 preparation automatically creates:
 
 ```text
 OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png
+OUTPUT_ROOT/normal/PSF_COEFFICIENTS_FULL_RANGE.png
+OUTPUT_ROOT/normal/PSF_PLANE_COMPARISON.png
 ```
 
 This figure overlays the original `a`, `b`, and `c` coefficient samples as
@@ -92,6 +94,32 @@ selected or manually supplied half-open fit interval `[min, max)`; the title
 identifies which selection mode was used. The fitted model is evaluated across
 the complete readout, while the scatter shows its agreement with the measured
 coefficient observations.
+
+The first coefficient figure always uses `[-2*pi, 2*pi]`, making datasets easy
+to compare without an outlier controlling the display. The full-range companion
+autoscales a/b/c independently and must be inspected when the fixed plot clips
+samples. The plane comparison has kx-y and kx-z rows with theoretical,
+directly measured, fitted/calibrated, and wrapped-residual columns. White lines
+mark the single spatial interval used across all kx samples.
+
+Spatial-region selection runs for every dataset before coefficient processing.
+If the full and central fits agree in complex phase, the original full-region
+fit is returned unchanged. Only sustained disagreement triggers a search for
+the widest stable center-containing inner interval. The y and z choices are
+independent, use original full-FOV coordinates, and are recorded in
+`processing_diagnostics.spatial_region_selection`. A constant `c` branch jump
+may be removed only by recorded integer multiples of `2*pi`; `a` and `b` are
+never gauge-shifted, and the pointwise complex PSF is unchanged by this step.
+
+There is one controlled retry for cases where the full-y plane initially
+passes those checks but automatic kx selection subsequently detects sustained
+coefficient corruption. Preparation reuses the already evaluated central 50%
+y fit (`[18, 54)` for a 72-sample calibration) and reruns all kx and a/b/c
+validation. This updates both `a` and the sin-projection contribution to `c`;
+it is not the c-only smoothing fallback. A retry is never automatically
+accepted, never changes z, and never overrides manual y bounds. Its trigger,
+initial selection, exact bounds, and outcome are recorded in
+`processing_diagnostics.automatic_spatial_fallback`.
 
 If a reconstruction has unexpected ringing, displacement, structured ghosts,
 or a marked failure relative to the FISTA/Wavelet comparison, inspect this
@@ -130,6 +158,7 @@ and retains two failure-specific files:
 
 ```text
 OUTPUT_ROOT/normal/PSF_COEFFICIENTS_AUTOMATIC_FIT_REJECTED.png
+OUTPUT_ROOT/normal/PSF_COEFFICIENTS_AUTOMATIC_FIT_REJECTED_FULL_RANGE.png
 OUTPUT_ROOT/normal/PSF_COEFFICIENTS_AUTOMATIC_FIT_REJECTED.json
 ```
 
@@ -140,6 +169,13 @@ not used for reconstruction. The JSON preserves the numerical validation gates
 and exact selected interval. These files live outside `normal/bart_inputs`, so
 after choosing reviewed manual bounds the same output root can be rerun safely;
 no ready-input manifest exists from the failed attempt.
+
+If automatic spatial selection cannot find a reliable region, preparation
+instead retains `PSF_PLANE_AUTOMATIC_REGION_REJECTED.png` and its JSON record.
+Review the white interval boundaries and use paired `--psf-fit-y-min/max` or
+`--psf-fit-z-min/max` arguments. These bounds index the calibration image plane,
+not the oversampled kx readout, and therefore do not replace the existing kx
+sine-line bounds.
 
 ## Compare coefficient-processing choices safely
 

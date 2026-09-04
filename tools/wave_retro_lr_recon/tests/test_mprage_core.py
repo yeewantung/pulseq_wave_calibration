@@ -18,11 +18,20 @@ from wave_retro_lr.bart_io import create_cfl, open_cfl, read_shape  # noqa: E402
 from wave_retro_lr.core import CaseSpec, Geometry, build_wave_options, resolve_case  # noqa: E402
 from wave_retro_lr.core import build_case_mask  # noqa: E402
 from wave_retro_lr.psf import (  # noqa: E402
+    PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
     PSF_COEFFICIENT_PLOT_NAME,
     PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME,
+    PSF_COEFFICIENT_REJECTED_FULL_RANGE_PLOT_NAME,
     PSF_COEFFICIENT_REJECTED_PLOT_NAME,
+    PSF_PLANE_COMPARISON_PLOT_NAME,
     evaluate_calibrated_psf,
     write_psf_coefficient_plot,
+    write_psf_plane_comparison_plot,
+)
+from wave_retro_lr.projection_psf import (  # noqa: E402
+    align_constant_phase_branch,
+    centered_spatial_core_bounds,
+    select_spatial_projection_region,
 )
 from wave_retro_lr.retrospective import (  # noqa: E402
     resample_sensitivity_maps,
@@ -40,6 +49,7 @@ from wave_retro_lr.mprage import (  # noqa: E402
     _embed_image_stream,
     _ensure_r3x1_psf_coefficient_plot,
     _normalize_psf_coefficient_settings,
+    _normalize_psf_spatial_settings,
     _recover_c_only_automatic_rejection,
     _write_automatic_psf_rejection_diagnostics,
 )
@@ -263,6 +273,7 @@ class PsfAndGeometryTests(unittest.TestCase):
             )
             self.assertEqual(result, normal / PSF_COEFFICIENT_PLOT_NAME)
             self.assertTrue(result.is_file())
+            self.assertTrue((normal / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME).is_file())
 
     def test_psf_coefficient_plot_records_processed_vectors_and_fit_range(self) -> None:
         """Verify the diagnostic overlays raw samples on fitted curves.
@@ -406,6 +417,209 @@ class PsfAndGeometryTests(unittest.TestCase):
             self.assertEqual(len(fixed_calls), 3)
             self.assertTrue(destination.is_file())
 
+    def test_full_range_psf_plot_does_not_force_phase_limits(self) -> None:
+        """Verify the companion diagnostic retains coefficient blow-up values.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME
+            values = np.linspace(-100.0, 100.0, 32)
+            from matplotlib.axes import Axes
+
+            with patch.object(Axes, "set_ylim", autospec=True) as set_ylim:
+                write_psf_coefficient_plot(
+                    values,
+                    values,
+                    values,
+                    destination,
+                    processing="smooth",
+                    full_range=True,
+                )
+
+            fixed_calls = [
+                call
+                for call in set_ylim.call_args_list
+                if call.args[1:] == (-2.0 * np.pi, 2.0 * np.pi)
+            ]
+            self.assertEqual(fixed_calls, [])
+            self.assertTrue(destination.is_file())
+
+    def test_constant_phase_branch_alignment_is_complex_invariant(self) -> None:
+        """Verify only integer turns remove a c branch discontinuity.
+
+        Returns:
+            None.
+        """
+        coefficient = np.array([0.1, 0.2, 0.3, -2.0 * np.pi + 0.4, -2.0 * np.pi + 0.5])
+        aligned, turns = align_constant_phase_branch(coefficient)
+
+        np.testing.assert_allclose(np.exp(1j * aligned), np.exp(1j * coefficient))
+        np.testing.assert_array_equal(turns, np.array([0, 0, 0, 1, 1]))
+        self.assertLess(float(np.max(np.abs(np.diff(aligned)))), 0.2)
+        clean = np.linspace(-0.5, 0.5, 16)
+        clean_aligned, clean_turns = align_constant_phase_branch(clean)
+        np.testing.assert_array_equal(clean_aligned, clean)
+        np.testing.assert_array_equal(clean_turns, np.zeros(16, dtype=np.int64))
+
+    def test_projection_plane_comparison_writes_both_axes(self) -> None:
+        """Verify the phase diagnostic accepts independent y and z regions.
+
+        Returns:
+            None.
+        """
+        phase = np.exp(1j * np.zeros((16, 12), dtype=np.float64))
+        planes = {
+            "sin": {
+                "theoretical": phase,
+                "measured": phase,
+                "fitted": phase,
+                "residual": phase,
+                "selected_bounds": (2, 10),
+            },
+            "cos": {
+                "theoretical": phase,
+                "measured": phase,
+                "fitted": phase,
+                "residual": phase,
+                "selected_bounds": (1, 11),
+            },
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / PSF_PLANE_COMPARISON_PLOT_NAME
+            result = write_psf_plane_comparison_plot(planes, destination)
+            self.assertEqual(result, destination.resolve())
+            self.assertEqual(destination.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+
+    def test_clean_spatial_selection_preserves_full_fit_object(self) -> None:
+        """Verify the globally invoked selector is an exact clean-case no-op.
+
+        Returns:
+            None.
+        """
+        size = 24
+        coordinates = (np.arange(size) - size / 2.0) / size
+        full_result = self._mock_projection_result(32, slope=0.2, constant=0.1)
+
+        def fit_region(bounds: tuple[int, int]) -> dict[str, np.ndarray]:
+            """Return identical clean coefficients for every spatial interval.
+
+            Args:
+                bounds: Unused candidate bounds.
+
+            Returns:
+                Mock wrapped-plane fit result.
+            """
+            return full_result if bounds == (0, size) else self._mock_projection_result(
+                32, slope=0.2, constant=0.1
+            )
+
+        selected, diagnostics = select_spatial_projection_region(
+            np.zeros((32, size, 1)),
+            np.ones((32, size, 1, 2)),
+            coordinates,
+            axis_name="y",
+            fit_region=fit_region,
+        )
+        self.assertIs(selected, full_result)
+        self.assertEqual(diagnostics["outcome"], "full_region_preserved")
+        self.assertTrue(diagnostics["clean_case_no_op"])
+
+    def test_centered_spatial_core_is_half_of_calibration_fov(self) -> None:
+        """Verify the standard 72-sample calibration uses exact bounds 18:54.
+
+        Returns:
+            None.
+        """
+        self.assertEqual(centered_spatial_core_bounds(72), (18, 54))
+
+    def test_unstable_full_spatial_fit_selects_widest_stable_inner_region(self) -> None:
+        """Verify a globally unstable plane is replaced by an inner fit.
+
+        Returns:
+            None.
+        """
+        size = 24
+        coordinates = (np.arange(size) - size / 2.0) / size
+
+        def fit_region(bounds: tuple[int, int]) -> dict[str, np.ndarray]:
+            """Emulate edge aliasing that corrupts only the full-support fit.
+
+            Args:
+                bounds: Candidate spatial interval.
+
+            Returns:
+                Mock wrapped-plane fit result.
+            """
+            slope = 2.2 if bounds == (0, size) else 0.2
+            return self._mock_projection_result(32, slope=slope, constant=0.1)
+
+        _, diagnostics = select_spatial_projection_region(
+            np.zeros((32, size, 1)),
+            np.ones((32, size, 1, 2)),
+            coordinates,
+            axis_name="y",
+            fit_region=fit_region,
+        )
+        self.assertEqual(diagnostics["outcome"], "inner_region_selected")
+        self.assertEqual(diagnostics["selected_bounds"], [0, 22])
+        self.assertFalse(diagnostics["clean_case_no_op"])
+
+    def test_manual_spatial_selection_uses_exact_original_coordinate_bounds(self) -> None:
+        """Verify a reviewed interval is forwarded without recentering.
+
+        Returns:
+            None.
+        """
+        size = 24
+        calls = []
+
+        def fit_region(bounds: tuple[int, int]) -> dict[str, np.ndarray]:
+            """Record the exact manual interval supplied to the fitter.
+
+            Args:
+                bounds: Candidate spatial interval.
+
+            Returns:
+                Mock wrapped-plane fit result.
+            """
+            calls.append(bounds)
+            return self._mock_projection_result(16, slope=0.2, constant=0.1)
+
+        _, diagnostics = select_spatial_projection_region(
+            np.zeros((16, size, 1)),
+            np.ones((16, size, 1, 2)),
+            (np.arange(size) - size / 2.0) / size,
+            axis_name="y",
+            fit_region=fit_region,
+            manual_bounds=(4, 20),
+        )
+        self.assertEqual(calls, [(4, 20)])
+        self.assertEqual(diagnostics["selected_bounds"], [4, 20])
+        self.assertIn("not recentered", diagnostics["coordinates"])
+
+    @staticmethod
+    def _mock_projection_result(
+        readout: int, *, slope: float, constant: float
+    ) -> dict[str, np.ndarray]:
+        """Construct one finite wrapped-plane fitter result for selector tests.
+
+        Args:
+            readout: Number of readout samples.
+            slope: Mock varying-axis slope.
+            constant: Mock constant phase coefficient.
+
+        Returns:
+            Minimal result consumed by the spatial selector.
+        """
+        return {
+            "a_fit_all": np.full(readout, slope),
+            "b_fit_all": np.full(readout, slope),
+            "c_fit_all": np.full(readout, constant),
+            "wrapped_rms": np.full(readout, 0.1),
+        }
+
     def test_psf_coefficient_settings_preserve_upstream_modes(self) -> None:
         """Verify smooth and half-open sine-line settings are validated.
 
@@ -445,6 +659,25 @@ class PsfAndGeometryTests(unittest.TestCase):
             _normalize_psf_coefficient_settings("sine-line", 12, None)
         with self.assertRaisesRegex(ValueError, "0 <= min < max"):
             _normalize_psf_coefficient_settings("sine-line", 12, 12)
+
+    def test_psf_spatial_settings_are_global_with_manual_overrides(self) -> None:
+        """Verify automatic projection selection and paired manual bounds.
+
+        Returns:
+            None.
+        """
+        automatic = _normalize_psf_spatial_settings(None, None, None, None)
+        self.assertEqual(
+            automatic["spatial_region_selection"],
+            "global-automatic-with-manual-override",
+        )
+        self.assertIsNone(automatic["requested_fit_y_range"])
+        self.assertIsNone(automatic["requested_fit_z_range"])
+        manual = _normalize_psf_spatial_settings(4, 60, 6, 64)
+        self.assertEqual(manual["requested_fit_y_range"], [4, 60])
+        self.assertEqual(manual["requested_fit_z_range"], [6, 64])
+        with self.assertRaisesRegex(ValueError, "both min and max"):
+            _normalize_psf_spatial_settings(4, None, None, None)
 
     def test_sine_line_settings_reach_upstream_processing(self) -> None:
         """Verify the selected mode and kx bounds reach the upstream helper.
@@ -490,13 +723,16 @@ class PsfAndGeometryTests(unittest.TestCase):
             fit_kx_max=7,
         )
 
-        self.assertEqual(len(result), 7)
-        for observed, expected in zip(result[-2], (raw_a, raw_b, raw_c), strict=True):
+        self.assertEqual(len(result), 10)
+        for observed, expected in zip(result[5], (raw_a, raw_b, raw_c), strict=True):
             np.testing.assert_array_equal(observed, expected)
-        self.assertIs(result[-1], diagnostics)
+        self.assertEqual(result[8]["coefficient_processing"], "sine-line")
         calibration_call = native.fit_wave_psf_deviation_from_projection.call_args
         self.assertTrue(calibration_call.kwargs["return_diagnostics"])
         processing_call = native._process_psf_coefficients.call_args
+        np.testing.assert_array_equal(processing_call.args[0], raw_a)
+        np.testing.assert_array_equal(processing_call.args[1], raw_b)
+        np.testing.assert_array_equal(processing_call.args[2], raw_c)
         self.assertEqual(processing_call.kwargs["coefficient_processing"], "sine-line")
         self.assertEqual(processing_call.kwargs["fit_kx_min"], 1)
         self.assertEqual(processing_call.kwargs["fit_kx_max"], 7)
@@ -602,7 +838,13 @@ class PsfAndGeometryTests(unittest.TestCase):
                 fit_kx_max=None,
             )
         rejection = context.exception
-        self.assertEqual(rejection.diagnostics, diagnostics)
+        for key, value in diagnostics.items():
+            self.assertEqual(rejection.diagnostics[key], value)
+        self.assertTrue(
+            rejection.diagnostics["c_phase_branch_alignment"][
+                "complex_phase_invariant"
+            ]
+        )
         for observed, expected in zip(rejection.raw_coefficients, raw, strict=True):
             np.testing.assert_array_equal(observed, expected)
         self.assertIsNotNone(rejection.candidate_coefficients)
@@ -649,6 +891,9 @@ class PsfAndGeometryTests(unittest.TestCase):
                 json_path, normal / PSF_COEFFICIENT_REJECTED_DIAGNOSTICS_NAME
             )
             self.assertEqual(plot_path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertTrue(
+                (normal / PSF_COEFFICIENT_REJECTED_FULL_RANGE_PLOT_NAME).is_file()
+            )
             record = json.loads(json_path.read_text(encoding="utf-8"))
             self.assertEqual(record["status"], "automatic_sine_line_psf_fit_rejected")
             self.assertFalse(record["accepted_for_reconstruction"])
@@ -696,9 +941,166 @@ class PsfAndGeometryTests(unittest.TestCase):
             )
 
         recover.assert_called_once()
-        self.assertIs(result[-1], accepted_diagnostics)
+        self.assertEqual(
+            result[-2]["effective_coefficient_processing"],
+            accepted_diagnostics["effective_coefficient_processing"],
+        )
         for observed, expected in zip(result[2:5], raw, strict=True):
             np.testing.assert_array_equal(observed, expected)
+
+    def test_sustained_corruption_retries_cached_centered_y_core(self) -> None:
+        """Verify automatic kx rejection retries both a and c from central y.
+
+        Returns:
+            None.
+        """
+        initial_raw = tuple(
+            np.linspace(index, index + 1, 8) for index in range(3)
+        )
+        retry_raw = (
+            np.linspace(10, 11, 8),
+            initial_raw[1],
+            np.linspace(12, 13, 8),
+        )
+        initial_spatial = {
+            "sin": {
+                "selection": "automatic",
+                "outcome": "full_region_preserved",
+                "selected_bounds": [0, 72],
+            },
+            "cos": {
+                "selection": "automatic",
+                "outcome": "full_region_preserved",
+                "selected_bounds": [0, 72],
+            },
+        }
+        retry_spatial = {
+            **initial_spatial,
+            "sin": {
+                "selection": "automatic-fallback",
+                "outcome": "centered_y_core_retry",
+                "selected_bounds": [18, 54],
+            },
+        }
+        initial_evidence = {
+            "projection_quality": {"sin": "full-sin", "cos": "full-cos"},
+            "spatial_region_selection": initial_spatial,
+        }
+        retry_evidence = {
+            "projection_quality": {"sin": "core-sin", "cos": "full-cos"},
+            "spatial_region_selection": retry_spatial,
+        }
+        y_core_retry = {
+            "bounds": (18, 54),
+            "raw_coefficients": retry_raw,
+            "calibration_evidence": retry_evidence,
+            "plane_diagnostics": {},
+        }
+        accepted = {
+            "coefficient_processing": "sine-line",
+            "fit_range_selection": "automatic",
+            "kx_range": [10, 990],
+            "validation_passed": True,
+        }
+        native = Mock()
+        native.supports_spatial_projection_selection = True
+        native.generate_theoretical_wave_trajectory.return_value = (
+            np.zeros(8),
+            np.ones(8),
+        )
+        native._process_psf_coefficients.side_effect = [
+            ValueError(
+                "Automatic PSF range selection detected sustained coefficient "
+                "corruption but found no adequate center-containing stable region."
+            ),
+            (*retry_raw, accepted),
+        ]
+
+        with patch(
+            "wave_retro_lr.mprage._fit_projection_coefficients_with_spatial_selection",
+            return_value=(
+                *initial_raw,
+                320,
+                initial_evidence,
+                {},
+                y_core_retry,
+            ),
+        ):
+            result = _calibrated_psf_inputs(
+                native,
+                twix_path=Path("input.dat"),
+                sequence_path=Path("input.seq"),
+                readout_oversampled=8,
+                ncalib=72,
+                nacs=4,
+                coefficient_processing="sine-line",
+                fit_kx_min=None,
+                fit_kx_max=None,
+            )
+
+        self.assertEqual(native._process_psf_coefficients.call_count, 2)
+        first_call, retry_call = native._process_psf_coefficients.call_args_list
+        np.testing.assert_array_equal(first_call.args[0], initial_raw[0])
+        np.testing.assert_array_equal(retry_call.args[0], retry_raw[0])
+        np.testing.assert_array_equal(result[5][0], retry_raw[0])
+        np.testing.assert_array_equal(result[5][1], initial_raw[1])
+        np.testing.assert_array_equal(result[5][2], retry_raw[2])
+        diagnostics = result[8]
+        fallback = diagnostics["automatic_spatial_fallback"]
+        self.assertEqual(fallback["fallback_bounds"], [18, 54])
+        self.assertEqual(fallback["outcome"], "centered_y_core_retry_accepted")
+        self.assertTrue(fallback["validation_passed"])
+        self.assertEqual(
+            diagnostics["spatial_region_selection"]["sin"]["selection"],
+            "automatic-fallback",
+        )
+
+    def test_manual_y_bounds_disable_automatic_centered_core_retry(self) -> None:
+        """Verify explicit spatial bounds retain priority after kx rejection.
+
+        Returns:
+            None.
+        """
+        raw = tuple(np.linspace(index, index + 1, 8) for index in range(3))
+        evidence = {
+            "projection_quality": {"sin": {}, "cos": {}},
+            "spatial_region_selection": {},
+        }
+        native = Mock()
+        native.supports_spatial_projection_selection = True
+        native.generate_theoretical_wave_trajectory.return_value = (
+            np.zeros(8),
+            np.ones(8),
+        )
+        native._process_psf_coefficients.side_effect = ValueError(
+            "Automatic PSF range selection detected sustained coefficient corruption."
+        )
+        cached_retry = {
+            "bounds": (18, 54),
+            "raw_coefficients": raw,
+            "calibration_evidence": evidence,
+            "plane_diagnostics": {},
+        }
+
+        with patch(
+            "wave_retro_lr.mprage._fit_projection_coefficients_with_spatial_selection",
+            return_value=(*raw, 320, evidence, {}, cached_retry),
+        ):
+            with self.assertRaises(AutomaticPsfFitRejected):
+                _calibrated_psf_inputs(
+                    native,
+                    twix_path=Path("input.dat"),
+                    sequence_path=Path("input.seq"),
+                    readout_oversampled=8,
+                    ncalib=72,
+                    nacs=4,
+                    coefficient_processing="sine-line",
+                    fit_kx_min=None,
+                    fit_kx_max=None,
+                    fit_y_bounds=(18, 54),
+                )
+
+        self.assertEqual(native._process_psf_coefficients.call_count, 1)
 
     def test_c_only_rejection_uses_common_frequency_when_relaxed_gates_pass(
         self,
@@ -1136,13 +1538,19 @@ class PreparationIntegrationTests(unittest.TestCase):
                     return_value=(
                         *zero_vectors,
                         zero_vectors[2:],
+                        zero_vectors[2:],
+                        np.zeros(8, dtype=np.int64),
                         processing_diagnostics,
+                        {},
                     ),
                 ),
             ):
                 manifest = prepare_normal_mprage(twix, output, sequence)
                 diagnostic = output / "normal" / PSF_COEFFICIENT_PLOT_NAME
                 self.assertTrue(diagnostic.is_file())
+                self.assertTrue(
+                    (output / "normal" / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME).is_file()
+                )
                 diagnostic.unlink()
                 retro = prepare_retro_mprage(twix, output, sequence)
 
@@ -1155,6 +1563,10 @@ class PreparationIntegrationTests(unittest.TestCase):
             self.assertIsNone(manifest["psf_calibration"]["fit_range_selection"])
             self.assertIsNone(
                 manifest["psf_calibration"]["requested_fit_kx_range"]
+            )
+            self.assertEqual(
+                manifest["psf_calibration"]["spatial_region_selection"],
+                "global-automatic-with-manual-override",
             )
             self.assertEqual(
                 manifest["psf_calibration"]["processing_diagnostics"],
@@ -1171,6 +1583,12 @@ class PreparationIntegrationTests(unittest.TestCase):
             self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 12))
             self.assertEqual(read_shape(normal / "psf"), (8, 16, 16, 1, 1))
             self.assertEqual(read_shape(normal / "psf_coefficients_raw"), (8, 3))
+            self.assertEqual(
+                read_shape(normal / "psf_coefficients_processing_input"), (8, 3)
+            )
+            self.assertEqual(
+                read_shape(normal / "psf_coefficient_c_branch_turns"), (8, 1)
+            )
             self.assertEqual(
                 manifest["psf_calibration"]["raw_psf_coefficients"],
                 "psf_coefficients_raw",
