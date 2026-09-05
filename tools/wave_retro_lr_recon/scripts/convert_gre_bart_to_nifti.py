@@ -280,6 +280,9 @@ def convert(
     for echo_index, corrected in enumerate(restored):
         metadata = {
             "Reconstruction": "BART Wave measured multi-echo GRE",
+            "EchoNumber": echo_index + 1,
+            "EchoTime": float(echo_times[echo_index]),
+            "EchoTimeUnits": "s",
             "PreparedInputManifest": str(inputs / "manifest.json"),
             "CaseID": case_id,
             "BARTEcalibCommand": ecalib_command,

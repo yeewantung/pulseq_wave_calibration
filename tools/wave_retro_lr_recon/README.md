@@ -192,27 +192,44 @@ sweep-validated flips `(False, True, False)`, then uses only axis
 permutation/flips to store canonical RAS without interpolation. No
 reconstruction-stage brain mask or BET step is included.
 
-## GRE head-mask parameter derivation
+## Unmasked GRE NIfTI collection
 
-The MPRAGE NIfTI collection command is intentionally not used for GRE. Before
-adding the GRE collection, derive and visually approve a separate GRE default
-from the corrected canonical-RAS normal/native-R3x1, selected-Wavelet, echo-1
-magnitude. The derivation command creates an unranked parameter grid; each
-candidate receives a NIfTI mask and a nine-panel overlay covering 25%, 50%,
-and 75% positions in all three anatomical planes:
+GRE does not use a head mask. After completing normal reconstruction and any
+desired retrospective cases, collect the canonical magnitude and wrapped-phase
+NIfTIs using the same one-root interface as the MPRAGE collection:
 
 ```bash
-scripts/derive_gre_head_mask_parameters.py \
-    /exact/path/to/normal/nifti/selected_wavelet/echo-01_part-mag.nii.gz \
-    /exact/new/gre_head_mask_parameter_sweep
+scripts/sample_gre_nifti_collection.sh \
+    /exact/path/to/gre_reconstruction_root \
+    --require-retro
 ```
 
-The destination must be a new user-confirmed directory. The command never
-selects a winner. Review every file under `overlays/`, then record one explicit
-candidate ID as the GRE default. A later GRE-specific collection will derive
-one mask on this normal echo-1 grid, apply it identically to every echo and
-reconstruction branch, and map it to different retrospective grids only with
-nearest-neighbor physical-space mask resampling.
+Omit `--require-retro` to collect normal outputs plus whichever complete
+retrospective geometries are already present. The command requires both
+`fista_r0` and `selected_wavelet` for every included geometry and one magnitude
+and wrapped-phase NIfTI/JSON pair for every echo. It validates conversion
+manifests, echo times, canonical RAS geometry, shared-Wavelet provenance, and
+echo-specific BART command records before copying anything.
+
+The collection is written to `OUTPUT_ROOT/nifti_collection`. All NIfTIs and
+JSON sidecars are copied byte-for-byte and recorded by SHA-256. The collection
+also copies each branch's conversion manifest and writes a top-level
+`manifest.json`. An existing collection is refreshed only when its builder and
+every owned-file hash match. It does not create a `masks/` tree, masked
+derivatives, or synthetic evaluation products, and it never copies quantitative
+complex `.npy` arrays.
+
+```text
+OUTPUT_ROOT/nifti_collection/
+├── original_nifti/
+│   ├── fista_r0/
+│   │   ├── normal/
+│   │   └── retro/<case>/
+│   └── selected_wavelet/
+│       ├── normal/
+│       └── retro/<case>/
+└── manifest.json
+```
 
 ## MPRAGE presentation masking
 
@@ -454,6 +471,8 @@ preferred overrides may be kept in an ignored `.local.sh` wrapper.
   split-complex output recombination;
 - `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,
   normal-derived whole-head mask, physical-grid mask mapping, and provenance;
+- `wave_retro_lr/gre_nifti_collection.py`: strict byte-identical GRE magnitude
+  and phase collection with no masking or quantitative-complex duplication;
 - `wave_retro_lr/core.py`: geometry, grids, FFT, masks, and compatibility
   primitives.
 

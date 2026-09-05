@@ -39,8 +39,16 @@ using the echo-1 99th percentile shared across all echoes; phase NIfTIs
 are wrapped radians. NIfTIs must report stored axis codes RAS, with the
 conversion manifest recording logical roles `(readout, phase, slice)`, array
 flips `(false, true, false)`, and no interpolation. Do not troubleshoot
-measured GRE by adding the synthetic BET/brain-mask evaluation workflow;
-masking is a separate downstream presentation decision.
+measured GRE by adding the synthetic BET/brain-mask evaluation workflow. No
+masking step is part of the measured GRE workflow or its NIfTI collection.
+
+The GRE collection is intentionally unmasked. If
+`sample_gre_nifti_collection.sh` rejects an input, fix or regenerate the
+incomplete canonical branch rather than adding a mask or copying files by
+hand. Use `--require-retro` only after both retrospective geometries and both
+reconstruction branches have completed. The collection destination must be a
+tool-owned `OUTPUT_ROOT/nifti_collection`; unexpected or locally modified files
+there cause a hard failure instead of being overwritten.
 
 ## MPRAGE checks
 

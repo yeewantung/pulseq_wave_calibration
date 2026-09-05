@@ -237,6 +237,7 @@ After setup, review the dataset-independent commands in `README.md` or run:
 ```bash
 scripts/sample_gre_normal_recon.sh --help
 scripts/sample_gre_retro_lr_recon.sh --help
+scripts/sample_gre_nifti_collection.sh --help
 scripts/sample_mprage_normal_recon.sh --help
 scripts/sample_mprage_retro_lr_recon.sh --help
 scripts/sample_mprage_nifti_collection.sh --help
