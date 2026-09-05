@@ -1080,7 +1080,7 @@ def prepare_normal_gre(
     output_root: str | Path,
     sequence: str | Path,
     *,
-    psf_coefficient_processing: str = "smooth",
+    psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
     reuse: bool = True,
@@ -1091,7 +1091,8 @@ def prepare_normal_gre(
         twix: Measured Wave-GRE TWIX file.
         output_root: Exact user-selected output root.
         sequence: Matching integrated Wave-GRE Pulseq file.
-        psf_coefficient_processing: Shared ``smooth`` or ``sine-line`` mode.
+        psf_coefficient_processing: Shared ``sine-line`` mode by default, or
+            explicit ``smooth`` processing.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
         reuse: Reuse an identity-matched completed input set.
@@ -1386,7 +1387,7 @@ def prepare_retro_gre(
     output_root: str | Path,
     sequence: str | Path,
     *,
-    psf_coefficient_processing: str = "smooth",
+    psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
 ) -> list[dict[str, Any]]:
@@ -1396,7 +1397,8 @@ def prepare_retro_gre(
         twix: Measured native R3x1 Wave-GRE TWIX file.
         output_root: Exact user-selected output root.
         sequence: Matching integrated Pulseq file.
-        psf_coefficient_processing: Shared coefficient-processing mode.
+        psf_coefficient_processing: Shared ``sine-line`` mode by default, or
+            explicit ``smooth`` processing.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
 

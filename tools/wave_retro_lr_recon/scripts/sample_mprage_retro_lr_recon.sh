@@ -6,7 +6,7 @@ set -euo pipefail
 
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [-g]"
-    echo "       [--psf-coefficient-processing smooth|sine-line]"
+    echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
 }
@@ -20,7 +20,7 @@ shift 3
 
 ECALIB_CROP="0.6"
 USE_GPU=false
-PSF_COEFFICIENT_PROCESSING="smooth"
+PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
 PSF_FIT_Y_MIN=""

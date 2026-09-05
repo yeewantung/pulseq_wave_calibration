@@ -6,7 +6,7 @@ set -euo pipefail
 
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [-g]"
-    echo "       [--psf-coefficient-processing smooth|sine-line]"
+    echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
 }
 
@@ -19,7 +19,7 @@ shift 3
 
 ECALIB_CROP="0.6"
 USE_GPU=false
-PSF_COEFFICIENT_PROCESSING="smooth"
+PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
 GRE_SHARED_WAVELET_LAMBDA="0.015"
@@ -46,7 +46,7 @@ command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.m
 
 if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" ]]; then
     [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]] || { echo "Error: kx bounds require sine-line." >&2; exit 2; }
-    python "$SCRIPT_DIR/prepare_gre_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE"
+    python "$SCRIPT_DIR/prepare_gre_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth
 elif [[ "$PSF_COEFFICIENT_PROCESSING" == "sine-line" ]]; then
     if [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]]; then
         python "$SCRIPT_DIR/prepare_gre_retro.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import subprocess
 import sys
 import unittest
@@ -11,6 +12,9 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.nifti_collection import HeadMaskParameters  # noqa: E402
+from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
+from scripts.prepare_mprage_normal import _parser as normal_parser  # noqa: E402
+from scripts.prepare_mprage_retro import _parser as retro_parser  # noqa: E402
 
 SCRIPTS = TOOL_ROOT / "scripts"
 
@@ -35,7 +39,7 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn('R3_LAMBDA="3.5e-2"', source)
         self.assertIn("USE_GPU=false", source)
         self.assertIn("-g) USE_GPU=true; shift ;;", source)
-        self.assertIn('PSF_COEFFICIENT_PROCESSING="smooth"', source)
+        self.assertIn('PSF_COEFFICIENT_PROCESSING="sine-line"', source)
         self.assertIn("--psf-coefficient-processing sine-line", source)
         self.assertIn('--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source)
         self.assertIn('--psf-fit-kx-max "$PSF_FIT_KX_MAX"', source)
@@ -71,7 +75,7 @@ class SampleCommandTests(unittest.TestCase):
         self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 8)
         self.assertIn("USE_GPU=false", source)
         self.assertIn("-g) USE_GPU=true; shift ;;", source)
-        self.assertIn('PSF_COEFFICIENT_PROCESSING="smooth"', source)
+        self.assertIn('PSF_COEFFICIENT_PROCESSING="sine-line"', source)
         self.assertIn("--psf-coefficient-processing sine-line", source)
         self.assertIn('--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source)
         self.assertIn('--psf-fit-kx-max "$PSF_FIT_KX_MAX"', source)
@@ -130,6 +134,24 @@ class SampleCommandTests(unittest.TestCase):
         self.assertEqual(defaults.opening_radius_mm, 0.0)
         self.assertEqual(defaults.closing_radius_mm, 1.5)
         self.assertEqual(defaults.dilation_radius_mm, 0.0)
+
+    def test_mprage_preparation_defaults_to_automatic_sine_line(self) -> None:
+        """Keep the sample, preparation CLI, and Python API defaults aligned.
+
+        Returns:
+            None.
+        """
+        arguments = ["input.dat", "output", "input.seq"]
+        for parser in (normal_parser, retro_parser):
+            parsed = parser().parse_args(arguments)
+            self.assertEqual(parsed.psf_coefficient_processing, "sine-line")
+            self.assertIsNone(parsed.psf_fit_kx_min)
+            self.assertIsNone(parsed.psf_fit_kx_max)
+        for function in (prepare_normal_mprage, prepare_retro_mprage):
+            parameter = inspect.signature(function).parameters[
+                "psf_coefficient_processing"
+            ]
+            self.assertEqual(parameter.default, "sine-line")
 
     def test_new_python_workflow_does_not_launch_bart(self) -> None:
         """Verify measured-data Python modules never launch BART processes.

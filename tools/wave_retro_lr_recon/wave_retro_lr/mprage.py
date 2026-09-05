@@ -1841,7 +1841,7 @@ def prepare_normal_mprage(
     output_root: str | Path,
     sequence: str | Path,
     *,
-    psf_coefficient_processing: str = "smooth",
+    psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
     psf_fit_y_min: int | None = None,
@@ -1856,7 +1856,8 @@ def prepare_normal_mprage(
         twix: Measured Wave-MPRAGE TWIX file.
         output_root: Dataset-specific output root.
         sequence: Pulseq sequence file used for the acquisition.
-        psf_coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
+        psf_coefficient_processing: Upstream ``sine-line`` mode by default, or
+            explicit ``smooth`` processing.
         psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
         psf_fit_kx_max: Exclusive final sine-line fitting index, if selected.
         psf_fit_y_min: Optional inclusive manual sin-projection spatial index.
@@ -2283,7 +2284,7 @@ def prepare_retro_mprage(
     output_root: str | Path,
     sequence: str | Path,
     *,
-    psf_coefficient_processing: str = "smooth",
+    psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
     psf_fit_y_min: int | None = None,
@@ -2297,7 +2298,8 @@ def prepare_retro_mprage(
         twix: Measured Wave-MPRAGE TWIX file.
         output_root: Dataset-specific output root shared with normal preparation.
         sequence: Pulseq sequence file used for the acquisition.
-        psf_coefficient_processing: Upstream ``smooth`` or ``sine-line`` mode.
+        psf_coefficient_processing: Upstream ``sine-line`` mode by default, or
+            explicit ``smooth`` processing.
         psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
         psf_fit_kx_max: Exclusive final sine-line fitting index, if selected.
         psf_fit_y_min: Optional inclusive manual sin-projection spatial index.

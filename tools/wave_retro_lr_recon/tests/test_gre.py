@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import subprocess
 import sys
@@ -39,6 +40,8 @@ from wave_retro_lr.gre import (  # noqa: E402
     gre_echo_ids,
     gre_cases,
     gre_wavelet_selection_provenance,
+    prepare_normal_gre,
+    prepare_retro_gre,
     resolve_gre_wavelet_lambda,
     restore_bart_wave_image,
     validate_gre_echo_consistency,
@@ -47,6 +50,8 @@ from wave_retro_lr.gre import (  # noqa: E402
 )
 from wave_retro_lr.retrospective import resample_sensitivity_maps  # noqa: E402
 from scripts.convert_gre_bart_to_nifti import _canonicalize_saved_nifti  # noqa: E402
+from scripts.prepare_gre_normal import _parser as normal_parser  # noqa: E402
+from scripts.prepare_gre_retro import _parser as retro_parser  # noqa: E402
 
 
 class GreGeometryAndEchoTests(unittest.TestCase):
@@ -400,8 +405,8 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
             self.assertEqual(record["interpolation"], False)
             self.assertEqual(np.asarray(saved.dataobj).size, values.size)
 
-    def test_psf_settings_keep_smooth_default_and_explicit_sine_line(self) -> None:
-        """Validate manual bounds without changing the default processing mode."""
+    def test_psf_settings_accept_explicit_smooth_and_sine_line_bounds(self) -> None:
+        """Validate the retained smooth mode and manual sine-line bounds."""
 
         self.assertEqual(_normalize_psf_settings("smooth", None, None)["coefficient_processing"], "smooth")
         self.assertEqual(_normalize_psf_settings("sine-line", 100, 900)["requested_fit_kx_range"], [100, 900])
@@ -427,6 +432,7 @@ class GreSampleInterfaceTests(unittest.TestCase):
             self.assertIn("bart wave -g -w -f -r", source)
             self.assertIn("bart wave -w -f -r", source)
             self.assertIn("wave_command.txt", source)
+            self.assertIn('PSF_COEFFICIENT_PROCESSING="sine-line"', source)
             ecalib_commands = [
                 line.strip() for line in source.splitlines() if line.strip().startswith("bart ecalib ")
             ]
@@ -443,6 +449,21 @@ class GreSampleInterfaceTests(unittest.TestCase):
             self.assertIn("wave_kspace_$echo_label", source)
             self.assertIn("conversion_args+=(--image", source)
         self.assertNotIn("-l -v", normal_source + retro_source)
+
+    def test_gre_preparation_defaults_to_automatic_sine_line(self) -> None:
+        """Keep the sample, preparation CLI, and Python API defaults aligned."""
+
+        arguments = ["input.dat", "output", "input.seq"]
+        for parser in (normal_parser, retro_parser):
+            parsed = parser().parse_args(arguments)
+            self.assertEqual(parsed.psf_coefficient_processing, "sine-line")
+            self.assertIsNone(parsed.psf_fit_kx_min)
+            self.assertIsNone(parsed.psf_fit_kx_max)
+        for function in (prepare_normal_gre, prepare_retro_gre):
+            parameter = inspect.signature(function).parameters[
+                "psf_coefficient_processing"
+            ]
+            self.assertEqual(parameter.default, "sine-line")
 
     def test_python_preparation_and_conversion_never_launch_bart(self) -> None:
         """Keep BART execution exclusively in the user-facing Bash samples."""

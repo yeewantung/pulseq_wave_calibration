@@ -26,7 +26,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("output", type=Path, help="Exact user-selected output root.")
     parser.add_argument("seq", type=Path, help="Matching integrated Wave-GRE sequence.")
     parser.add_argument(
-        "--psf-coefficient-processing", choices=("smooth", "sine-line"), default="smooth"
+        "--psf-coefficient-processing",
+        choices=("smooth", "sine-line"),
+        default="sine-line",
+        help=(
+            "PSF coefficient processing; sine-line uses automatic bounds when "
+            "none are supplied."
+        ),
     )
     parser.add_argument("--psf-fit-kx-min", type=int)
     parser.add_argument("--psf-fit-kx-max", type=int)

@@ -1510,8 +1510,8 @@ class PreparationIntegrationTests(unittest.TestCase):
         }
         zero_vectors = tuple(np.zeros(8, dtype=np.float64) for _ in range(5))
         processing_diagnostics = {
-            "coefficient_processing": "smooth",
-            "fit_range_selection": None,
+            "coefficient_processing": "sine-line",
+            "fit_range_selection": "automatic",
             "kx_range": None,
             "kx_range_convention": "half-open [min, max)",
         }
@@ -1557,10 +1557,12 @@ class PreparationIntegrationTests(unittest.TestCase):
             normal = output / "normal" / "bart_inputs"
             self.assertEqual(manifest["sampling"]["name"], "R3x1")
             self.assertEqual(
-                manifest["psf_calibration"]["coefficient_processing"], "smooth"
+                manifest["psf_calibration"]["coefficient_processing"], "sine-line"
             )
             self.assertIsNone(manifest["psf_calibration"]["fit_kx_range"])
-            self.assertIsNone(manifest["psf_calibration"]["fit_range_selection"])
+            self.assertEqual(
+                manifest["psf_calibration"]["fit_range_selection"], "automatic"
+            )
             self.assertIsNone(
                 manifest["psf_calibration"]["requested_fit_kx_range"]
             )

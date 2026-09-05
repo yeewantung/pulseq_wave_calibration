@@ -6,7 +6,7 @@ set -euo pipefail
 
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
-    echo "       [--psf-coefficient-processing smooth|sine-line]"
+    echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
 }
@@ -21,7 +21,7 @@ shift 3
 ECALIB_CROP="0.6"
 R3_LAMBDA="3.5e-2"
 USE_GPU=false
-PSF_COEFFICIENT_PROCESSING="smooth"
+PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
 PSF_FIT_Y_MIN=""
@@ -66,8 +66,8 @@ elif [[ -n "$PSF_FIT_Z_MIN" || -n "$PSF_FIT_Z_MAX" ]]; then
     echo "Error: manual PSF z fitting requires both bounds." >&2; exit 2
 fi
 
-# Smooth coefficients by default. Sine-line without bounds selects its range
-# automatically; providing both bounds is a reproducible manual override.
+# Sine-line processing selects its range automatically by default. Providing
+# both bounds is a reproducible manual override; smooth remains available.
 if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" ]]; then
     [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]] || { echo "Error: PSF kx bounds require sine-line processing." >&2; exit 2; }
     python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth "${SPATIAL_ARGS[@]}"

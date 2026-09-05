@@ -62,16 +62,17 @@ scripts/sample_mprage_normal_recon.sh \
 
 Native and retrospective PSFs are evaluated directly on the requested PE grid
 from the two sequence-derived Wave trajectory displacements and the integrated
-calibration phase-plane coefficients `a`, `b`, and `c`. The upstream
-nine-sample `smooth` coefficient processing remains the default. To request
-automatic sine-plus-line fitting, omit the optional kx bounds:
+calibration phase-plane coefficients `a`, `b`, and `c`. Automatic `sine-line`
+coefficient processing is the default and selects its kx interval when no
+bounds are supplied. The upstream nine-sample `smooth` mode remains available
+as an explicit fallback:
 
 ```bash
 scripts/sample_mprage_normal_recon.sh \
     /path/to/measured_wave_mprage.dat \
     /path/to/a_new_output_root \
     /path/to/matching_wave_mprage.seq \
-    --psf-coefficient-processing sine-line
+    --psf-coefficient-processing smooth
 ```
 
 The sine-line model is `A*sin(w*kx+phi)+C1*kx+C2`. A reviewed manual half-open
@@ -273,10 +274,9 @@ has the same complete residue-2 R3x1 Cartesian lattice.
 One integrated-refscan `a/b/c` calibration solution is shared by every echo;
 later echoes are never independently refit. Each echo retains its own
 sequence-derived trajectory and receives its own calibrated PSF. Native CSMs
-are estimated once and shared. Nine-sample `smooth` remains the default; the
-same automatic or manually bounded `sine-line` options described for MPRAGE
-are available. Do not change the GRE default to automatic sine-line until both
-paths have been tested on representative real multi-echo data.
+are estimated once and shared. Automatic `sine-line` is the default; the same
+manual kx-bound override and explicit `smooth` fallback described for MPRAGE
+are available.
 
 ### 1. Normal reconstruction
 

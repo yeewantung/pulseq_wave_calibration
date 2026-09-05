@@ -187,18 +187,9 @@ sine-line bounds.
 
 ## Compare coefficient-processing choices safely
 
-The default remains nine-sample smoothing. If its coefficient PNG looks
-unreliable, first try the optional automatic sine-plus-line model:
-
-```bash
-tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
-    /path/to/measured_wave_mprage.dat \
-    /path/to/a_new_output_root \
-    /path/to/matching_wave_mprage.seq \
-    --psf-coefficient-processing sine-line
-```
-
-If that PNG is also unsatisfactory, provide both bounds as a manual override:
+The default is automatic sine-plus-line processing. If its accepted
+coefficient PNG looks unreliable, provide a reviewed half-open interval as a
+manual override:
 
 ```bash
 tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
@@ -208,6 +199,17 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
     --psf-coefficient-processing sine-line \
     --psf-fit-kx-min START_INDEX \
     --psf-fit-kx-max END_INDEX
+```
+
+To compare the upstream nine-sample smoothing mode, use a separate output root
+and select it explicitly:
+
+```bash
+tools/wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/a_new_output_root \
+    /path/to/matching_wave_mprage.seq \
+    --psf-coefficient-processing smooth
 ```
 
 Use a new output root when changing processing mode or fit bounds after BART

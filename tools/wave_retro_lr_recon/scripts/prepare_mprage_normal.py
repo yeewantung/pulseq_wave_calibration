@@ -55,7 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--psf-coefficient-processing",
         choices=("smooth", "sine-line"),
-        default="smooth",
+        default="sine-line",
         help=(
             "PSF coefficient processing. Sine-line selects its range automatically "
             "unless both manual kx bounds are supplied."
