@@ -34,6 +34,7 @@ from wave_retro_lr.gre import (  # noqa: E402
     _resolve_gre_twix_logical_matrix,
     _shared_calibration_id,
     _validate_recoverable_retro_directory,
+    _write_gre_psf_coefficient_plots,
     _write_shared_psf_coefficients,
     bart_wave_restoration_factor,
     build_gre_wave_command,
@@ -47,6 +48,10 @@ from wave_retro_lr.gre import (  # noqa: E402
     validate_gre_echo_consistency,
     validate_gre_echo_sampling,
     validate_gre_sequence,
+)
+from wave_retro_lr.psf import (  # noqa: E402
+    PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
+    PSF_COEFFICIENT_PLOT_NAME,
 )
 from wave_retro_lr.retrospective import resample_sensitivity_maps  # noqa: E402
 from scripts.convert_gre_bart_to_nifti import _canonicalize_saved_nifti  # noqa: E402
@@ -76,6 +81,16 @@ class GreGeometryAndEchoTests(unittest.TestCase):
             WAVELET_SELECTION_SHA256,
             "0c43a9d31672e90ad851decfca66c253c362cbd67ca5ba97c4fd8ef1f5a61afd",
         )
+
+        pediatric = gre_cases((250, 196, 72), (220.0, 172.0, 180.0))
+        self.assertEqual(
+            pediatric["native_r3x1"].matrix_ro_lin_par, (250, 196, 72)
+        )
+        pediatric_low = pediatric["lin_low_resolution_r3x2"]
+        self.assertEqual(pediatric_low.matrix_ro_lin_par, (250, 116, 72))
+        self.assertEqual(pediatric_low.crop_bounds_from_native[1], (40, 156))
+        self.assertEqual(pediatric_low.residue_lin_par, (1, 0))
+        self.assertAlmostEqual(pediatric_low.voxel_mm_ro_lin_par[1], 172.0 / 116)
 
     def test_shared_selection_rejects_invalid_echoes_values_method_and_provenance(self) -> None:
         """Hard-fail every superseded or incomplete selection representation."""
@@ -149,6 +164,23 @@ class GreGeometryAndEchoTests(unittest.TestCase):
                     lines[:-1], pars[:-1], echoes[:-1], echo_times_s=times
                 )
 
+        pediatric_coordinates = [
+            (line, par) for line in range(2, 196, 3) for par in range(72)
+        ]
+        pediatric_mask, pediatric_metadata = validate_gre_echo_sampling(
+            [value[0] for value in pediatric_coordinates],
+            [value[1] for value in pediatric_coordinates],
+            [0] * len(pediatric_coordinates),
+            echo_times_s=(0.02,),
+            matrix_lin_par=(196, 72),
+        )
+        self.assertEqual(pediatric_mask.shape, (196, 72))
+        self.assertEqual(int(pediatric_mask.sum()), 65 * 72)
+        self.assertEqual(
+            pediatric_metadata["echoes"][0]["acquired_coordinate_count"],
+            65 * 72,
+        )
+
     def test_sequence_and_twix_echo_count_and_te_must_match(self) -> None:
         """Reject count or TE disagreement before reconstruction preparation."""
 
@@ -179,6 +211,14 @@ class GreGeometryAndEchoTests(unittest.TestCase):
         self.assertEqual(evidence["mdh_partition_count"], 72)
         self.assertTrue(evidence["mdh_partition_support_matches_sequence"])
 
+        pediatric_matrix, _ = _resolve_gre_twix_logical_matrix(
+            base_resolution=250,
+            header_partition_count=72,
+            mdh_partitions=np.repeat(np.arange(72), 65),
+            expected_matrix_ro_lin_par=(250, 196, 72),
+        )
+        self.assertEqual(pediatric_matrix, (250, 196, 72))
+
         with self.assertRaisesRegex(ValueError, "MDH PAR support"):
             _resolve_gre_twix_logical_matrix(
                 base_resolution=250,
@@ -187,8 +227,8 @@ class GreGeometryAndEchoTests(unittest.TestCase):
                 expected_matrix_ro_lin_par=(250, 250, 72),
             )
 
-    def test_sequence_validation_requires_authoritative_exact_geometry(self) -> None:
-        """Accept arbitrary positive echo counts while enforcing exact geometry."""
+    def test_sequence_validation_allows_sequence_defined_lin_geometry(self) -> None:
+        """Accept arbitrary echoes and sequence-defined LIN matrix/FOV."""
 
         sequence = SimpleNamespace(definitions={"FOV": [0.22, 0.22, 0.18], "TargetFOV": [9, 9, 9]})
         cfg = {
@@ -214,6 +254,21 @@ class GreGeometryAndEchoTests(unittest.TestCase):
         self.assertIs(received, cfg)
         self.assertEqual(image_lines.shape[-1], 1000)
         self.assertEqual(calibration_lines.shape[-1], 1000)
+
+        cfg.update(
+            {
+                "Ny": 196,
+                "Ny_meas": 65,
+                "FOVxyz_m": (0.22, 0.172, 0.18),
+            }
+        )
+        sequence.definitions = {
+            "FOV": [0.22, 0.172, 0.18],
+            "TargetFOV": [9, 9, 9],
+        }
+        _, received, _, _ = validate_gre_sequence(native, Path("gre.seq"))
+        self.assertEqual(received["Ny"], 196)
+
         sequence.definitions = {"TargetFOV": [0.22, 0.22, 0.18]}
         with self.assertRaisesRegex(ValueError, "authoritative FOV"):
             validate_gre_sequence(native, Path("gre.seq"))
@@ -263,12 +318,45 @@ class GreGeometryAndEchoTests(unittest.TestCase):
             np.testing.assert_array_equal(observed, expected)
 
         source = (TOOL_ROOT / "wave_retro_lr" / "gre.py").read_text(encoding="utf-8")
-        self.assertIn("raw_coefficients=raw_coefficients", source)
+        self.assertIn('"raw_coefficients": raw_coefficients', source)
         self.assertIn('"raw_coefficient_keys": ["a_raw", "b_raw", "c_raw"]', source)
+        self.assertIn('"full_range_plot_relative_to_output_root"', source)
 
 
 class GreCsmCommandAndOutputTests(unittest.TestCase):
     """Verify map resampling, BART commands, normalization, and orientation."""
+
+    def test_gre_writes_fixed_and_full_range_psf_coefficient_plots(self) -> None:
+        """Verify GRE mirrors the two accepted MPRAGE coefficient plots.
+
+        Returns:
+            None.
+        """
+        kx = np.arange(32, dtype=np.float64)
+        coefficients = (np.sin(kx / 5.0), np.cos(kx / 6.0), 0.01 * kx)
+        raw_coefficients = tuple(
+            coefficient + 0.05 * np.sin(kx) for coefficient in coefficients
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            normal = Path(folder) / "normal"
+            fixed_path, full_range_path = _write_gre_psf_coefficient_plots(
+                normal,
+                coefficients,
+                raw_coefficients,
+                {"coefficient_processing": "sine-line"},
+                {"kx_range": [4, 28], "fit_range_selection": "automatic"},
+            )
+
+            self.assertEqual(
+                fixed_path, (normal / PSF_COEFFICIENT_PLOT_NAME).resolve()
+            )
+            self.assertEqual(
+                full_range_path,
+                (normal / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME).resolve(),
+            )
+            for path in (fixed_path, full_range_path):
+                self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertGreater(path.stat().st_size, 1000)
 
     def test_lr_csm_fourier_resampling_is_rss_normalized(self) -> None:
         """Resample PE only at unchanged readout and normalize coil RSS."""

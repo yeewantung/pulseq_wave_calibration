@@ -6,17 +6,23 @@ GRE support is code- and unit-tested but must not be described as real-data
 validated until the user visually confirms the outputs. Start with
 `normal/bart_inputs/manifest.json` and verify a positive ordered echo list,
 `sequence_echo_count_match=true`, `sequence_echo_times_match=true`, identical
-`shared_calibration_id` values, PSF shapes `1000 x 250 x 72`, and shared
-selected lambda `0.015`. Echoes still require distinct PSF, measured-k-space,
-BART-command, and NIfTI records. For the LIN low-resolution case, require
-matrix `250 x 148 x 72`, crop `[51:199]`, and LR CSM shape
-`250 x 148 x 72 x coil x 1`.
+`shared_calibration_id` values, native PSF shapes
+`1000 x sequence-Ny x 72`, and shared selected lambda `0.015`. Echoes still
+require distinct PSF, measured-k-space, BART-command, and NIfTI records. The
+sequence-defined native LIN matrix and phase FOV must match the TWIX records.
+For the LIN low-resolution case, require the manifest-resolved centered crop
+nearest to `1.5 mm` with a LIN matrix divisible by four. This is matrix
+`250 x 148 x 72`, PSF shape `1000 x 148 x 72`, and crop `[51:199]` for the
+adult grid, or matrix `250 x 116 x 72`, PSF shape `1000 x 116 x 72`, and crop
+`[40:156]` for a `Ny=196`, `172 mm` pediatric phase FOV.
 
 `normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` must overlay raw `a/b/c`
-scatter samples on the processed curves. The shared coefficient archive stores
-processed keys `a/b/c` and raw keys `a_raw/b_raw/c_raw`. Reusing an older GRE
-preparation upgrades these fields from the retained projection caches and
-rewrites the plot.
+scatter samples on the processed curves using the fixed `[-2*pi, 2*pi]` range.
+The companion `normal/PSF_COEFFICIENTS_FULL_RANGE.png` must show the same data
+with independently autoscaled coefficient axes. The shared coefficient archive
+stores processed keys `a/b/c` and raw keys `a_raw/b_raw/c_raw`. Reusing an older
+GRE preparation upgrades these fields from the retained projection caches and
+rewrites both plots.
 
 For Pulseq 3D scans, `sKSpace.lPartitions` may remain `1` even when MDH PAR
 counters cover the full volume. The manifest records this raw tag but resolves

@@ -265,11 +265,14 @@ branch name `selected_wavelet`, and the absence of head masking.
 
 The adapter imports the reviewed upstream calibration implementation from the
 read-only `external/wave-gre-flow-comp` submodule at commit `d3772bd`. Logical
-`(RO, LIN, PAR)` corresponds to `(readout, phase, slice)`. TWIX and sequence
-must describe matrix `250 x 250 x 72`, nominal FOV `220 x 220 x 180 mm`, and
-Wave grid `1000 x 250 x 72`. Any positive echo count is accepted when Eco
-counters are consecutive from zero, ordered TE values agree, and every echo
-has the same complete residue-2 R3x1 Cartesian lattice.
+`(RO, LIN, PAR)` corresponds to `(readout, phase, slice)`. Readout and slice
+remain fixed at `250 x 72`, with readout FOV `220 mm`, slice FOV `180 mm`, and
+fourfold Wave readout oversampling. The sequence defines the LIN matrix and
+phase FOV, which must match TWIX. Supported examples include the adult
+`250 x 250 x 72`, `220 x 220 x 180 mm` grid and the pediatric
+`250 x 196 x 72`, `220 x 172 x 180 mm` grid. Any positive echo count is
+accepted when Eco counters are consecutive from zero, ordered TE values agree,
+and every echo has the same complete residue-2 R3x1 Cartesian lattice.
 
 One integrated-refscan `a/b/c` calibration solution is shared by every echo;
 later echoes are never independently refit. Each echo retains its own
@@ -277,6 +280,13 @@ sequence-derived trajectory and receives its own calibrated PSF. Native CSMs
 are estimated once and shared. Automatic `sine-line` is the default; the same
 manual kx-bound override and explicit `smooth` fallback described for MPRAGE
 are available.
+
+Normal GRE preparation writes the same two shared-coefficient diagnostics as
+MPRAGE under `OUTPUT_ROOT/normal`: the fixed `[-2*pi, 2*pi]`
+`PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` and the independently autoscaled
+`PSF_COEFFICIENTS_FULL_RANGE.png`. Retrospective preparation reuses this normal
+calibration and backfills both plots when compatible prepared inputs are
+reused; it does not generate redundant per-case copies.
 
 ### 1. Normal reconstruction
 
@@ -319,13 +329,15 @@ This creates two retrospective cases, each with `fista_r0` and
 
 | Case | Matrix | Construction |
 | --- | --- | --- |
-| `native_r3x2` | `250 x 250 x 72` | native measured data with an R3x2 Cartesian mask |
-| `lin_low_resolution_r3x2` | `250 x 148 x 72` | exact centered LIN crop `[51:199]` followed by the R3x2 mask |
+| `native_r3x2` | `250 x sequence-Ny x 72` | native measured data with an R3x2 Cartesian mask |
+| `lin_low_resolution_r3x2` | `250 x target-Ny x 72` | centered LIN crop nearest to 1.5 mm and divisible by four, followed by the R3x2 mask |
 
 All retrospective k-space comes from direct measured-Wave cropping and pure
 Cartesian masking, never from no-Wave forward simulation. The LIN-low CSM is
 derived from the accepted native map by centered Fourier PE resampling at
 unchanged FOV followed by coil-RSS normalization; readout maps are not resized.
+For the adult grid, `target-Ny=148` and the crop is `[51:199]`; for the
+`Ny=196`, `172 mm` pediatric grid, `target-Ny=116` and the crop is `[40:156]`.
 
 ### 3. NIfTI collection
 

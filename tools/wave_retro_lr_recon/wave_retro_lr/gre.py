@@ -14,7 +14,13 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .bart_io import create_cfl, logical_array_sha256, open_cfl, read_shape, sha256_file
-from .psf import evaluate_calibrated_psf, write_psf_coefficient_plot
+from .core import PE_MATRIX_MULTIPLE, center_crop_bounds
+from .psf import (
+    PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
+    PSF_COEFFICIENT_PLOT_NAME,
+    evaluate_calibrated_psf,
+    write_psf_coefficient_plot,
+)
 from .retrospective import resample_sensitivity_maps
 from .sampling import pure_cartesian_image_lattice_mask, validate_pure_cartesian_image_lattice
 
@@ -23,6 +29,7 @@ NATIVE_FOV_MM_RO_LIN_PAR = (220.0, 220.0, 180.0)
 EXTENDED_READOUT = 1000
 VIRTUAL_COILS = 12
 LOW_RESOLUTION_LIN_BOUNDS = (51, 199)
+LOW_RESOLUTION_LIN_MM = 1.5
 WAVELET_SELECTION_BASENAME = "wavelet_shared_echo_selection.json"
 WAVELET_SELECTION_SHA256 = "0c43a9d31672e90ad851decfca66c253c362cbd67ca5ba97c4fd8ef1f5a61afd"
 GRE_GEOMETRY_IDS = (
@@ -45,7 +52,9 @@ class GreCase:
     """Describe one measured GRE geometry and pure Cartesian image lattice."""
 
     case_id: str
+    source_matrix_ro_lin_par: tuple[int, int, int]
     matrix_ro_lin_par: tuple[int, int, int]
+    fov_mm_ro_lin_par: tuple[float, float, float]
     crop_bounds_from_native: tuple[tuple[int, int], tuple[int, int], tuple[int, int]]
     acceleration_lin_par: tuple[int, int]
     residue_lin_par: tuple[int, int]
@@ -62,7 +71,7 @@ class GreCase:
         return tuple(
             fov / matrix
             for fov, matrix in zip(
-                NATIVE_FOV_MM_RO_LIN_PAR, self.matrix_ro_lin_par, strict=True
+                self.fov_mm_ro_lin_par, self.matrix_ro_lin_par, strict=True
             )
         )
 
@@ -76,7 +85,7 @@ class GreCase:
         return {
             "case_id": self.case_id,
             "matrix_ro_lin_par": list(self.matrix_ro_lin_par),
-            "fov_mm_ro_lin_par": list(NATIVE_FOV_MM_RO_LIN_PAR),
+            "fov_mm_ro_lin_par": list(self.fov_mm_ro_lin_par),
             "voxel_mm_ro_lin_par": list(self.voxel_mm_ro_lin_par),
             "crop_bounds_from_native": [list(value) for value in self.crop_bounds_from_native],
             "acceleration_lin_par": list(self.acceleration_lin_par),
@@ -203,36 +212,74 @@ def gre_wavelet_selection_provenance(
     }
 
 
-def gre_cases() -> dict[str, GreCase]:
-    """Return the immutable normal and retrospective GRE case definitions.
+def gre_cases(
+    native_matrix_ro_lin_par: Sequence[int] = NATIVE_MATRIX_RO_LIN_PAR,
+    native_fov_mm_ro_lin_par: Sequence[float] = NATIVE_FOV_MM_RO_LIN_PAR,
+) -> dict[str, GreCase]:
+    """Resolve normal and retrospective GRE cases for one native geometry.
+
+    Args:
+        native_matrix_ro_lin_par: Sequence-derived native logical matrix.
+        native_fov_mm_ro_lin_par: Sequence-derived native logical FOV in
+            millimeters.
 
     Returns:
         Cases keyed by their stable output-directory identifiers.
+
+    Raises:
+        ValueError: If the fixed readout/slice contract or the requested
+            LIN-low-resolution crop cannot be represented.
     """
 
+    matrix = tuple(int(value) for value in native_matrix_ro_lin_par)
+    fov = tuple(float(value) for value in native_fov_mm_ro_lin_par)
+    if len(matrix) != 3 or matrix[0] != 250 or matrix[2] != 72 or matrix[1] <= 0:
+        raise ValueError(
+            "GRE native matrix must have readout 250, slice 72, and a positive LIN size."
+        )
+    if len(fov) != 3 or not np.isfinite(fov).all() or any(value <= 0 for value in fov):
+        raise ValueError("GRE native FOV must contain three positive finite values.")
+    ideal_low_lin = fov[1] / LOW_RESOLUTION_LIN_MM
+    low_lin = PE_MATRIX_MULTIPLE * int(
+        math.floor(ideal_low_lin / PE_MATRIX_MULTIPLE + 0.5)
+    )
+    if low_lin <= 0 or low_lin >= matrix[1]:
+        raise ValueError(
+            "GRE LIN-low-resolution request must resolve to a positive grid "
+            "smaller than the native LIN matrix."
+        )
+    low_lin_bounds = center_crop_bounds(matrix[1], low_lin)
+    low_lin_residue = (2 - low_lin_bounds[0]) % 3
+    native_bounds = ((0, matrix[0]), (0, matrix[1]), (0, matrix[2]))
     return {
         "native_r3x1": GreCase(
             "native_r3x1",
-            NATIVE_MATRIX_RO_LIN_PAR,
-            ((0, 250), (0, 250), (0, 72)),
+            matrix,
+            matrix,
+            fov,
+            native_bounds,
             (3, 1),
             (2, 0),
             resolve_gre_wavelet_lambda("native_r3x1"),
         ),
         "native_r3x2": GreCase(
             "native_r3x2",
-            NATIVE_MATRIX_RO_LIN_PAR,
-            ((0, 250), (0, 250), (0, 72)),
+            matrix,
+            matrix,
+            fov,
+            native_bounds,
             (3, 2),
             (2, 0),
             resolve_gre_wavelet_lambda("native_r3x2"),
         ),
         "lin_low_resolution_r3x2": GreCase(
             "lin_low_resolution_r3x2",
-            (250, 148, 72),
-            ((0, 250), LOW_RESOLUTION_LIN_BOUNDS, (0, 72)),
+            matrix,
+            (matrix[0], low_lin, matrix[2]),
+            fov,
+            ((0, matrix[0]), low_lin_bounds, (0, matrix[2])),
             (3, 2),
-            (2, 0),
+            (low_lin_residue, 0),
             resolve_gre_wavelet_lambda("lin_low_resolution_r3x2"),
         ),
     }
@@ -415,6 +462,7 @@ def validate_gre_echo_sampling(
     echoes: Sequence[Any],
     *,
     echo_times_s: Sequence[Any],
+    matrix_lin_par: Sequence[int] = NATIVE_MATRIX_RO_LIN_PAR[1:],
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Validate identical measured native R3x1 image lattices for all echoes.
 
@@ -423,6 +471,7 @@ def validate_gre_echo_sampling(
         partitions: TWIX PAR counters aligned with ``lines``.
         echoes: Zero-based TWIX Eco counters aligned with ``lines``.
         echo_times_s: Ordered TWIX echo times in seconds.
+        matrix_lin_par: Sequence-derived native LIN/PAR matrix.
 
     Returns:
         Native boolean mask and exact pure-lattice/echo metadata.
@@ -449,8 +498,11 @@ def validate_gre_echo_sampling(
     if not np.isfinite(times).all() or np.any(times <= 0):
         raise ValueError("TWIX echo times must be positive and finite.")
 
+    matrix = tuple(int(value) for value in matrix_lin_par)
+    if len(matrix) != 2 or any(value <= 0 for value in matrix):
+        raise ValueError("GRE LIN/PAR matrix must contain two positive dimensions.")
     expected_mask, sampling = pure_cartesian_image_lattice_mask(
-        (250, 72), acceleration_lin_par=(3, 1), residue_lin_par=(2, 0)
+        matrix, acceleration_lin_par=(3, 1), residue_lin_par=(2, 0)
     )
     expected_coordinates = set(zip(*np.nonzero(expected_mask), strict=True))
     echo_records = []
@@ -528,7 +580,7 @@ def _resolve_gre_twix_logical_matrix(
     expected = tuple(int(value) for value in expected_matrix_ro_lin_par)
     if len(expected) != 3 or any(value <= 0 for value in expected):
         raise ValueError("GRE sequence matrix must contain three positive dimensions.")
-    if int(base_resolution) != expected[0] or expected[1] != expected[0]:
+    if int(base_resolution) != expected[0]:
         raise ValueError(
             f"TWIX base resolution {base_resolution} does not match sequence matrix {expected}."
         )
@@ -558,6 +610,7 @@ def inspect_gre_twix(
     *,
     expected_echo_times_s: Sequence[Any],
     expected_matrix_ro_lin_par: Sequence[int],
+    expected_fov_mm_ro_lin_par: Sequence[float],
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Validate measured GRE TWIX geometry, echo order, and image sampling.
 
@@ -569,6 +622,8 @@ def inspect_gre_twix(
         twix_path: Measured Wave-GRE TWIX file.
         expected_echo_times_s: Ordered TE values derived from the sequence.
         expected_matrix_ro_lin_par: Sequence-derived logical matrix.
+        expected_fov_mm_ro_lin_par: Sequence-derived logical FOV in
+            millimeters.
 
     Returns:
         Native mask and JSON validation metadata.
@@ -609,8 +664,13 @@ def inspect_gre_twix(
             ("sSliceArray", "asSlice", "0", "dThickness"),
         )
     )
-    if not np.allclose(fov, NATIVE_FOV_MM_RO_LIN_PAR, rtol=0.0, atol=1e-6):
-        raise ValueError(f"TWIX nominal FOV {fov} does not match {NATIVE_FOV_MM_RO_LIN_PAR} mm.")
+    expected_fov = tuple(float(value) for value in expected_fov_mm_ro_lin_par)
+    if len(expected_fov) != 3 or not np.allclose(
+        fov, expected_fov, rtol=0.0, atol=1e-6
+    ):
+        raise ValueError(
+            f"TWIX nominal FOV {fov} does not match sequence FOV {expected_fov} mm."
+        )
     raw_echoes = np.asarray(image.Eco, dtype=np.float64)
     if raw_echoes.ndim != 1 or raw_echoes.size == 0 or not np.isfinite(raw_echoes).all():
         raise ValueError("TWIX Eco counters must be a populated finite vector.")
@@ -627,6 +687,7 @@ def inspect_gre_twix(
         image.Par,
         image.Eco,
         echo_times_s=validated_echo_times,
+        matrix_lin_par=logical_matrix[1:],
     )
     return mask, {
         "measurement_index": index,
@@ -661,20 +722,33 @@ def validate_gre_sequence(native: Any, sequence_path: str | Path) -> tuple[Any, 
     cfg = native._derive_gre_config(sequence, yflip_override=None, zflip_override=None)
     required = {
         "Nx": 250,
-        "Ny": 250,
         "Nz": 72,
         "Nx_os": 1000,
         "orientation": "TRA",
         "Ry": 3,
         "Rz": 1,
-        "Ny_meas": 83,
         "Nz_meas": 72,
     }
     for key, expected in required.items():
         if cfg[key] != expected:
             raise ValueError(f"Sequence {key}={cfg[key]!r}; expected {expected!r}.")
-    if not np.allclose(cfg["FOVxyz_m"], np.asarray(NATIVE_FOV_MM_RO_LIN_PAR) / 1000.0, rtol=0.0, atol=1e-12):
-        raise ValueError("Sequence FOV does not match 220x220x180 mm.")
+    ny = int(cfg["Ny"])
+    if ny <= 0:
+        raise ValueError("Sequence Ny must be positive.")
+    expected_measured_lines = len(range(2, ny, 3))
+    if int(cfg["Ny_meas"]) != expected_measured_lines:
+        raise ValueError(
+            f"Sequence Ny_meas={cfg['Ny_meas']!r}; expected {expected_measured_lines} "
+            f"for the residue-2 R3 lattice on Ny={ny}."
+        )
+    fov = np.asarray(cfg["FOVxyz_m"], dtype=np.float64)
+    if fov.shape != (3,) or not np.isfinite(fov).all() or np.any(fov <= 0):
+        raise ValueError("Sequence FOV must contain three positive finite values.")
+    fixed_fov_m = np.asarray(NATIVE_FOV_MM_RO_LIN_PAR, dtype=np.float64) / 1000.0
+    if not np.allclose(fov[[0, 2]], fixed_fov_m[[0, 2]], rtol=0.0, atol=1e-12):
+        raise ValueError(
+            "Sequence readout/slice FOV must remain 220x180 mm; phase FOV may vary."
+        )
     sequence_times = np.asarray(cfg["TE_s"], dtype=np.float64)
     if int(cfg["Necho"]) <= 0 or sequence_times.ndim != 1:
         raise ValueError("GRE sequence must define one or more ordered echoes.")
@@ -689,7 +763,12 @@ def validate_gre_sequence(native: Any, sequence_path: str | Path) -> tuple[Any, 
 
 
 def _embed_measured_echoes(
-    data: Any, mask: np.ndarray, *, echo_count: int, coil_count: int
+    data: Any,
+    mask: np.ndarray,
+    *,
+    echo_count: int,
+    coil_count: int,
+    matrix_ro_lin_par: Sequence[int] = NATIVE_MATRIX_RO_LIN_PAR,
 ) -> Any:
     """Embed mapVBVD multi-echo payloads on the exact native logical grid.
 
@@ -698,13 +777,20 @@ def _embed_measured_echoes(
         mask: Validated native image sampling mask.
         echo_count: Positive sequence/TWIX-matched echo count.
         coil_count: Expected coil count after any prior compression.
+        matrix_ro_lin_par: Sequence-derived native logical matrix.
 
     Returns:
-        Complex Torch tensor with shape ``(1000,250,72,echo_count,coil_count)``.
+        Complex Torch tensor on the extended-readout native LIN/PAR grid.
     """
 
     import torch
 
+    matrix = tuple(int(value) for value in matrix_ro_lin_par)
+    if len(matrix) != 3 or matrix[0] != 250 or any(value <= 0 for value in matrix):
+        raise ValueError("GRE native matrix must use the supported 250-point readout.")
+    _, nlin, npar = matrix
+    if np.asarray(mask).shape != (nlin, npar):
+        raise ValueError("GRE sampling mask does not match the native LIN/PAR matrix.")
     values = data if torch.is_tensor(data) else torch.as_tensor(data)
     if (
         values.ndim != 5
@@ -712,13 +798,16 @@ def _embed_measured_echoes(
         or values.shape[3] != echo_count
     ):
         raise ValueError("GRE image payload must have RO/LIN/PAR/ECHO/COIL dimensions.")
-    if values.shape[-1] != coil_count or values.shape[1] > 250 or values.shape[2] > 72:
+    if values.shape[-1] != coil_count or values.shape[1] > nlin or values.shape[2] > npar:
         raise ValueError("GRE image payload geometry or coil count is incompatible with preparation.")
     full = torch.zeros(
-        (1000, 250, 72, echo_count, coil_count), dtype=torch.complex64
+        (EXTENDED_READOUT, nlin, npar, echo_count, coil_count),
+        dtype=torch.complex64,
     )
     full[:, : values.shape[1], : values.shape[2], :, :] = values.to(torch.complex64)
-    logical_mask = torch.from_numpy(np.asarray(mask, dtype=bool)).view(1, 250, 72, 1, 1)
+    logical_mask = torch.from_numpy(np.asarray(mask, dtype=bool)).view(
+        1, nlin, npar, 1, 1
+    )
     # Bound support validation because the physical-coil full grid is large.
     for start in range(0, EXTENDED_READOUT, 8):
         outside = full[start : start + 8].masked_select(~logical_mask)
@@ -862,10 +951,16 @@ def _write_echo_wave(
     """
 
     source = np.asarray(values)
-    if source.ndim != 4 or source.shape[:3] != (1000, 250, 72):
+    source_matrix = case.source_matrix_ro_lin_par
+    expected_source_shape = (
+        EXTENDED_READOUT,
+        source_matrix[1],
+        source_matrix[2],
+    )
+    if source.ndim != 4 or source.shape[:3] != expected_source_shape:
         raise ValueError("Native measured-Wave echo has an unexpected shape.")
     ro_bounds, lin_bounds, par_bounds = case.crop_bounds_from_native
-    if ro_bounds != (0, NATIVE_MATRIX_RO_LIN_PAR[0]):
+    if ro_bounds != (0, source_matrix[0]):
         raise ValueError("GRE retrospective cases must retain the full image readout FOV.")
     target_shape = (
         1000,
@@ -1075,6 +1170,54 @@ def _recover_legacy_raw_psf_coefficients(
     )
 
 
+def _write_gre_psf_coefficient_plots(
+    normal_directory: Path,
+    coefficients: tuple[np.ndarray, np.ndarray, np.ndarray],
+    raw_coefficients: tuple[np.ndarray, np.ndarray, np.ndarray],
+    settings: Mapping[str, Any],
+    processing_diagnostics: Mapping[str, Any],
+) -> tuple[Path, Path]:
+    """Write fixed-range and full-range GRE coefficient diagnostics.
+
+    Args:
+        normal_directory: Dataset ``normal`` output directory.
+        coefficients: Processed shared ``a``, ``b``, and ``c`` vectors.
+        raw_coefficients: Corresponding measured coefficient samples.
+        settings: Normalized coefficient-processing request.
+        processing_diagnostics: Accepted upstream fitting diagnostics.
+
+    Returns:
+        Fixed-range and full-range diagnostic PNG paths, in that order.
+    """
+
+    selected_range = processing_diagnostics.get("kx_range")
+    fit_kx_range = (
+        None
+        if selected_range is None
+        else (int(selected_range[0]), int(selected_range[1]))
+    )
+    common_arguments = {
+        "processing": str(settings["coefficient_processing"]),
+        "fit_kx_range": fit_kx_range,
+        "fit_range_selection": processing_diagnostics.get("fit_range_selection"),
+        "raw_coefficients": raw_coefficients,
+    }
+    fixed_range_path = write_psf_coefficient_plot(
+        *coefficients,
+        normal_directory / PSF_COEFFICIENT_PLOT_NAME,
+        **common_arguments,
+    )
+    full_range_path = write_psf_coefficient_plot(
+        *coefficients,
+        normal_directory / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
+        **common_arguments,
+        full_range=True,
+    )
+    print(f"PSF coefficient visual-assessment plot: {fixed_range_path}")
+    print(f"PSF coefficient full-range plot: {full_range_path}")
+    return fixed_range_path, full_range_path
+
+
 def prepare_normal_gre(
     twix: str | Path,
     output_root: str | Path,
@@ -1132,17 +1275,12 @@ def prepare_normal_gre(
         processing = existing.get("psf_calibration", {}).get(
             "processing_diagnostics", {}
         )
-        write_psf_coefficient_plot(
-            *coefficients,
-            destination.parent / "PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png",
-            processing=str(settings["coefficient_processing"]),
-            fit_kx_range=(
-                None
-                if processing.get("kx_range") is None
-                else tuple(processing["kx_range"])
-            ),
-            fit_range_selection=processing.get("fit_range_selection"),
-            raw_coefficients=raw_coefficients,
+        _write_gre_psf_coefficient_plots(
+            destination.parent,
+            coefficients,
+            raw_coefficients,
+            settings,
+            processing,
         )
         calibration_record = existing.setdefault("psf_calibration", {})
         calibration_record.update(
@@ -1151,7 +1289,10 @@ def prepare_normal_gre(
                 "processed_coefficient_keys": ["a", "b", "c"],
                 "raw_coefficient_keys": ["a_raw", "b_raw", "c_raw"],
                 "visual_assessment_plot_relative_to_output_root": (
-                    "normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
+                    f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+                ),
+                "full_range_plot_relative_to_output_root": (
+                    f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
                 ),
             }
         )
@@ -1170,12 +1311,18 @@ def prepare_normal_gre(
 
     native = load_wave_gre_helpers()
     _, cfg, image_lines, calibration_lines = validate_gre_sequence(native, sequence_path)
+    native_matrix = (int(cfg["Nx"]), int(cfg["Ny"]), int(cfg["Nz"]))
+    native_fov_mm = tuple(
+        float(value) * 1000.0 for value in np.asarray(cfg["FOVxyz_m"])
+    )
+    cases = gre_cases(native_matrix, native_fov_mm)
     echo_count = int(cfg["Necho"])
     echo_times = tuple(float(value) for value in cfg["TE_s"])
     source_mask, twix_metadata = inspect_gre_twix(
         twix_path,
         expected_echo_times_s=echo_times,
-        expected_matrix_ro_lin_par=(int(cfg["Nx"]), int(cfg["Ny"]), int(cfg["Nz"])),
+        expected_matrix_ro_lin_par=native_matrix,
+        expected_fov_mm_ro_lin_par=native_fov_mm,
     )
     reference = native._check_integrated_refscan_shape(
         native.load_ref(str(twix_path)),
@@ -1189,6 +1336,8 @@ def prepare_normal_gre(
     # The set-4 integrated ACS determines one coil basis and one native map input.
     nacs = int(cfg["Nacs"])
     os_factor = int(cfg["os_factor"])
+    if nacs <= 0 or nacs > min(native_matrix[1:]):
+        raise ValueError("GRE ACS matrix does not fit within the native LIN/PAR grid.")
     integrated_acs = reference[:, :nacs, :nacs, int(cfg["ACSSetID"]), :]
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
         integrated_acs, ncc=VIRTUAL_COILS, acs=nacs, x_step=os_factor
@@ -1209,16 +1358,22 @@ def prepare_normal_gre(
         source_mask,
         echo_count=echo_count,
         coil_count=VIRTUAL_COILS,
+        matrix_ro_lin_par=native_matrix,
     )
     del compressed_compact
     compressed_acs = native.apply_cc_coillast_torch(integrated_acs, basis, x_chunk=8)[::os_factor]
-    if tuple(compressed_acs.shape) != (250, nacs, nacs, VIRTUAL_COILS):
+    if tuple(compressed_acs.shape) != (
+        native_matrix[0],
+        nacs,
+        nacs,
+        VIRTUAL_COILS,
+    ):
         raise ValueError("Compressed GRE ACS has an unexpected shape.")
     if not torch.isfinite(compressed).all() or not torch.isfinite(compressed_acs).all():
         raise ValueError("Compressed GRE image or ACS contains non-finite values.")
-    calibration = torch.zeros((250, 250, 72, VIRTUAL_COILS), dtype=torch.complex64)
-    lin_start = 250 // 2 - nacs // 2
-    par_start = 72 // 2 - nacs // 2
+    calibration = torch.zeros((*native_matrix, VIRTUAL_COILS), dtype=torch.complex64)
+    lin_start = native_matrix[1] // 2 - nacs // 2
+    par_start = native_matrix[2] // 2 - nacs // 2
     calibration[:, lin_start : lin_start + nacs, par_start : par_start + nacs, :] = compressed_acs
 
     # Fit a/b/c once, then combine that identity with every echo trajectory.
@@ -1248,20 +1403,21 @@ def prepare_normal_gre(
     raw_coefficients = _coefficient_arrays((a_raw, b_raw, c_raw))
     calibration_id = _shared_calibration_id(*coefficients)
     trajectories = native._echo_theoretical_wave_trajectories(image_lines, cfg)
-    psfs = _evaluate_echo_psfs(trajectories, coefficients, cfg, gre_cases()["native_r3x1"])
+    psfs = _evaluate_echo_psfs(
+        trajectories, coefficients, cfg, cases["native_r3x1"]
+    )
 
     _write_shared_psf_coefficients(
         destination / "shared_psf_coefficients.npz",
         coefficients,
         raw_coefficients,
     )
-    write_psf_coefficient_plot(
-        *coefficients,
-        destination.parent / "PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png",
-        processing=str(settings["coefficient_processing"]),
-        fit_kx_range=None if processing.get("kx_range") is None else tuple(processing["kx_range"]),
-        fit_range_selection=processing.get("fit_range_selection"),
-        raw_coefficients=raw_coefficients,
+    _write_gre_psf_coefficient_plots(
+        destination.parent,
+        coefficients,
+        raw_coefficients,
+        settings,
+        processing,
     )
     mask_path = destination / "sampling_mask.npy"
     np.save(mask_path, source_mask, allow_pickle=False)
@@ -1299,7 +1455,7 @@ def prepare_normal_gre(
                 "psf_shape": list(read_shape(destination / psf_name)),
                 "sequence_trajectory": trajectory_name,
                 "shared_calibration_id": calibration_id,
-                "selected_wavelet_lambda": gre_cases()["native_r3x1"].shared_wavelet_lambda,
+                "selected_wavelet_lambda": cases["native_r3x1"].shared_wavelet_lambda,
             }
         )
 
@@ -1312,7 +1468,7 @@ def prepare_normal_gre(
             "sequence": _file_identity(sequence_path, include_hash=True),
             "pinned_wave_gre_helper": "external/wave-gre-flow-comp@d3772bda7077da9af16e776fce148ba2cec8fdcf",
         },
-        "geometry": gre_cases()["native_r3x1"].to_json(),
+        "geometry": cases["native_r3x1"].to_json(),
         "twix_validation": twix_metadata,
         "sampling": {**twix_metadata["sampling"], "path": str(mask_path)},
         "coil_compression": {
@@ -1335,7 +1491,10 @@ def prepare_normal_gre(
             "processed_coefficient_keys": ["a", "b", "c"],
             "raw_coefficient_keys": ["a_raw", "b_raw", "c_raw"],
             "visual_assessment_plot_relative_to_output_root": (
-                "normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
+                f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+            ),
+            "full_range_plot_relative_to_output_root": (
+                f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
             ),
             "echo_specific_component": "Pulseq sequence trajectory",
         },
@@ -1426,6 +1585,18 @@ def prepare_retro_gre(
     _, cfg, _, _ = validate_gre_sequence(native, Path(sequence).expanduser().resolve())
     if int(cfg["Necho"]) != echo_count:
         raise ValueError("Normal manifest and sequence echo counts disagree.")
+    geometry = normal.get("geometry", {})
+    native_matrix = tuple(int(value) for value in geometry["matrix_ro_lin_par"])
+    native_fov_mm = tuple(float(value) for value in geometry["fov_mm_ro_lin_par"])
+    sequence_matrix = (int(cfg["Nx"]), int(cfg["Ny"]), int(cfg["Nz"]))
+    sequence_fov_mm = tuple(
+        float(value) * 1000.0 for value in np.asarray(cfg["FOVxyz_m"])
+    )
+    if sequence_matrix != native_matrix or not np.allclose(
+        sequence_fov_mm, native_fov_mm, rtol=0.0, atol=1e-9
+    ):
+        raise ValueError("Normal manifest and sequence GRE geometry disagree.")
+    cases = gre_cases(native_matrix, native_fov_mm)
     echo_times = validate_gre_echo_consistency(
         cfg["TE_s"], [echo["te_s"] for echo in normal_echoes]
     )
@@ -1435,7 +1606,7 @@ def prepare_retro_gre(
 
     results = []
     for case_id in ("native_r3x2", "lin_low_resolution_r3x2"):
-        case = gre_cases()[case_id]
+        case = cases[case_id]
         inputs = root / RETRO_RELATIVE / case_id / "bart_inputs"
         manifest_path = inputs / "manifest.json"
         if manifest_path.is_file():
@@ -1563,13 +1734,19 @@ def prepare_retro_gre_sensitivity_maps(output_root: str | Path) -> None:
     source = root / NORMAL_OUTPUT_RELATIVE / "coil_sens"
     read_shape(source)
     inputs = root / RETRO_RELATIVE / "lin_low_resolution_r3x2" / "bart_inputs"
+    manifest = _load_json(inputs / "manifest.json")
+    case = manifest.get("case", {})
+    target_matrix = tuple(int(value) for value in case["matrix_ro_lin_par"])
+    if len(target_matrix) != 3:
+        raise ValueError("LIN-low-resolution GRE manifest has an invalid matrix.")
     target = inputs / "coil_sens"
     if target.with_suffix(".hdr").is_file() and target.with_suffix(".cfl").is_file():
-        if read_shape(target)[:3] != (250, 148, 72):
+        if read_shape(target)[:3] != target_matrix:
             raise ValueError("Existing low-resolution GRE sensitivity maps have the wrong shape.")
         return
-    resample_sensitivity_maps(source, target, target_lin_par=(148, 72))
-    manifest = _load_json(inputs / "manifest.json")
+    resample_sensitivity_maps(
+        source, target, target_lin_par=target_matrix[1:]
+    )
     manifest["coil_sens"] = "coil_sens"
     manifest["coil_sens_shape"] = list(read_shape(target))
     manifest["coil_sens_source"] = str(source)
