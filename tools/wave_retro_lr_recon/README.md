@@ -27,7 +27,7 @@ documented in
 The completed synthetic two-echo GRE native-R3x3 coarse-to-fine sweep,
 shared-lambda decision, presentation contract, and measured-reconstruction
 handoff boundary are documented in
-[`gre_native_r3x3_sweep.md`](../synthetic_wave_for_reg_baseline/docs/gre_native_r3x3_sweep.md).
+[`synthetic_gre_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_gre_regularization_pipeline.md).
 
 ## MPRAGE workflow
 
@@ -194,9 +194,8 @@ retrospective cases:
 | `native_r3x3` | source resolution | `-w -f -r 0` | `-w -f -r 4.5e-2` |
 
 These values come from the corrected pure-image-lattice synthetic rerun and
-explicit visual/metric review. The hash-bound selection manifest has SHA-256
-`07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6`;
-historical ACS-union selections are not carried forward.
+explicit visual/metric review. The selection remains hash-bound in its source
+manifest; historical ACS-union selections are not carried forward.
 
 Measured-Wave LR k-space is created by direct centered LIN/PAR cropping,
 preserving the measured LIN residue and selecting factor two on PAR. It does
@@ -246,14 +245,11 @@ R3x3 lattice is an exact subset of available samples. PAR uses the
 center-aligned residue `(Npar // 2) mod 3`. Consequently, the exact mask count
 and hash are geometry- and source-residue-specific and are recorded in each
 case manifest. For the reviewed synthetic `256 x 256` grid with residue
-`(1, 2)`, they remain 7,225 coordinates and
-`36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3`.
-It reuses the native calibrated PSF and CSM without changing geometry, keeps
+`(1, 2)`, the count remains 7,225 coordinates. It reuses the native calibrated
+PSF and CSM without changing geometry, keeps
 calibration k-space separate, and writes only
 `retro/native_r3x3/{bart_inputs,bart_output,nifti}`. The two reconstruction
-branches are FISTA-r0 and the explicitly reviewed Wavelet lambda `4.5e-2`;
-the corresponding selection-manifest SHA-256 is
-`07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d`.
+branches are FISTA-r0 and the explicitly reviewed Wavelet lambda `4.5e-2`.
 CPU remains the default and `-g` selects GPU BART.
 
 Automatic `sine-line` PSF coefficient processing is already the default, so
@@ -391,10 +387,9 @@ scripts/sample_gre_normal_recon.sh \
 
 Omit `-g` for CPU BART Wave. Every echo is reconstructed independently in both
 `fista_r0` (`-w -f -r 0`) and `selected_wavelet` (`-w -f -r 0.015`) branches.
-The shared Wavelet value comes from `wavelet_shared_echo_selection.json`, with
-SHA-256
-`0c43a9d31672e90ad851decfca66c253c362cbd67ca5ba97c4fd8ef1f5a61afd`.
-There is no joint-echo or inferred LLR reconstruction.
+The shared Wavelet value comes from the hash-bound
+`wavelet_shared_echo_selection.json`. There is no joint-echo or inferred LLR
+reconstruction.
 
 The converter restores BART output using
 `amplitude = kspace_norm * sqrt(extended_RO * LIN * PAR)` and

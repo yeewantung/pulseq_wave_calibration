@@ -1,5 +1,19 @@
 # Wave reconstruction troubleshooting
 
+## Frozen provenance identifiers
+
+These values are needed only for auditing historical selections and should not
+be copied into normal reconstruction commands:
+
+| Record | SHA-256 |
+| --- | --- |
+| Corrected five-case MPRAGE selection manifest | `07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6` |
+| Native-R3x3 logical mask on the reviewed `256 x 256` grid, residue `(1, 2)` | `36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3` |
+| Native-R3x3 MPRAGE selection manifest | `07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d` |
+| Shared-echo GRE Wavelet selection manifest | `0c43a9d31672e90ad851decfca66c253c362cbd67ca5ba97c4fd8ef1f5a61afd` |
+
+Current output manifests remain authoritative for individual artifact hashes.
+
 ## Single- and multi-echo GRE checks
 
 GRE support is code- and unit-tested but must not be described as real-data
