@@ -259,6 +259,8 @@ def _prior_reusable(
     ):
         return None
     records = [prior["metrics_csv"], prior["center_slices_manifest"]]
+    if "metric_curve" in prior:
+        records.append(prior["metric_curve"])
     for entry in prior.get("entries", []):
         records.append(entry["nifti"])
         records.extend(entry["center_slices"].values())

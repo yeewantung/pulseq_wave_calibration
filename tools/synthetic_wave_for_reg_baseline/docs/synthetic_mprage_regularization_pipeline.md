@@ -270,17 +270,14 @@ metric rows, and hash-backed manifests. NIfTIs retain raw reconstructed
 intensity and undergo no spatial resampling. TIFFs use the evaluation scale and
 shared reference window.
 
-A reduced slide-only package may intentionally omit controls and references.
-In that case it must remain a derived deliverable: retain only manifest-bound
-selected NIfTIs/TIFFs, include the relevant positive-lambda family metrics and
-curve, identify the selected point, state `baselines_exported=false`, and
-record hashes in its own presentation manifest. It must not replace the sweep,
-evaluation, shortlist, or selection manifests.
-
-The completed native-R3x3 reduced package follows this convention: one
-Wavelet-`0.045` NIfTI, three orthogonal center-slice TIFFs, all 16 positive-
-lambda Wavelet rows from the aggregated fine evaluation, and one metric curve
-with `0.045` marked. It contains no FISTA, direct-FFT, or LLR deliverable.
+The completed native-R3x3 package contains the FISTA-lambda-zero control and
+the selected Wavelet-`0.045` reconstruction: two canonical-RAS magnitude
+NIfTIs and six orthogonal center-slice TIFFs. Its CSV contains the FISTA row
+plus all 16 positive-lambda Wavelet rows from the aggregated fine evaluation.
+The metric curve shows FISTA as a horizontal control level and marks the
+selected Wavelet point. Direct-FFT and LLR artifacts are not presentation
+deliverables. All files are hash-bound in the corrected presentation manifest;
+the sweep, evaluation, shortlist, and selection manifests remain unchanged.
 
 ## Reviewed MPRAGE decisions
 
@@ -315,11 +312,14 @@ k-space, separate calibration k-space, native CSM, and calibrated PSF. The
 user-facing scripts preserve an unregularized FISTA-r0 branch beside the
 selected Wavelet branch:
 
-MPRAGE PSF coefficient processing defaults to automatic `sine-line`. Existing
-normal inputs are reused only when their source and coefficient-processing
-metadata match exactly; changing the mode or reviewed fit bounds requires a
-new compatible preparation. This measured-data calibration policy is
-independent of the theoretical PSF used by the synthetic sweep.
+MPRAGE PSF coefficient processing defaults to automatic `sine-line`. New or
+replacement normal preparation remains strictly bound to source,
+coefficient-processing, fit-bound, and implementation metadata. Retrospective
+preparation may reuse source-matched legacy core artifacts without recalibration
+after geometry and finite-value validation; it writes a separate reuse
+attestation and never rewrites or relabels the historical manifest. Manual fit
+overrides still require exact matching. This measured-data calibration policy
+is independent of the theoretical PSF used by the synthetic sweep.
 
 | Measured case | Entry point | Wavelet lambda |
 | --- | --- | ---: |
@@ -328,7 +328,7 @@ independent of the theoretical PSF used by the synthetic sweep.
 | retrospective LR-X R3x2 | `sample_mprage_retro_lr_recon.sh` | `0.025` |
 | retrospective LR-Y R3x2 | `sample_mprage_retro_lr_recon.sh` | `0.025` |
 | retrospective LR-XY R3x2 | `sample_mprage_retro_lr_recon.sh` | `0.022` |
-| independent retrospective native R3x3 | `sample_mprage_retro_r3x3_recon.sh` | `0.045` |
+| retrospective native R3x3 | `sample_mprage_retro_lr_recon.sh` (or focused `sample_mprage_retro_r3x3_recon.sh`) | `0.045` |
 
 For native R3x3:
 
@@ -340,14 +340,24 @@ tools/wave_retro_lr_recon/scripts/sample_mprage_retro_r3x3_recon.sh \
     -g
 ```
 
-The R3x3 script is independent of the standard R3x2/LR script. It accepts a
-fully sampled measured-Wave R1 source or a compatible regular R3x1 source. R1
-uses reviewed LIN residue 1; R3x1 inherits its measured LIN residue. PAR uses
+The standard R3x2/LR script invokes the focused R3x3 implementation as its
+fifth default retrospective case; the focused entry point can still run it
+alone. It accepts a fully sampled measured-Wave R1 source or a compatible
+regular R3x1 source. R1 uses reviewed LIN residue 1; R3x1 inherits its measured
+LIN residue. PAR uses
 the center-aligned residue `(Npar // 2) mod 3`. It prepares only
 `retro/native_r3x3`. Compatible normal preparation, native CSM, and calibrated
 PSF are reused; if normal inputs are absent, the script prepares them and runs
 ecalib once before the R3x3 branches. It then runs exactly FISTA-r0 plus
 Wavelet `0.045`.
+
+Automatic `sine-line` is the default for both measured retrospective entry
+points and need not be specified explicitly. Compatibility reuse preserves the
+PSF and historical processing mode already stored in an old root; it does not
+recalibrate that PSF under the current default. Ecalib provenance remains
+strict and separate: pass the same `--ecalib-crop` used for the existing normal
+CSM (for example, `--ecalib-crop 0.1` when its command record uses crop 0.1).
+The default crop is 0.6, and a mismatch is rejected.
 
 The measured scripts default to CPU for portability and accept `-g` for BART
 GPU execution. This differs intentionally from the synthetic sweep, whose

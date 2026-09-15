@@ -103,6 +103,11 @@ class SampleCommandTests(unittest.TestCase):
         self.assertEqual(source.count("bart_output/optimal_wavelet/image_wave"), 20)
         self.assertNotIn("sample_mprage_normal_recon.sh", source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
+        self.assertEqual(source.count("sample_mprage_retro_r3x3_recon.sh"), 1)
+        self.assertIn(
+            'R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source
+        )
+        self.assertIn('R3X3_ARGS+=(-g)', source)
         self.assertIn("PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png", source)
         self.assertIn("TROUBLESHOOTING.md", source)
 

@@ -58,6 +58,39 @@ there cause a hard failure instead of being overwritten.
 
 ## MPRAGE checks
 
+## A legacy normal manifest does not match the current PSF implementation
+
+Do not edit an old `normal/bart_inputs/manifest.json` or invent missing
+diagnostic CFL files. Normal preparation remains strict because changing PSF
+processing settings requires a genuinely new preparation. The retrospective
+MPRAGE entry points use a narrower artifact-compatibility path: they require
+the recorded TWIX and sequence identities to match, validate the core BART
+input geometry, require finite PSF/trajectory/coefficient arrays, and retain
+the existing calibrated PSF without recomputation.
+
+When that path is used, the historical manifest and scientific artifacts stay
+unchanged. The tool writes
+`normal/NORMAL_INPUT_REUSE_ATTESTATION.json`, which records the source-manifest
+hash, the historical processing mode (or `unknown`), the validated core
+artifact identities, and any missing nonessential diagnostic CFLs. The command
+also states that the current default was not applied to the existing PSF.
+Source mismatch, incomplete core CFL pairs, incompatible geometry, non-finite
+values, and any newly requested manual fit bounds remain hard failures.
+
+Both retrospective MPRAGE sample scripts already default to automatic
+`sine-line`, so adding `--psf-coefficient-processing sine-line` is normally
+redundant. On a legacy root, that default is a request only: compatibility
+reuse retains the PSF and processing mode recorded by the old preparation.
+Create a new output root if a new sine-line calibration is scientifically
+required.
+
+PSF compatibility does not cover ecalib provenance. The requested
+`--ecalib-crop` must match the command stored in
+`normal/bart_output/ecalib_command.txt`. For example, a normal CSM created with
+crop `0.1` requires `--ecalib-crop 0.1` on the R3x3 or combined retrospective
+command. Omitting it requests the default `0.6` and correctly causes a command
+mismatch instead of silently reusing a differently cropped CSM.
+
 ## `prepare_mprage_normal.py` is reported as `Killed`
 
 A bare shell `Killed` message normally means that the operating system or a

@@ -31,12 +31,16 @@ from .bart_io import sha256_file
 COLLECTION_BUILDER = "wave_retro_lr.nifti_collection"
 RECONSTRUCTION_BRANCHES = ("fista_r0", "optimal_wavelet")
 MASK_BRANCH_PREFERENCE = ("optimal_wavelet", "fista_r0")
-RETRO_CASES = (
+REQUIRED_RETRO_CASES = (
     "native_r3x2",
     "lr_x_1p5mm_r3x2",
     "lr_y_1p5mm_r3x2",
     "lr_xy_1p25mm_r3x2",
 )
+OPTIONAL_RETRO_CASES = (
+    "native_r3x3",
+)
+RETRO_CASES = (*REQUIRED_RETRO_CASES, *OPTIONAL_RETRO_CASES)
 
 
 @dataclass(frozen=True)
@@ -85,8 +89,8 @@ def build_mprage_nifti_collection(
     Args:
         output_root: Reconstruction root containing branch-specific normal and,
             when available, retrospective canonical NIfTI directories.
-        require_retro: Whether all four retrospective case directories must
-            contain complete magnitude/phase NIfTI and JSON pairs.
+        require_retro: Whether the four legacy retrospective cases, plus any
+            present optional R3x3 case, must contain complete NIfTI/JSON pairs.
         parameters: Optional whole-head mask extraction parameters.
 
     Returns:
@@ -335,7 +339,8 @@ def _discover_case_sources(
     Args:
         output_root: Existing reconstruction output root.
         sampling_class: Validated measured sampling class, ``R1`` or ``R3x1``.
-        require_retro: Whether all four retrospective cases are mandatory.
+        require_retro: Whether legacy cases and any present optional cases are
+            mandatory.
 
     Returns:
         Mapping from every discovered reconstruction branch and case label to
@@ -391,8 +396,14 @@ def _discover_case_sources(
                     ] = pairs
 
     if require_retro:
+        required_cases = list(REQUIRED_RETRO_CASES)
+        required_cases.extend(
+            case
+            for case in OPTIONAL_RETRO_CASES
+            if (retro_root / case).exists()
+        )
         for branch in sorted(normal_branches):
-            for case in RETRO_CASES:
+            for case in required_cases:
                 if case not in sources[branch]:
                     directory = output_root / "retro" / case / "nifti" / branch
                     raise FileNotFoundError(

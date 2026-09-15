@@ -24,6 +24,31 @@ from wave_retro_lr.nifti_collection import (  # noqa: E402
 
 
 class NiftiCollectionTests(unittest.TestCase):
+    def test_require_retro_accepts_legacy_layout_and_rejects_partial_r3x3(self) -> None:
+        """Accept four-case roots while requiring a started R3x3 case to finish.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_complete_source_tree(root, include_r3x3=False)
+            legacy = build_mprage_nifti_collection(root, require_retro=True)
+            self.assertEqual(len(legacy["cases"]), 10)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_complete_source_tree(root, include_r3x3=False)
+            self._write_case(
+                root / "retro" / "native_r3x3" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            with self.assertRaisesRegex(
+                FileNotFoundError, "optimal_wavelet.*native_r3x3"
+            ):
+                build_mprage_nifti_collection(root, require_retro=True)
+
     def test_complete_collection_preserves_originals_and_masks_every_grid(self) -> None:
         """Verify byte copies, mask provenance, and physical LR mask mapping.
 
@@ -47,7 +72,7 @@ class NiftiCollectionTests(unittest.TestCase):
 
             collection = root / "nifti_collection"
             self.assertEqual(manifest["builder"], "wave_retro_lr.nifti_collection")
-            self.assertEqual(len(manifest["cases"]), 10)
+            self.assertEqual(len(manifest["cases"]), 12)
             self.assertFalse(manifest["head_mask"]["bet_used"])
             self.assertEqual(manifest["head_mask"]["source_branch"], "optimal_wavelet")
             self.assertTrue(
@@ -108,7 +133,7 @@ class NiftiCollectionTests(unittest.TestCase):
             refreshed = build_mprage_nifti_collection(
                 root, require_retro=True, parameters=mask_parameters
             )
-            self.assertEqual(len(refreshed["cases"]), 10)
+            self.assertEqual(len(refreshed["cases"]), 12)
 
             protected = (
                 collection / "original_nifti" / "optimal_wavelet" / "normal" / normal_magnitude.name
@@ -243,11 +268,14 @@ class NiftiCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "refusing to remove"):
                 build_mprage_nifti_collection(root)
 
-    def _write_complete_source_tree(self, root: Path) -> list[Path]:
-        """Create representative normal and four-grid canonical source pairs.
+    def _write_complete_source_tree(
+        self, root: Path, *, include_r3x3: bool = True
+    ) -> list[Path]:
+        """Create representative normal and five-grid canonical source pairs.
 
         Args:
             root: Temporary reconstruction output root.
+            include_r3x3: Whether to include the new default native R3x3 case.
 
         Returns:
             All source NIfTI and JSON paths created for mutation checks.
@@ -259,7 +287,10 @@ class NiftiCollectionTests(unittest.TestCase):
             "lr_x_1p5mm_r3x2": ((22, 32, 32), (1.5, 1.0, 1.0)),
             "lr_y_1p5mm_r3x2": ((32, 22, 32), (1.0, 1.5, 1.0)),
             "lr_xy_1p25mm_r3x2": ((26, 26, 32), (1.25, 1.25, 1.0)),
+            "native_r3x3": ((32, 32, 32), (1.0, 1.0, 1.0)),
         }
+        if not include_r3x3:
+            geometries.pop("native_r3x3")
         for branch in RECONSTRUCTION_BRANCHES:
             paths.extend(
                 self._write_case(

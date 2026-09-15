@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare and sequentially reconstruct native plus three direct-crop LR R3x2
-# cases. The same native ACS map estimate is reused for every target grid.
+# Prepare and sequentially reconstruct native R3x2, three direct-crop LR R3x2
+# cases, and native R3x3. The same native ACS map estimate is reused.
 
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [-g]"
@@ -189,6 +189,21 @@ else
 fi
 printf '%s\n' "${WAVE_COMMAND% }" > "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/wave_command.txt"
 python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_inputs" --image "$RETRO_ROOT/lr_xy_1p25mm_r3x2/bart_output/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$RETRO_ROOT/lr_xy_1p25mm_r3x2/nifti/optimal_wavelet" --suffix BARTWaveMPRAGELRXY1p25mmR3x2OptimalWavelet
+
+# Reuse the focused R3x3 implementation as the fifth default retro case.
+R3X3_ARGS=(
+    "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE"
+    --ecalib-crop "$ECALIB_CROP"
+    --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING"
+    "${SPATIAL_ARGS[@]}"
+)
+if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
+    R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
+fi
+if [[ "$USE_GPU" == true ]]; then
+    R3X3_ARGS+=(-g)
+fi
+bash "$SCRIPT_DIR/sample_mprage_retro_r3x3_recon.sh" "${R3X3_ARGS[@]}"
 
 echo "Retrospective MPRAGE reconstructions complete: $RETRO_ROOT"
 if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then

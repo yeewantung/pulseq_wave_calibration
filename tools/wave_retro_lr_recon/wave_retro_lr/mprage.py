@@ -59,6 +59,7 @@ R3X3_WAVELET_LAMBDA = 0.045
 R3X3_SELECTION_MANIFEST_SHA256 = (
     "07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d"
 )
+NORMAL_REUSE_ATTESTATION_NAME = "NORMAL_INPUT_REUSE_ATTESTATION.json"
 LEGACY_PSF_IMPLEMENTATION_PATHS = (
     "external/wave-mprage/recon/recon_wave_mprage_from_twix_integrated_nifti.py",
     "external/wave-mprage/recon/utils/psf_coefficient_processing.py",
@@ -1896,6 +1897,179 @@ def _native_manifest_matches(
     )
 
 
+def _native_manifest_matches_reusable_artifact(
+    manifest: Mapping[str, Any],
+    twix_path: Path,
+    sequence_path: Path,
+    psf_settings: Mapping[str, Any],
+) -> bool:
+    """Check whether legacy normal artifacts are safe for retrospective reuse.
+
+    This compatibility path deliberately ignores the current implementation
+    digest and lets the already materialized PSF contract take precedence
+    because no coefficient fit or PSF is recomputed. It is available only
+    when the retrospective caller supplies no manual fitting override. The
+    attestation preserves an explicitly recorded historical mode, or records
+    it as unknown, rather than relabeling the existing artifact.
+
+    Args:
+        manifest: Existing normal preparation manifest.
+        twix_path: Requested measured TWIX file.
+        sequence_path: Requested Pulseq sequence file.
+        psf_settings: Normalized current request.
+
+    Returns:
+        ``True`` only when sources and every recorded scientific setting are
+        compatible with artifact-preserving retrospective reuse.
+    """
+    if (
+        manifest.get("status") != "measured_wave_mprage_bart_inputs_ready"
+        or manifest.get("source", {}).get("twix") != _file_identity(twix_path)
+        or manifest.get("source", {}).get("sequence")
+        != _file_identity(sequence_path, include_hash=True)
+        or not isinstance(manifest.get("geometry"), Mapping)
+        or not isinstance(manifest.get("sampling"), Mapping)
+    ):
+        return False
+    recorded_psf = manifest.get("psf_calibration", {})
+    if not isinstance(recorded_psf, Mapping):
+        return False
+    recorded_mode = recorded_psf.get("coefficient_processing")
+    if recorded_mode not in {None, "smooth", "sine-line"}:
+        return False
+    if (
+        psf_settings.get("requested_fit_kx_range") is not None
+        or psf_settings.get("requested_fit_y_range") is not None
+        or psf_settings.get("requested_fit_z_range") is not None
+    ):
+        return False
+    return True
+
+
+def _normal_core_artifact_records(
+    destination: Path, manifest: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Validate reusable normal CFL geometry and record stable file identities.
+
+    Args:
+        destination: Existing ``normal/bart_inputs`` directory.
+        manifest: Historical manifest that supplies the expected geometry.
+
+    Returns:
+        Per-artifact shape, header hash, payload size, and payload timestamp.
+
+    Raises:
+        ValueError: If core normal artifacts have mutually inconsistent shapes
+        or non-finite PSF/trajectory/coefficient values.
+        FileNotFoundError: If a required CFL pair is missing.
+    """
+    names = (
+        "wave_kspace",
+        "kspace_calib",
+        "psf",
+        "wave_trajectory",
+        "psf_coefficients",
+    )
+    records: dict[str, dict[str, Any]] = {}
+    for name in names:
+        base = destination / name
+        shape = read_shape(base)
+        payload = base.with_suffix(".cfl")
+        record: dict[str, Any] = {
+            "shape": list(shape),
+            "header_sha256": sha256_file(base.with_suffix(".hdr")),
+            "payload_size_bytes": payload.stat().st_size,
+            "payload_mtime_ns": payload.stat().st_mtime_ns,
+        }
+        if name in {"psf", "wave_trajectory", "psf_coefficients"}:
+            record["payload_sha256"] = sha256_file(payload)
+        records[name] = record
+
+    wave_shape = tuple(records["wave_kspace"]["shape"])
+    calibration_shape = tuple(records["kspace_calib"]["shape"])
+    psf_shape = tuple(records["psf"]["shape"])
+    geometry = manifest["geometry"]
+    nro, nlin, npar = (
+        int(value) for value in geometry["logical_matrix_ro_lin_par"]
+    )
+    readout_oversampling = int(geometry["readout_oversampling_factor"])
+    expected_wave_grid = (nro * readout_oversampling, nlin, npar)
+    if (
+        len(wave_shape) < 4
+        or len(calibration_shape) < 4
+        or len(psf_shape) < 3
+        or wave_shape[:3] != expected_wave_grid
+        or calibration_shape[:3] != (nro, nlin, npar)
+        or wave_shape[:3] != psf_shape[:3]
+        or calibration_shape[1:3] != wave_shape[1:3]
+        or calibration_shape[3] != wave_shape[3]
+        or tuple(records["wave_trajectory"]["shape"]) != (wave_shape[0], 2)
+        or tuple(records["psf_coefficients"]["shape"]) != (wave_shape[0], 3)
+    ):
+        raise ValueError("Legacy normal BART inputs have inconsistent core geometry.")
+    for name in ("psf", "wave_trajectory", "psf_coefficients"):
+        if not np.isfinite(open_cfl(destination / name)).all():
+            raise ValueError(f"Legacy normal {name} contains non-finite values.")
+    return records
+
+
+def _write_normal_reuse_attestation(
+    destination: Path,
+    manifest: Mapping[str, Any],
+    psf_settings: Mapping[str, Any],
+    artifact_records: Mapping[str, Mapping[str, Any]],
+    missing_auxiliary_artifacts: list[str],
+) -> Path:
+    """Write a non-destructive legacy normal-input reuse attestation.
+
+    Args:
+        destination: Existing ``normal/bart_inputs`` directory.
+        manifest: Unmodified historical normal-input manifest.
+        psf_settings: Current default request used only for compatibility.
+        artifact_records: Validated core CFL identities.
+        missing_auxiliary_artifacts: Declared diagnostic CFLs not retained.
+
+    Returns:
+        Path to the atomically written sidecar attestation.
+    """
+    manifest_path = destination / "manifest.json"
+    recorded_psf = manifest.get("psf_calibration", {})
+    path = destination.parent / NORMAL_REUSE_ATTESTATION_NAME
+    _write_json(
+        path,
+        {
+            "format_version": 1,
+            "status": "legacy_normal_inputs_accepted_for_retrospective_reuse",
+            "created_at_utc": _utc_now(),
+            "source_manifest": {
+                "path": str(manifest_path),
+                "sha256": sha256_file(manifest_path),
+                "modified": False,
+            },
+            "reuse_scope": "retrospective preparation only; no PSF refit or recalibration",
+            "recorded_psf_coefficient_processing": (
+                recorded_psf.get("coefficient_processing")
+                if isinstance(recorded_psf, Mapping)
+                else None
+            ),
+            "current_default_request_not_applied_to_existing_psf": {
+                key: psf_settings.get(key)
+                for key in (
+                    "coefficient_processing",
+                    "fit_range_selection",
+                    "requested_fit_kx_range",
+                    "requested_fit_y_range",
+                    "requested_fit_z_range",
+                )
+            },
+            "core_artifacts": artifact_records,
+            "missing_nonessential_diagnostic_artifacts": missing_auxiliary_artifacts,
+            "scientific_artifacts_modified": False,
+        },
+    )
+    return path
+
+
 def _native_r3x3_residue(
     source_sampling: SamplingPattern, npar: int
 ) -> tuple[int, int]:
@@ -1947,6 +2121,7 @@ def prepare_normal_mprage(
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
     reuse: bool = True,
+    allow_legacy_artifact_reuse: bool = False,
 ) -> dict[str, Any]:
     """Prepare native measured-Wave k-space, calibration k-space, and PSF.
 
@@ -1963,6 +2138,9 @@ def prepare_normal_mprage(
         psf_fit_z_min: Optional inclusive manual cos-projection spatial index.
         psf_fit_z_max: Optional exclusive manual cos-projection spatial index.
         reuse: Reuse compatible inputs already present under ``output_root``.
+        allow_legacy_artifact_reuse: Permit retrospective callers to reuse
+            source-matched legacy core artifacts without rewriting their
+            manifest or recomputing the PSF.
 
     Returns:
         The native BART-input manifest.
@@ -1995,7 +2173,15 @@ def prepare_normal_mprage(
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
-        if not _native_manifest_matches(existing, twix_path, sequence_path, psf_settings):
+        exact_match = _native_manifest_matches(
+            existing, twix_path, sequence_path, psf_settings
+        )
+        artifact_match = allow_legacy_artifact_reuse and (
+            _native_manifest_matches_reusable_artifact(
+                existing, twix_path, sequence_path, psf_settings
+            )
+        )
+        if not exact_match and not artifact_match:
             raise ValueError(
                 "Existing normal BART inputs use different sources or PSF "
                 "coefficient-processing settings."
@@ -2009,6 +2195,7 @@ def prepare_normal_mprage(
         ):
             read_shape(destination / name)
         recorded_calibration = existing.get("psf_calibration", {})
+        missing_auxiliary_artifacts: list[str] = []
         for field in (
             "raw_psf_coefficients",
             "processing_input_psf_coefficients",
@@ -2016,29 +2203,44 @@ def prepare_normal_mprage(
         ):
             auxiliary_name = recorded_calibration.get(field)
             if auxiliary_name is not None:
-                read_shape(destination / str(auxiliary_name))
+                auxiliary_base = destination / str(auxiliary_name)
+                if (
+                    auxiliary_base.with_suffix(".hdr").is_file()
+                    and auxiliary_base.with_suffix(".cfl").is_file()
+                ):
+                    read_shape(auxiliary_base)
+                elif allow_legacy_artifact_reuse:
+                    missing_auxiliary_artifacts.append(str(auxiliary_name))
+                else:
+                    read_shape(auxiliary_base)
         a_fit, b_fit, c_fit = _read_real_vectors(destination / "psf_coefficients", 3)
         raw_name = recorded_calibration.get("raw_psf_coefficients")
         raw_coefficients = (
             None
             if raw_name is None
+            or not (destination / str(raw_name)).with_suffix(".hdr").is_file()
+            or not (destination / str(raw_name)).with_suffix(".cfl").is_file()
             else _read_real_vectors(destination / str(raw_name), 3)
         )
         effective_psf_settings = {
             **psf_settings,
             "fit_kx_range": existing.get("psf_calibration", {}).get("fit_kx_range"),
         }
-        diagnostic = _ensure_r3x1_psf_coefficient_plot(
-            destination.parent,
-            str(existing["sampling"]["name"]),
-            (a_fit, b_fit, c_fit),
-            effective_psf_settings,
-            raw_coefficient_vectors=raw_coefficients,
-            processing_diagnostics=existing.get("psf_calibration", {}).get(
-                "processing_diagnostics"
-            ),
+        diagnostic = (
+            _ensure_r3x1_psf_coefficient_plot(
+                destination.parent,
+                str(existing["sampling"]["name"]),
+                (a_fit, b_fit, c_fit),
+                effective_psf_settings,
+                raw_coefficient_vectors=raw_coefficients,
+                processing_diagnostics=existing.get("psf_calibration", {}).get(
+                    "processing_diagnostics"
+                ),
+            )
+            if exact_match
+            else None
         )
-        if diagnostic is not None:
+        if diagnostic is not None and exact_match:
             expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
             expected_full_relative = (
                 f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
@@ -2059,6 +2261,23 @@ def prepare_normal_mprage(
                     expected_full_relative
                 )
                 _write_json(manifest_path, existing)
+        if not exact_match or missing_auxiliary_artifacts:
+            artifact_records = _normal_core_artifact_records(destination, existing)
+            attestation = _write_normal_reuse_attestation(
+                destination,
+                existing,
+                psf_settings,
+                artifact_records,
+                missing_auxiliary_artifacts,
+            )
+            recorded_mode = existing.get("psf_calibration", {}).get(
+                "coefficient_processing"
+            )
+            print(
+                "Accepted existing normal artifacts without recalibration; "
+                f"recorded PSF mode: {recorded_mode or 'unknown'}; "
+                f"current defaults were not applied; reuse attestation: {attestation}"
+            )
         print(f"Reusing compatible normal BART inputs: {destination}")
         return existing
     if destination.exists() and any(destination.iterdir()):
@@ -2434,6 +2653,7 @@ def prepare_retro_mprage(
         psf_fit_z_min=psf_fit_z_min,
         psf_fit_z_max=psf_fit_z_max,
         reuse=True,
+        allow_legacy_artifact_reuse=True,
     )
     normal_inputs = output_path / NORMAL_INPUT_RELATIVE
     retro_root = output_path / RETRO_RELATIVE
@@ -2699,6 +2919,7 @@ def prepare_retro_mprage_r3x3(
         psf_fit_z_min=psf_fit_z_min,
         psf_fit_z_max=psf_fit_z_max,
         reuse=True,
+        allow_legacy_artifact_reuse=True,
     )
     source_sampling = _sampling_from_manifest(normal)
     geometry_payload = normal["geometry"]

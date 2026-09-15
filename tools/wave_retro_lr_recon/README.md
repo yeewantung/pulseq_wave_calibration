@@ -6,7 +6,7 @@ transverse single- or multi-echo Wave-GRE workflow. Both workflows use the
 same three stages:
 
 1. normal native R3x1 reconstruction;
-2. retrospective R3x2 and low-resolution reconstruction; and
+2. retrospective R3x2, low-resolution, and native R3x3 reconstruction; and
 3. a separate NIfTI collection step.
 
 The user-facing inputs are a Wave-encoded Siemens TWIX file and its matching
@@ -23,6 +23,11 @@ pure-mask coarse-to-fine sweep, manual review gates, presentation artifacts,
 and the boundary between parameter selection and measured reconstruction, is
 documented in
 [`synthetic_mprage_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_mprage_regularization_pipeline.md).
+
+The completed synthetic two-echo GRE native-R3x3 coarse-to-fine sweep,
+shared-lambda decision, presentation contract, and measured-reconstruction
+handoff boundary are documented in
+[`gre_native_r3x3_sweep.md`](../synthetic_wave_for_reg_baseline/docs/gre_native_r3x3_sweep.md).
 
 ## MPRAGE workflow
 
@@ -177,8 +182,8 @@ scripts/sample_mprage_retro_lr_recon.sh \
 ```
 
 The script reuses compatible normal inputs and native CSMs. If they are absent,
-it prepares them and runs ecalib once. It then reconstructs four sequential
-R3x2 cases:
+it prepares them and runs ecalib once. It then reconstructs five sequential
+retrospective cases:
 
 | Case | Requested physical XYZ resolution | FISTA control | Selected Wavelet |
 | --- | --- | --- | --- |
@@ -186,6 +191,7 @@ R3x2 cases:
 | `lr_x_1p5mm_r3x2` | `1.5 x 1.0 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.5e-2` |
 | `lr_y_1p5mm_r3x2` | `1.0 x 1.5 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.5e-2` |
 | `lr_xy_1p25mm_r3x2` | `1.25 x 1.25 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.2e-2` |
+| `native_r3x3` | source resolution | `-w -f -r 0` | `-w -f -r 4.5e-2` |
 
 These values come from the corrected pure-image-lattice synthetic rerun and
 explicit visual/metric review. The hash-bound selection manifest has SHA-256
@@ -200,15 +206,26 @@ matrices divisible by four are used, and manifests record the achieved
 resolution.
 
 The retrospective script accepts the same `--psf-*` settings as the normal
-script, and existing normal settings must match. It uses CPU by default; append
-`-g` to run all eight Wave branches on GPU. Outputs are stored beneath
+script. It uses CPU by default; append `-g` to run every Wave branch on GPU.
+Outputs are stored beneath
 `OUTPUT_ROOT/retro/<case>/{bart_output,nifti}/{fista_r0,optimal_wavelet}`.
+
+Strict source and coefficient-processing metadata matching remains mandatory
+when preparing or replacing normal inputs. Retrospective preparation may also
+reuse an already materialized legacy normal input set when its TWIX and
+sequence identities match, its core CFL geometry is mutually consistent, and
+the retained PSF, trajectory, and coefficients are finite. This compatibility
+path does not refit coefficients, regenerate the PSF, modify the historical
+manifest, or relabel an older processing mode as the current `sine-line`
+default. It records the exact decision and validated artifact identities in
+`OUTPUT_ROOT/normal/NORMAL_INPUT_REUSE_ATTESTATION.json`. Manual fit overrides
+still require an exact metadata match, and source mismatches remain fatal.
 
 The older crop-first operation for a no-Wave dataset remains available as
 `wave_retro_lr.retrospective.synthesize_wave_from_no_wave_crop`. It is an
 explicit `synthetic_wave_for_reg_baseline` utility, not a measured-data mode.
 
-### 2a. Independent native R3x3 retrospective undersampling
+### 2a. Native R3x3 retrospective undersampling
 
 For measured native R1 or regular single-residue R3x1 Wave-MPRAGE data, the
 tracked global script below applies the reviewed native R3x3 image lattice:
@@ -221,7 +238,9 @@ scripts/sample_mprage_retro_r3x3_recon.sh \
     -g
 ```
 
-The script rejects incompatible accelerated sources. For R1 it explicitly
+The standard retrospective command above now includes this case by default.
+The focused script remains available when only native R3x3 is wanted. It
+rejects incompatible accelerated sources. For R1 it explicitly
 selects residue 1 on LIN; for R3x1 it inherits the measured LIN residue so the
 R3x3 lattice is an exact subset of available samples. PAR uses the
 center-aligned residue `(Npar // 2) mod 3`. Consequently, the exact mask count
@@ -237,6 +256,29 @@ the corresponding selection-manifest SHA-256 is
 `07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d`.
 CPU remains the default and `-g` selects GPU BART.
 
+Automatic `sine-line` PSF coefficient processing is already the default, so
+`--psf-coefficient-processing sine-line` does not need to be repeated. When a
+legacy normal preparation is accepted through the retrospective compatibility
+path, the script deliberately uses the PSF already stored in that root; the
+current default does not rewrite or regenerate it. Use a new output root when
+a newly calibrated sine-line PSF is required.
+
+The ecalib crop is a separate CSM provenance constraint. If the existing
+normal CSM was generated with crop `0.1`, pass the same value to the focused or
+combined retrospective command:
+
+```bash
+scripts/sample_mprage_retro_r3x3_recon.sh \
+    /path/to/measured_r1_or_r3x1_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq \
+    --ecalib-crop 0.1
+```
+
+The default is `0.6`. An existing CSM must have a matching
+`normal/bart_output/ecalib_command.txt`; PSF metadata compatibility never
+relaxes this check.
+
 ### 3. NIfTI collection
 
 After normal reconstruction and any desired retrospective cases, build the
@@ -249,9 +291,11 @@ scripts/sample_mprage_nifti_collection.sh \
 ```
 
 Omit `--require-retro` to collect every currently available normal and
-retrospective reconstruction. With `--require-retro`, the four standard R3x2
-cases must additionally be complete for every discovered normal branch. This
-script never runs k-space preparation, ecalib, or Wave reconstruction.
+retrospective reconstruction. With `--require-retro`, the four historical
+R3x2/LR cases must be complete for every discovered normal branch. A legacy
+root without `native_r3x3` remains valid; once a `retro/native_r3x3` directory
+exists, that case must also be complete. This script never runs k-space
+preparation, ecalib, or Wave reconstruction.
 
 Discovery is directory-backed rather than case-list-backed: every populated
 `normal/nifti/<branch>` and `retro/<case>/nifti/<branch>` directory is included,

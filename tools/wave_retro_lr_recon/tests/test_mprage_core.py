@@ -45,11 +45,13 @@ from wave_retro_lr.sampling import (  # noqa: E402
 )
 from wave_retro_lr.mprage import (  # noqa: E402
     AutomaticPsfFitRejected,
+    NORMAL_REUSE_ATTESTATION_NAME,
     _calibrated_psf_inputs,
     _embed_image_stream,
     _ensure_r3x1_psf_coefficient_plot,
     _file_identity,
     _native_manifest_matches,
+    _native_manifest_matches_reusable_artifact,
     _native_r3x3_residue,
     _normalize_psf_coefficient_settings,
     _normalize_psf_spatial_settings,
@@ -1512,6 +1514,137 @@ class BartInputTests(unittest.TestCase):
 
 
 class ManifestReuseTests(unittest.TestCase):
+    def test_legacy_artifact_match_requires_sources_and_no_manual_override(self) -> None:
+        """Verify retrospective compatibility never relaxes source provenance.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            other_twix = root / "other.dat"
+            twix.write_bytes(b"twix")
+            other_twix.write_bytes(b"other")
+            sequence.write_bytes(b"sequence")
+            manifest = {
+                "status": "measured_wave_mprage_bart_inputs_ready",
+                "source": {
+                    "twix": _file_identity(twix),
+                    "sequence": _file_identity(sequence, include_hash=True),
+                },
+                "geometry": {"logical_matrix_ro_lin_par": [2, 4, 4]},
+                "sampling": {"name": "R3x1"},
+                "psf_calibration": {"coefficient_processing": "smooth"},
+            }
+            automatic = {
+                **_normalize_psf_coefficient_settings("sine-line", None, None),
+                **_normalize_psf_spatial_settings(None, None, None, None),
+            }
+            self.assertTrue(
+                _native_manifest_matches_reusable_artifact(
+                    manifest, twix, sequence, automatic
+                )
+            )
+            self.assertFalse(
+                _native_manifest_matches_reusable_artifact(
+                    manifest, other_twix, sequence, automatic
+                )
+            )
+            manual = {
+                **automatic,
+                **_normalize_psf_spatial_settings(1, 3, None, None),
+            }
+            self.assertFalse(
+                _native_manifest_matches_reusable_artifact(
+                    manifest, twix, sequence, manual
+                )
+            )
+
+    def test_retro_legacy_reuse_attests_without_rewriting_manifest(self) -> None:
+        """Verify legacy core artifacts can be reused non-destructively.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"twix")
+            sequence.write_bytes(b"sequence")
+            destination = root / "output" / "normal" / "bart_inputs"
+            destination.mkdir(parents=True)
+            for name, shape, value in (
+                ("wave_kspace", (4, 4, 4, 1, 1), 0),
+                ("kspace_calib", (2, 4, 4, 1), 0),
+                ("psf", (4, 4, 4, 1, 1), 1),
+                ("wave_trajectory", (4, 2), 0),
+                ("psf_coefficients", (4, 3), 0),
+            ):
+                array = create_cfl(destination / name, shape)
+                array[...] = value
+                array.flush()
+                del array
+            manifest = {
+                "format_version": 1,
+                "status": "measured_wave_mprage_bart_inputs_ready",
+                "source": {
+                    "twix": _file_identity(twix),
+                    "sequence": _file_identity(sequence, include_hash=True),
+                },
+                "geometry": {
+                    "logical_matrix_ro_lin_par": [2, 4, 4],
+                    "readout_oversampling_factor": 2,
+                },
+                "sampling": {"name": "R3x1"},
+                "psf_calibration": {
+                    "coefficient_processing": "smooth",
+                    "processing_input_psf_coefficients": (
+                        "psf_coefficients_processing_input"
+                    ),
+                    "wave_trajectory": "wave_trajectory",
+                    "psf_coefficients": "psf_coefficients",
+                },
+            }
+            manifest_path = destination / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+            original_manifest = manifest_path.read_bytes()
+            with patch(
+                "wave_retro_lr.mprage._psf_processing_implementation_identity",
+                return_value={"files_sha256": {"current": "digest"}},
+            ):
+                reused = prepare_normal_mprage(
+                    twix,
+                    root / "output",
+                    sequence,
+                    allow_legacy_artifact_reuse=True,
+                )
+            self.assertEqual(reused, manifest)
+            self.assertEqual(manifest_path.read_bytes(), original_manifest)
+            attestation_path = (
+                destination.parent / NORMAL_REUSE_ATTESTATION_NAME
+            )
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                attestation["status"],
+                "legacy_normal_inputs_accepted_for_retrospective_reuse",
+            )
+            self.assertEqual(
+                attestation["recorded_psf_coefficient_processing"], "smooth"
+            )
+            self.assertFalse(attestation["scientific_artifacts_modified"])
+            self.assertEqual(
+                attestation["missing_nonessential_diagnostic_artifacts"],
+                ["psf_coefficients_processing_input"],
+            )
+            self.assertIn(
+                "payload_sha256", attestation["core_artifacts"]["psf"]
+            )
+            with self.assertRaisesRegex(ValueError, "different sources or PSF"):
+                prepare_normal_mprage(twix, root / "output", sequence)
+
     def test_legacy_default_sine_line_manifest_is_reusable(self) -> None:
         """Verify legacy default sine-line metadata passes strict hash checks.
 
