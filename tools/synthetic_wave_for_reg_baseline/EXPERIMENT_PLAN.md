@@ -7,6 +7,10 @@ preserved as a historical record in
 `docs/archive/R3x1_no_wave_to_wave_BART_regularization_HISTORICAL.md`.
 The dataset-specific execution checklist is
 `docs/r1_dataset_processing_todo.md`.
+The end-to-end procedural reference from synthetic MPRAGE preparation through
+coarse/fine regularization review, presentation export, and transfer into
+`wave_retro_lr_recon` is
+`docs/synthetic_mprage_regularization_pipeline.md`.
 
 ## Corrected pure-lattice rerun addendum
 

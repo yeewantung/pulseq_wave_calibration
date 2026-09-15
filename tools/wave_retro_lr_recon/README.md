@@ -18,6 +18,12 @@ The sections below describe the fully validated MPRAGE workflow first. The GRE
 section then summarizes the corresponding three stages and highlights only the
 differences.
 
+The provenance of the MPRAGE Wavelet defaults, including the synthetic
+pure-mask coarse-to-fine sweep, manual review gates, presentation artifacts,
+and the boundary between parameter selection and measured reconstruction, is
+documented in
+[`synthetic_mprage_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_mprage_regularization_pipeline.md).
+
 ## MPRAGE workflow
 
 For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical

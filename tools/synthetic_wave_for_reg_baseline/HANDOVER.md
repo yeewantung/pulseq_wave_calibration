@@ -5,6 +5,10 @@ Updated: 2026-09-01, America/New_York
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
 record; the old R3x1 tracker is historical only.
+For the complete reusable workflow from synthetic MPRAGE preparation through
+coarse/fine regularization selection, presentation export, and transfer into
+the measured-data tool, read
+`docs/synthetic_mprage_regularization_pipeline.md`.
 
 ## Immediate next action
 

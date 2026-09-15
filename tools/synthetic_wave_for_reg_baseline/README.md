@@ -114,6 +114,9 @@ prepared-input manifest, configuration, and output payload hash match.
 
 Start with:
 
+- [`docs/synthetic_mprage_regularization_pipeline.md`](docs/synthetic_mprage_regularization_pipeline.md)
+  for the complete synthetic-MPRAGE coarse-to-fine selection and measured-
+  reconstruction transfer pipeline;
 - [`EXPERIMENT_PLAN.md`](EXPERIMENT_PLAN.md) for the active scientific plan;
 - [`HANDOVER.md`](HANDOVER.md) for exact cross-session state;
 - [`docs/r1_dataset_processing_todo.md`](docs/r1_dataset_processing_todo.md)
