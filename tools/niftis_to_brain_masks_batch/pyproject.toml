@@ -1,0 +1,19 @@
+[project]
+name = "niftis-to-brain-masks-batch"
+version = "0.1.0"
+description = "Batch HD-BET brain masks for measured Wave reconstructions, stored beside the data and gated on visual review"
+requires-python = ">=3.11,<3.15"
+dependencies = []
+
+[dependency-groups]
+masks = [
+    "HD-BET>=2.0",
+    "matplotlib>=3.8",
+    "nibabel>=5.2",
+    "numpy>=1.26,<3"
+]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+package = false
+default-groups = ["masks"]
