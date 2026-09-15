@@ -1,0 +1,22 @@
+[project]
+name = "niftis-to-slides"
+version = "0.1.0"
+description = "Render Wave-MPRAGE reconstruction NIfTIs into a comparison slide deck with masked NRMSE, SSIM and PSNR"
+requires-python = ">=3.11,<3.14"
+dependencies = []
+
+[dependency-groups]
+slides = [
+    "lxml>=5.0",
+    "nibabel>=5.2",
+    "numpy>=1.26,<3",
+    "pillow>=10.0",
+    "python-pptx>=1.0",
+    "scikit-image>=0.22",
+    "scipy>=1.11"
+]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+package = false
+default-groups = ["slides"]
