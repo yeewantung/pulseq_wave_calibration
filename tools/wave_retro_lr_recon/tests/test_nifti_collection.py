@@ -154,8 +154,8 @@ class NiftiCollectionTests(unittest.TestCase):
                 build_mprage_nifti_collection(root)
             self.assertEqual((collection / "user_file.txt").read_text(encoding="utf-8"), "keep\n")
 
-    def test_sampling_class_enforces_available_normal_branches(self) -> None:
-        """Reject incomplete R3x1 and unsupported positive-Wavelet R1 trees.
+    def test_discovers_all_available_normal_branches(self) -> None:
+        """Collect every populated normal branch without a hard-coded list.
 
         Returns:
             None.
@@ -168,19 +168,79 @@ class NiftiCollectionTests(unittest.TestCase):
                 (32, 32, 32),
                 (1.0, 1.0, 1.0),
             )
-            with self.assertRaisesRegex(FileNotFoundError, "optimal_wavelet"):
-                build_mprage_nifti_collection(root)
+            manifest = build_mprage_nifti_collection(root)
+            self.assertEqual(
+                [(record["branch"], record["case"]) for record in manifest["cases"]],
+                [("fista_r0", "normal")],
+            )
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "r1"
             self._write_sampling_class(root, "R1")
+            for branch in (*RECONSTRUCTION_BRANCHES, "llr_block8"):
+                self._write_case(
+                    root / "normal" / "nifti" / branch,
+                    (32, 32, 32),
+                    (1.0, 1.0, 1.0),
+                )
+            manifest = build_mprage_nifti_collection(root)
+            self.assertEqual(
+                {record["branch"] for record in manifest["cases"]},
+                {"fista_r0", "optimal_wavelet", "llr_block8"},
+            )
+            self.assertEqual(manifest["head_mask"]["source_branch"], "optimal_wavelet")
+
+    def test_existing_collection_adds_newly_discovered_retro_case(self) -> None:
+        """Verify rerunning the builder supplements an intact collection.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_sampling_class(root, "R3x1")
             for branch in RECONSTRUCTION_BRANCHES:
                 self._write_case(
                     root / "normal" / "nifti" / branch,
                     (32, 32, 32),
                     (1.0, 1.0, 1.0),
                 )
-            with self.assertRaisesRegex(ValueError, "no approved optimal-Wavelet"):
+                self._write_case(
+                    root / "retro" / "native_r3x2" / "nifti" / branch,
+                    (32, 32, 32),
+                    (1.0, 1.0, 1.0),
+                )
+            initial = build_mprage_nifti_collection(root)
+            self.assertEqual(len(initial["cases"]), 4)
+
+            for branch in RECONSTRUCTION_BRANCHES:
+                self._write_case(
+                    root / "retro" / "native_r3x3" / "nifti" / branch,
+                    (32, 32, 32),
+                    (1.0, 1.0, 1.0),
+                )
+            synchronized = build_mprage_nifti_collection(root)
+            groups = {
+                (record["branch"], record["case"])
+                for record in synchronized["cases"]
+            }
+            self.assertEqual(len(groups), 6)
+            self.assertIn(("fista_r0", "native_r3x3"), groups)
+            self.assertIn(("optimal_wavelet", "native_r3x3"), groups)
+            self.assertEqual(
+                synchronized["synchronization"]["added_case_groups"],
+                ["fista_r0:native_r3x3", "optimal_wavelet:native_r3x3"],
+            )
+            self.assertEqual(
+                len(synchronized["synchronization"]["retained_case_groups"]), 4
+            )
+
+            for path in (
+                root / "retro" / "native_r3x3" / "nifti" / "fista_r0"
+            ).rglob("*"):
+                if path.is_file():
+                    path.unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "refusing to remove"):
                 build_mprage_nifti_collection(root)
 
     def _write_complete_source_tree(self, root: Path) -> list[Path]:

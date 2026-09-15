@@ -235,6 +235,49 @@ The measured-data MPRAGE tool uses these as the positive-Wavelet ablation arm
 while retaining one FISTA-r0 control per case; it does not transfer them to
 R1 normal reconstruction or GRE.
 
+### Native R3x3 follow-up
+
+The format-version 2 pure-mask configuration supports a manifest-defined case
+set while retaining read compatibility with the completed five-case
+format-version 1 run. The native R3x3 follow-up declares only `native_r3x3`:
+the logical and physical matrix remain `256 x 256 x 256`, acceleration is
+LIN/PAR `(3, 3)`, and the native residue is `(1, 2)`. The resulting pure
+Cartesian mask has 7,225 acquired LIN/PAR coordinates, effective acceleration
+9.0707266, and logical SHA-256
+`36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3`.
+Calibration is not part of this mask or its Wave k-space.
+
+Copy `configs/native_r3x3_pure_mask_sweep.example.json` to the ignored
+`configs/native_r3x3_pure_mask_sweep.local.json` name. Populate its private
+paths and exact hashes only after the production output root has been reviewed.
+The configuration reuses the accepted native no-Wave source, full synthetic
+Wave source, direct-FFT reference, CSM, theoretical PSF, BET mask, and
+orientation through strict manifest assertions. Preparation creates only the
+new mask and masked Wave BART input; it does not rerun source synthesis,
+ecalib, PSF calibration, direct FFT, or BET.
+
+For a single-action tmux interface, copy
+`scripts/run_native_r3x3_pure_mask_sweep.example.sh` to the ignored `.local.sh`
+name and set its four required environment paths in that private copy. The
+launcher calls the shared dispatcher once and never starts tmux or advances to
+another action automatically. The coarse run contains 23 jobs: one FISTA
+lambda-zero control, seven Wavelet lambdas, and five lambdas for each corrected
+LLR block size 4, 8, and 16. Fine settings and manual selections remain absent
+until the preceding figures and metric curves have been reviewed.
+
+When a reviewed coarse Wavelet optimum remains at the `5e-2` upper boundary,
+the fine-sweep allowlist supports close sampling around that boundary plus
+higher exploratory values. These values are opt-in settings in the ignored
+local configuration; they do not expand any run automatically or imply a
+selected winner.
+
+Explicit metric and fixed-window visual review selected native R3x3 Wavelet
+lambda `4.5e-2`. The hash-bound selection manifest SHA-256 is
+`07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d`.
+The selected value is available to the independent measured-R3x1-to-R3x3
+retrospective undersampling entry point in `wave_retro_lr_recon`; it does not
+change the earlier R3x1, R3x2, or LR selections.
+
 ## Current experiment
 
 The current execution target is the fully sampled 2026-08-21 MID00198 R1

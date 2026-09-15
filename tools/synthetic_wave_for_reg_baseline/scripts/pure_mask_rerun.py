@@ -56,13 +56,15 @@ from wave_retro_lr.sampling import (  # noqa: E402
 WORKFLOW_NAME = "synthetic_wave_pure_mask_regularization_rerun"
 THEORETICAL_PSF_MODEL = "theoretical_sequence_trajectory_without_calibrated_correction"
 SYNTHETIC_WAVE_ORIGIN = "synthetic_from_fully_sampled_no_wave"
-CASE_IDS = (
+LEGACY_CASE_IDS = (
     "native_r3x1",
     "native_r3x2",
     "lr_x_r3x2",
     "lr_y_r3x2",
     "lr_xy_r3x2",
 )
+# Public compatibility alias for the completed format-version 1 workflow.
+CASE_IDS = LEGACY_CASE_IDS
 COARSE_WAVELET_LAMBDAS = (0.002, 0.005, 0.01, 0.015, 0.022, 0.03, 0.05)
 COARSE_LLR_LAMBDAS = (0.002, 0.005, 0.01, 0.02, 0.04)
 LLR_BLOCK_SIZES = (4, 8, 16)
@@ -84,6 +86,14 @@ FINE_LAMBDA_POOL = (
     0.0325,
     0.035,
     0.04,
+    0.045,
+    0.055,
+    0.06,
+    0.065,
+    0.07,
+    0.08,
+    0.09,
+    0.1,
 )
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
@@ -100,6 +110,7 @@ class PureMaskCase:
     mask_metadata: dict[str, Any]
     csm: dict[str, Any]
     psf: dict[str, Any]
+    direct_fft_reference: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         """Convert the complete immutable case contract to JSON-native values."""
@@ -111,6 +122,7 @@ class PureMaskCase:
             "sampling_mask": self.mask_metadata,
             "csm": self.csm,
             "psf": self.psf,
+            "direct_fft_reference": self.direct_fft_reference,
         }
 
 
@@ -180,19 +192,67 @@ def resolve_config_path(value: Any, config_dir: Path, label: str) -> Path:
     return (config_dir / path).resolve() if not path.is_absolute() else path.resolve()
 
 
-def output_layout(output_root: str | Path) -> dict[str, Any]:
+def output_layout(
+    output_root: str | Path,
+    *,
+    case_ids: Sequence[str] = LEGACY_CASE_IDS,
+    native_case_ids: Sequence[str] = ("native_r3x1", "native_r3x2"),
+    include_source_materialization: bool = True,
+) -> dict[str, Any]:
     """Return the exact production tree used by preparation and sweep stages.
 
     Args:
         output_root: User-confirmed root directory and run name.
+        case_ids: Ordered identifiers included in this run.
+        native_case_ids: Cases that reuse the accepted native full-Wave source.
+        include_source_materialization: Include the legacy source-rebuild tree.
 
     Returns:
         JSON-native directory and manifest layout without creating any path.
     """
     root = Path(output_root).expanduser().resolve()
-    return {
+    ordered_case_ids = tuple(str(value) for value in case_ids)
+    native_ids = frozenset(str(value) for value in native_case_ids)
+    if not ordered_case_ids or len(set(ordered_case_ids)) != len(ordered_case_ids):
+        raise ValueError("Output layout requires unique nonempty case identifiers.")
+    layout = {
         "root": str(root),
-        "source_materialization": {
+        "preparation_manifest": str(root / "preparation_manifest.json"),
+        "cases": {
+            case_id: {
+                "root": str(root / "cases" / case_id),
+                "case_manifest": str(root / "cases" / case_id / "case_manifest.json"),
+                "sampling_mask": str(root / "cases" / case_id / "sampling_mask.npy"),
+                "direct_fft_reference": str(
+                    root / "cases" / case_id / "direct_fft_reference_logical.npy"
+                ),
+                "bart_inputs": str(root / "cases" / case_id / "bart_inputs"),
+                **(
+                    {
+                        "full_wave_kspace": str(
+                            root / "source_materialization" / "full_wave_kspace.npy"
+                            if case_id in native_ids
+                            else root / "cases" / case_id / "full_wave_kspace.npy"
+                        )
+                    }
+                    if include_source_materialization or case_id not in native_ids
+                    else {}
+                ),
+            }
+            for case_id in ordered_case_ids
+        },
+        "sweeps": {
+            "coarse": str(root / "sweeps" / "coarse"),
+            "fine": str(root / "sweeps" / "fine"),
+        },
+        "evaluation": {
+            "coarse": str(root / "evaluation" / "coarse"),
+            "fine": str(root / "evaluation" / "fine"),
+            "review": str(root / "evaluation" / "review"),
+        },
+    }
+    if include_source_materialization:
+        layout["source_materialization"] = {
             "root": str(root / "source_materialization"),
             "no_wave_kspace": str(
                 root / "source_materialization" / "no_wave" / "source_full_ncc12.npy"
@@ -208,35 +268,8 @@ def output_layout(output_root: str | Path) -> dict[str, Any]:
                 root / "source_materialization" / "full_wave_progress.json"
             ),
             "manifest": str(root / "source_materialization" / "manifest.json"),
-        },
-        "preparation_manifest": str(root / "preparation_manifest.json"),
-        "cases": {
-            case_id: {
-                "root": str(root / "cases" / case_id),
-                "case_manifest": str(root / "cases" / case_id / "case_manifest.json"),
-                "sampling_mask": str(root / "cases" / case_id / "sampling_mask.npy"),
-                "direct_fft_reference": str(
-                    root / "cases" / case_id / "direct_fft_reference_logical.npy"
-                ),
-                "bart_inputs": str(root / "cases" / case_id / "bart_inputs"),
-                "full_wave_kspace": str(
-                    root / "source_materialization" / "full_wave_kspace.npy"
-                    if case_id in {"native_r3x1", "native_r3x2"}
-                    else root / "cases" / case_id / "full_wave_kspace.npy"
-                ),
-            }
-            for case_id in CASE_IDS
-        },
-        "sweeps": {
-            "coarse": str(root / "sweeps" / "coarse"),
-            "fine": str(root / "sweeps" / "fine"),
-        },
-        "evaluation": {
-            "coarse": str(root / "evaluation" / "coarse"),
-            "fine": str(root / "evaluation" / "fine"),
-            "review": str(root / "evaluation" / "review"),
-        },
-    }
+        }
+    return layout
 
 
 def _require_sha256(value: Any, label: str) -> str:
@@ -501,6 +534,75 @@ def validate_npy_artifact(
     }
 
 
+def validate_direct_fft_reference(
+    specification: Mapping[str, Any],
+    config_dir: Path,
+    *,
+    expected_shape: tuple[int, int, int],
+    source_no_wave_sha256: str,
+    label: str,
+) -> tuple[Path, dict[str, Any]]:
+    """Validate a reusable float32 direct-FFT magnitude reference.
+
+    Args:
+        specification: NPY path, file/logical hashes, and manifest binding.
+        config_dir: Base directory for relative paths.
+        expected_shape: Required logical RO/LIN/PAR shape.
+        source_no_wave_sha256: Hash of the accepted fully sampled source.
+        label: Human-readable artifact name.
+
+    Returns:
+        Resolved NPY path and immutable validation record.
+
+    Raises:
+        ValueError: If file identity, geometry, source binding, dtype, or finite
+            values differ from the declared accepted reference.
+    """
+    path = resolve_config_path(specification.get("path"), config_dir, f"{label}.path")
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    expected_hash = _require_sha256(specification.get("sha256"), f"{label}.sha256")
+    actual_hash = sha256_file(path)
+    if actual_hash != expected_hash:
+        raise ValueError(f"{label} NPY hash changed: {path}")
+    values = np.load(path, mmap_mode="r", allow_pickle=False)
+    if values.shape != expected_shape or values.dtype != np.float32:
+        raise ValueError(
+            f"{label} must be float32 {expected_shape}; got {values.shape} {values.dtype}."
+        )
+    if not array_is_finite(values):
+        raise ValueError(f"{label} contains non-finite values.")
+    expected_logical_hash = _require_sha256(
+        specification.get("logical_sha256"), f"{label}.logical_sha256"
+    )
+    actual_logical_hash = logical_array_sha256(values)
+    if actual_logical_hash != expected_logical_hash:
+        raise ValueError(f"{label} logical hash changed: {path}")
+    provenance = validate_manifest_binding(
+        specification.get("manifest", {}),
+        config_dir,
+        required_assertion_labels={"source_no_wave", "dimensions", "artifact"},
+        label=label,
+    )
+    claims = provenance_assertions(provenance)
+    if claims["source_no_wave"] != source_no_wave_sha256:
+        raise ValueError(f"{label} was derived from a different no-Wave source.")
+    if claims["dimensions"] != list(expected_shape):
+        raise ValueError(f"{label} provenance has the wrong dimensions.")
+    if claims["artifact"] != actual_hash:
+        raise ValueError(f"{label} provenance has the wrong artifact hash.")
+    return path, {
+        "path": str(path),
+        "shape": list(values.shape),
+        "dtype": str(values.dtype),
+        "sha256": actual_hash,
+        "logical_sha256": actual_logical_hash,
+        "provenance_manifest": provenance,
+        "reused": True,
+        "recalculated": False,
+    }
+
+
 def validate_csm_rss_normalization(
     csm: np.ndarray,
     *,
@@ -581,26 +683,85 @@ def validate_psf_unit_magnitude(
     }
 
 
-def _case_specifications(geometry: Geometry) -> tuple[tuple[str, CaseSpec], ...]:
-    """Build the fixed five-case geometry and acceleration requests.
+def _case_specifications(
+    config: Mapping[str, Any], geometry: Geometry
+) -> tuple[tuple[str, CaseSpec], ...]:
+    """Build legacy or manifest-defined geometry and acceleration requests.
 
     Args:
+        config: Complete validated-shape configuration object.
         geometry: Accepted native physical FOV and logical matrix.
 
     Returns:
         Ordered case identifiers and resolution/acceleration specifications.
     """
     native_resolution = geometry.physical_resolution_mm_xyz
-    return (
-        ("native_r3x1", CaseSpec(native_resolution, (3, 1), "native R3x1")),
-        ("native_r3x2", CaseSpec(native_resolution, (3, 2), "native R3x2")),
-        ("lr_x_r3x2", CaseSpec((1.5, 1.0, native_resolution[2]), (3, 2), "R3x2 LR-X")),
-        ("lr_y_r3x2", CaseSpec((1.0, 1.5, native_resolution[2]), (3, 2), "R3x2 LR-Y")),
-        (
-            "lr_xy_r3x2",
-            CaseSpec((1.25, 1.25, native_resolution[2]), (3, 2), "R3x2 LR-XY"),
-        ),
-    )
+    if int(config["format_version"]) == 1:
+        return (
+            ("native_r3x1", CaseSpec(native_resolution, (3, 1), "native R3x1")),
+            ("native_r3x2", CaseSpec(native_resolution, (3, 2), "native R3x2")),
+            (
+                "lr_x_r3x2",
+                CaseSpec((1.5, 1.0, native_resolution[2]), (3, 2), "R3x2 LR-X"),
+            ),
+            (
+                "lr_y_r3x2",
+                CaseSpec((1.0, 1.5, native_resolution[2]), (3, 2), "R3x2 LR-Y"),
+            ),
+            (
+                "lr_xy_r3x2",
+                CaseSpec((1.25, 1.25, native_resolution[2]), (3, 2), "R3x2 LR-XY"),
+            ),
+        )
+
+    raw_cases = config.get("cases")
+    if not isinstance(raw_cases, Mapping) or not raw_cases:
+        raise ValueError("Format-version 2 cases must be a nonempty JSON object.")
+    specifications: list[tuple[str, CaseSpec]] = []
+    for raw_case_id, raw_case in raw_cases.items():
+        case_id = str(raw_case_id)
+        if re.fullmatch(r"[a-z][a-z0-9_]*", case_id) is None:
+            raise ValueError(f"Invalid case identifier: {case_id!r}.")
+        if not isinstance(raw_case, Mapping):
+            raise ValueError(f"cases.{case_id} must be a JSON object.")
+        try:
+            resolution = tuple(
+                float(value) for value in raw_case["requested_resolution_mm_xyz"]
+            )
+            acceleration = tuple(
+                int(value) for value in raw_case["acceleration_lin_par"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"cases.{case_id} requires resolution and acceleration triples/pairs."
+            ) from exc
+        if (
+            len(resolution) != 3
+            or any(not math.isfinite(value) or value <= 0 for value in resolution)
+            or len(acceleration) != 2
+            or any(value < 1 for value in acceleration)
+        ):
+            raise ValueError(f"cases.{case_id} has invalid resolution or acceleration.")
+        label = str(raw_case.get("label", case_id)).strip()
+        if not label:
+            raise ValueError(f"cases.{case_id}.label must be nonempty.")
+        specifications.append((case_id, CaseSpec(resolution, acceleration, label)))
+    return tuple(specifications)
+
+
+def configured_case_ids(validated: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the ordered case identifiers from a validation result.
+
+    Args:
+        validated: Result returned by :func:`validate_config`.
+
+    Returns:
+        Nonempty ordered tuple of configured case identifiers.
+    """
+    identifiers = tuple(str(case.case_id) for case in validated["cases"])
+    if not identifiers or len(set(identifiers)) != len(identifiers):
+        raise ValueError("Validated cases must have unique identifiers.")
+    return identifiers
 
 
 def _remapped_residue(
@@ -636,7 +797,7 @@ def validate_config(config_path: str | Path) -> dict[str, Any]:
     """
     path = Path(config_path).expanduser().resolve()
     config = load_json(path, "pure-mask rerun configuration")
-    if config.get("format_version") != 1 or config.get("workflow") != WORKFLOW_NAME:
+    if config.get("format_version") not in {1, 2} or config.get("workflow") != WORKFLOW_NAME:
         raise ValueError("Unsupported pure-mask rerun configuration schema.")
     config_dir = path.parent
     output_root = resolve_config_path(config.get("output_root"), config_dir, "output_root")
@@ -669,8 +830,17 @@ def validate_config(config_path: str | Path) -> dict[str, Any]:
             f"{PURE_CARTESIAN_IMAGE_LATTICE!r}."
         )
     native_residue = tuple(int(value) for value in sampling["native_residue_lin_par"])
-    if len(native_residue) != 2 or not 0 <= native_residue[0] < 3 or not 0 <= native_residue[1] < 2:
-        raise ValueError("Native residues must contain a valid R3 LIN and R2 PAR residue.")
+    specifications = _case_specifications(config, geometry)
+    maximum_acceleration = tuple(
+        max(specification.acceleration_ry_rz[axis] for _, specification in specifications)
+        for axis in range(2)
+    )
+    if len(native_residue) != 2 or any(
+        not 0 <= native_residue[axis] < maximum_acceleration[axis] for axis in range(2)
+    ):
+        raise ValueError(
+            "Native residues must lie within the maximum configured LIN/PAR accelerations."
+        )
 
     source = config.get("source")
     if not isinstance(source, Mapping):
@@ -742,10 +912,13 @@ def validate_config(config_path: str | Path) -> dict[str, Any]:
     )
 
     case_configs = config.get("cases")
-    if not isinstance(case_configs, Mapping) or set(case_configs) != set(CASE_IDS):
-        raise ValueError(f"cases must contain exactly {list(CASE_IDS)}.")
+    expected_case_ids = tuple(case_id for case_id, _ in specifications)
+    if not isinstance(case_configs, Mapping) or tuple(case_configs) != expected_case_ids:
+        raise ValueError(
+            "cases must preserve the validated case order and contain no extra identifiers."
+        )
     cases: list[PureMaskCase] = []
-    for case_id, specification in _case_specifications(geometry):
+    for case_id, specification in specifications:
         case_config = case_configs[case_id]
         if not isinstance(case_config, Mapping):
             raise ValueError(f"cases.{case_id} must be a JSON object.")
@@ -834,6 +1007,18 @@ def validate_config(config_path: str | Path) -> dict[str, Any]:
             )
         except ValueError as exc:
             raise ValueError(f"{case_id} theoretical PSF validation failed: {exc}") from exc
+        reference_record = None
+        reference_specification = case_config.get("direct_fft_reference")
+        if reference_specification is not None:
+            if not isinstance(reference_specification, Mapping):
+                raise ValueError(f"cases.{case_id}.direct_fft_reference must be an object.")
+            _reference_path, reference_record = validate_direct_fft_reference(
+                reference_specification,
+                config_dir,
+                expected_shape=(target_ro, target_lin, target_par),
+                source_no_wave_sha256=no_wave_record["sha256"],
+                label=f"{case_id} accepted direct-FFT reference",
+            )
         cases.append(
             PureMaskCase(
                 case_id=case_id,
@@ -844,6 +1029,7 @@ def validate_config(config_path: str | Path) -> dict[str, Any]:
                 mask_metadata=mask_metadata,
                 csm={**csm_record, "base": str(csm_base)},
                 psf={**psf_record, "base": str(psf_base)},
+                direct_fft_reference=reference_record,
             )
         )
     immutable_contract = {
@@ -876,7 +1062,16 @@ def validate_config(config_path: str | Path) -> dict[str, Any]:
             "immutable_contract_sha256": json_object_sha256(immutable_contract),
             "snapshot": config,
         },
-        "layout": output_layout(output_root),
+        "layout": output_layout(
+            output_root,
+            case_ids=expected_case_ids,
+            native_case_ids=tuple(
+                case.case_id
+                for case in cases
+                if case.resolved.target_logical_matrix_ro_lin_par == native_matrix
+            ),
+            include_source_materialization=int(config["format_version"]) == 1,
+        ),
         "geometry": asdict(geometry),
         "extended_wave_readout": extended_readout,
         "virtual_coils": coils,

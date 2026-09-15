@@ -17,12 +17,12 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from pure_mask_rerun import (
-    CASE_IDS,
     FINE_LAMBDA_POOL,
     LLR_BLOCK_SIZES,
     bart_base,
     build_wave_command,
     coarse_candidate_settings,
+    configured_case_ids,
     load_json,
     open_cfl,
     resolve_config_path,
@@ -139,15 +139,16 @@ def _validated_preparation(validated: dict[str, Any]) -> dict[str, Any]:
     root = Path(validated["layout"]["root"])
     manifest_path = root / "preparation_manifest.json"
     preparation = load_json(manifest_path, "pure-mask preparation manifest")
+    case_ids = configured_case_ids(validated)
     if preparation.get("status") != "complete":
         raise ValueError("Pure-mask preparation is not complete.")
     if preparation.get("config", {}).get("immutable_contract_sha256") != validated[
         "config"
     ]["immutable_contract_sha256"]:
         raise ValueError("Pure-mask preparation uses a different immutable input contract.")
-    if set(preparation.get("cases", {})) != set(CASE_IDS):
-        raise ValueError("Pure-mask preparation does not contain exactly five cases.")
-    for case_id in CASE_IDS:
+    if tuple(preparation.get("cases", {})) != case_ids:
+        raise ValueError("Pure-mask preparation case identifiers differ from the configuration.")
+    for case_id in case_ids:
         record = preparation["cases"][case_id]
         case_path = Path(record["case_manifest"])
         if sha256_file(case_path) != record["case_manifest_sha256"]:
@@ -170,7 +171,10 @@ def _validated_preparation(validated: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fine_settings(
-    config: Mapping[str, Any], config_path: Path, output_root: Path
+    config: Mapping[str, Any],
+    config_path: Path,
+    output_root: Path,
+    case_ids: Sequence[str],
 ) -> dict[str, list[dict[str, Any]]]:
     """Validate explicitly reviewed fine settings and their coarse manifests.
 
@@ -178,6 +182,7 @@ def _fine_settings(
         config: Complete local rerun configuration.
         config_path: Configuration path used for relative resolution.
         output_root: Confirmed workflow root.
+        case_ids: Ordered identifiers that must be explicitly configured.
 
     Returns:
         Ordered per-case positive-lambda settings.
@@ -224,11 +229,13 @@ def _fine_settings(
         for record in coarse_sweep["candidate_manifests"]
     }
     raw_cases = fine.get("cases")
-    if not isinstance(raw_cases, Mapping) or set(raw_cases) != set(CASE_IDS):
-        raise ValueError("fine_sweep.cases must explicitly contain all five cases.")
+    if not isinstance(raw_cases, Mapping) or tuple(raw_cases) != tuple(case_ids):
+        raise ValueError(
+            "fine_sweep.cases must explicitly contain every configured case in order."
+        )
     allowed = set(FINE_LAMBDA_POOL)
     result: dict[str, list[dict[str, Any]]] = {}
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         raw_settings = raw_cases[case_id]
         if not isinstance(raw_settings, list) or not raw_settings:
             raise ValueError(f"fine_sweep.cases.{case_id} must be a nonempty list.")
@@ -279,11 +286,15 @@ def _candidate_settings(
         Ordered per-case candidate settings.
     """
     if stage == "coarse":
-        return {case_id: coarse_candidate_settings() for case_id in CASE_IDS}
+        return {
+            case_id: coarse_candidate_settings()
+            for case_id in configured_case_ids(validated)
+        }
     return _fine_settings(
         validated["config"]["snapshot"],
         Path(validated["config"]["path"]),
         Path(validated["layout"]["root"]),
+        configured_case_ids(validated),
     )
 
 
@@ -351,7 +362,7 @@ def _run_candidate(
 
     Args:
         bart: Resolved compatible BART executable.
-        case_id: Stable five-case identifier.
+        case_id: Stable configured case identifier.
         case_manifest_path: Hash-bound prepared case manifest.
         setting: Method, lambda, and optional LLR block size.
         run_dir: Candidate output directory.
@@ -467,10 +478,11 @@ def run_sweep(
         Validation summary or completed sweep manifest.
     """
     validated = validate_config(config_path)
+    case_ids = configured_case_ids(validated)
     preparation = _validated_preparation(validated)
     settings_by_case = _candidate_settings(validated, stage)
     new_candidate_count = sum(len(values) for values in settings_by_case.values())
-    if stage == "coarse" and new_candidate_count != len(CASE_IDS) * 23:
+    if stage == "coarse" and new_candidate_count != len(case_ids) * 23:
         raise AssertionError("Coarse sweep must contain 23 candidates per case.")
     reused_records: list[dict[str, Any]] = []
     if stage == "fine":
@@ -523,7 +535,7 @@ def run_sweep(
         "started_at_utc": _utc_now(),
     }
     write_json_atomic(manifest_path, sweep)
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         case_manifest_path = Path(preparation["cases"][case_id]["case_manifest"])
         for setting in settings_by_case[case_id]:
             run_dir = stage_root / case_id / candidate_name(setting)

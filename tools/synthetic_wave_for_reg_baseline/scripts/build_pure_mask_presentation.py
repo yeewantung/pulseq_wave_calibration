@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a manifested FISTA-versus-selected-Wavelet presentation package."""
+"""Build a manifested FISTA-versus-selected-regularization presentation package."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from export_presentation_orientation_tiffs import (
     slice_indices,
 )
 from pure_mask_rerun import (
-    CASE_IDS,
+    configured_case_ids,
     load_json,
     logical_array_sha256,
     sha256_file,
@@ -217,7 +217,7 @@ def _save_nifti(path: Path, data: np.ndarray, affine: np.ndarray) -> dict[str, A
 
 
 def _write_metrics(path: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Write the ten presentation metric rows atomically.
+    """Write the configured presentation metric rows atomically.
 
     Args:
         path: Destination CSV.
@@ -226,8 +226,8 @@ def _write_metrics(path: Path, rows: Sequence[Mapping[str, Any]]) -> dict[str, A
     Returns:
         Output path, hash, and row-count record.
     """
-    if len(rows) != 10:
-        raise ValueError("Presentation metrics must contain exactly ten rows.")
+    if not rows:
+        raise ValueError("Presentation metrics must contain at least one row.")
     temporary = path.with_name(f".{path.name}.tmp")
     with temporary.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0].keys()))
@@ -274,7 +274,7 @@ def build(
     validate_only: bool,
     resume: bool,
 ) -> dict[str, Any]:
-    """Validate or build the ten-reconstruction presentation package.
+    """Validate or build the configured reconstruction presentation package.
 
     Args:
         config_path: Ignored pure-mask rerun configuration.
@@ -286,6 +286,7 @@ def build(
         Validation summary or completed presentation manifest.
     """
     validated = validate_config(config_path)
+    case_ids = configured_case_ids(validated)
     root = Path(validated["layout"]["root"])
     expected_output_dir = root / "presentation"
     selection_path = root / "evaluation" / "review" / "selection_manifest.json"
@@ -295,9 +296,9 @@ def build(
         selection.get("status") != "complete"
         or selection.get("automatic_selection_performed") is not False
         or selection.get("composite_score_used") is not False
-        or set(selection.get("selections", {})) != set(CASE_IDS)
+        or tuple(selection.get("selections", {})) != case_ids
     ):
-        raise ValueError("Presentation requires a complete five-case selection manifest.")
+        raise ValueError("Presentation requires a complete configured-case selection manifest.")
     shortlist_record = selection["shortlist_manifest"]
     shortlist_path = Path(shortlist_record["path"]).resolve()
     if sha256_file(shortlist_path) != shortlist_record["sha256"]:
@@ -350,23 +351,34 @@ def build(
     )
 
     entries: list[dict[str, Any]] = []
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         selected = selection["selections"][case_id]
         selected_setting = selected["setting"]
-        if selected_setting["method"] != "wavelet":
-            raise ValueError(f"{case_id} presentation selection must be Wavelet.")
+        if selected_setting["method"] not in {"wavelet", "llr"}:
+            raise ValueError(f"{case_id} presentation selection must be Wavelet or LLR.")
         control_setting = {"method": "fista_lambda0", "block_size": None, "lambda": 0.0}
-        for role, setting in (("fista_control", control_setting), ("approved_wavelet", selected_setting)):
+        selected_role = f"approved_{selected_setting['method']}"
+        for role, setting in (
+            ("fista_control", control_setting),
+            (selected_role, selected_setting),
+        ):
             record = _candidate_record(sweep, case_id, setting)
             metric = _metric_row(evaluation, case_id, setting)
-            if role == "approved_wavelet":
+            if role != "fista_control":
                 selected_manifest = selected["candidate_manifest"]
                 if (
                     Path(selected_manifest["path"]).resolve() != Path(record["manifest"]).resolve()
                     or selected_manifest["sha256"] != record["manifest_sha256"]
                 ):
                     raise ValueError(f"{case_id} selected candidate differs from the fine sweep.")
-                key = f"{case_id}__wavelet_lambda-{_lambda_token(setting['lambda'])}"
+                method_token = str(setting["method"])
+                block_token = (
+                    "" if setting.get("block_size") is None else f"_block-{setting['block_size']}"
+                )
+                key = (
+                    f"{case_id}__{method_token}{block_token}_lambda-"
+                    f"{_lambda_token(setting['lambda'])}"
+                )
             else:
                 key = f"{case_id}__fista_lambda0"
             entries.append(
@@ -380,8 +392,8 @@ def build(
                     "metric_row": metric,
                 }
             )
-    if len(entries) != 10:
-        raise AssertionError("Presentation entry count differs from ten.")
+    if len(entries) != 2 * len(case_ids):
+        raise AssertionError("Presentation entry count differs from two per configured case.")
 
     # Validate all candidate arrays and direct-FFT references before any output write.
     for entry in entries:
@@ -533,7 +545,7 @@ def build(
     completed = {
         "format_version": 1,
         "status": "complete",
-        "purpose": "FISTA controls and user-approved Wavelet reconstructions",
+        "purpose": "FISTA controls and user-approved regularized reconstructions",
         "inputs": {
             "selection_manifest": {"path": str(selection_path), "sha256": selection_hash},
             "shortlist_manifest": {"path": str(shortlist_path), "sha256": sha256_file(shortlist_path)},
@@ -542,8 +554,8 @@ def build(
             "preparation_manifest": {"path": str(preparation_path), "sha256": sha256_file(preparation_path)},
         },
         "scientific_scope": {
-            "magnitude_niftis": 10,
-            "center_slice_tiffs": 30,
+            "magnitude_niftis": len(output_entries),
+            "center_slice_tiffs": 3 * len(output_entries),
             "phase_exported": False,
             "nifti_spatial_resampling_performed": False,
             "nifti_intensity_scaling_performed": False,

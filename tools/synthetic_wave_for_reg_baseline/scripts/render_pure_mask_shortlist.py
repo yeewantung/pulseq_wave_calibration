@@ -18,7 +18,13 @@ from evaluate_pure_mask_sweeps import (
     logical_to_physical_xyz,
     scale_candidate_for_display,
 )
-from pure_mask_rerun import CASE_IDS, load_json, sha256_file, validate_config, write_json_atomic
+from pure_mask_rerun import (
+    configured_case_ids,
+    load_json,
+    sha256_file,
+    validate_config,
+    write_json_atomic,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -73,21 +79,24 @@ def _utc_now() -> str:
 
 
 def _shortlist(
-    config: Mapping[str, Any], sweep: Mapping[str, Any]
+    config: Mapping[str, Any], sweep: Mapping[str, Any], case_ids: Sequence[str]
 ) -> dict[str, list[dict[str, Any]]]:
     """Validate a manual shortlist against manifest-listed candidates.
 
     Args:
         config: Complete ignored local rerun configuration.
         sweep: Completed manifest-backed sweep.
+        case_ids: Ordered identifiers required by the current configuration.
 
     Returns:
         Ordered per-case shortlist settings.
     """
     evaluation = config.get("evaluation")
     raw = evaluation.get("manual_shortlist") if isinstance(evaluation, Mapping) else None
-    if not isinstance(raw, Mapping) or set(raw) != set(CASE_IDS):
-        raise ValueError("evaluation.manual_shortlist must explicitly contain all five cases.")
+    if not isinstance(raw, Mapping) or tuple(raw) != tuple(case_ids):
+        raise ValueError(
+            "evaluation.manual_shortlist must explicitly contain every configured case in order."
+        )
     available = {
         (
             record["case_id"],
@@ -98,7 +107,7 @@ def _shortlist(
         for record in sweep["candidate_manifests"]
     }
     result: dict[str, list[dict[str, Any]]] = {}
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         settings = raw[case_id]
         if not isinstance(settings, list) or not 2 <= len(settings) <= 6:
             raise ValueError(f"{case_id} manual shortlist must contain two to six candidates.")
@@ -144,6 +153,7 @@ def render(
         Validation summary or completed shortlist manifest.
     """
     validated = validate_config(config_path)
+    case_ids = configured_case_ids(validated)
     sweep_path, sweep = _load_sweep(validated, stage)
     evaluation_path = Path(validated["layout"]["root"]) / "evaluation" / stage / "evaluation_manifest.json"
     evaluation = load_json(evaluation_path, f"pure-mask {stage} evaluation")
@@ -162,7 +172,7 @@ def render(
         or evaluation_sweep.get("sha256") != sha256_file(sweep_path)
     ):
         raise ValueError("Manual shortlist evaluation is not bound to its sweep manifest.")
-    shortlist = _shortlist(validated["config"]["snapshot"], sweep)
+    shortlist = _shortlist(validated["config"]["snapshot"], sweep, case_ids)
     count = sum(len(values) for values in shortlist.values())
     if validate_only:
         if confirmed_output_root is not None:
@@ -193,7 +203,7 @@ def render(
     axis_flips = config["evaluation"]["logical_to_canonical_axis_flips"]
     preparation = load_json(root / "preparation_manifest.json", "preparation manifest")
     figures = []
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         case = load_json(preparation["cases"][case_id]["case_manifest"], "prepared case")
         reference = logical_to_physical_xyz(
             np.load(case["direct_fft_reference"]["path"], allow_pickle=False),

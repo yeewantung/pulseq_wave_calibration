@@ -47,7 +47,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         "MPRAGE NIfTI collection complete: "
         f"{args.output_root.expanduser().resolve() / 'nifti_collection'} "
-        f"({len(manifest['cases'])} case groups)"
+        f"({len(manifest['cases'])} case groups; "
+        f"{len(manifest['synchronization']['added_case_groups'])} added)"
     )
     return 0
 
@@ -74,7 +75,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--require-retro",
         action="store_true",
-        help="Require all four retrospective case NIfTI directories.",
+        help=(
+            "Require all four standard R3x2 retrospective cases for every "
+            "discovered normal branch."
+        ),
     )
     parser.add_argument(
         "--relative-threshold",

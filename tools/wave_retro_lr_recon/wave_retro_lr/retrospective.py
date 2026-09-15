@@ -70,6 +70,8 @@ def write_measured_wave_crop(
     case: ResolvedCase,
     source_mask: np.ndarray,
     source_acceleration_lin_par: tuple[int, int],
+    *,
+    target_mask: np.ndarray | None = None,
 ) -> dict[str, float | int]:
     """Center-crop measured Wave k-space and apply its target mask.
 
@@ -79,6 +81,8 @@ def write_measured_wave_crop(
         case: Resolved PE crop and target acceleration.
         source_mask: Boolean measured image-stream mask.
         source_acceleration_lin_par: Known source LIN/PAR acceleration.
+        target_mask: Optional explicit pure target mask. It must be a subset of
+            the cropped measured source coordinates.
 
     Returns:
         K-space norm, sample count, fraction, and image-center status.
@@ -93,9 +97,25 @@ def write_measured_wave_crop(
     if (source_lin, source_par) != source_mask.shape:
         raise ValueError("Measured Wave k-space and source mask dimensions disagree.")
     _, target_lin, target_par = case.target_logical_matrix_ro_lin_par
-    target_mask = _measured_target_mask(
+    derived_mask = _measured_target_mask(
         source_mask, case, source_acceleration_lin_par
     )
+    if target_mask is None:
+        resolved_mask = derived_mask
+    else:
+        resolved_mask = np.asarray(target_mask)
+        cropped_source_mask = np.asarray(source_mask, dtype=bool)[
+            slice(*case.crop_bounds_lin), slice(*case.crop_bounds_par)
+        ]
+        if (
+            resolved_mask.dtype != np.bool_
+            or resolved_mask.shape != (target_lin, target_par)
+            or not np.any(resolved_mask)
+            or np.any(resolved_mask & ~cropped_source_mask)
+        ):
+            raise ValueError(
+                "Explicit target mask must be a nonempty boolean subset of measured samples."
+            )
     output = create_cfl(output_base, (ro_os, target_lin, target_par, coils, 1))
     lin = slice(*case.crop_bounds_lin)
     par = slice(*case.crop_bounds_par)
@@ -105,17 +125,17 @@ def write_measured_wave_crop(
         if cropped.shape != (ro_os, target_lin, target_par):
             raise ValueError("Measured Wave crop did not reduce to one 3D coil volume.")
         cropped = np.array(cropped, dtype=np.complex64, copy=True)
-        cropped *= target_mask[None, :, :]
+        cropped *= resolved_mask[None, :, :]
         output[:, :, :, coil, 0] = cropped
         squared_norm += float(np.vdot(cropped, cropped).real)
     output.flush()
     del output
     return {
         "wave_kspace_norm": float(np.sqrt(squared_norm)),
-        "sampled_coordinate_count": int(np.count_nonzero(target_mask)),
-        "sampling_fraction": float(np.mean(target_mask)),
+        "sampled_coordinate_count": int(np.count_nonzero(resolved_mask)),
+        "sampling_fraction": float(np.mean(resolved_mask)),
         "image_kspace_center_acquired": bool(
-            target_mask[target_lin // 2, target_par // 2]
+            resolved_mask[target_lin // 2, target_par // 2]
         ),
     }
 

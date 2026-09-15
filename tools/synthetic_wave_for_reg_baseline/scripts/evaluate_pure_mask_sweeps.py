@@ -22,7 +22,7 @@ from scipy.ndimage import binary_dilation, binary_erosion, gaussian_filter
 from skimage.metrics import structural_similarity
 
 from pure_mask_rerun import (
-    CASE_IDS,
+    configured_case_ids,
     load_json,
     logical_array_sha256,
     sha256_file,
@@ -345,17 +345,21 @@ def scale_candidate_for_display(
     return scaled
 
 
-def metric_leaders(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def metric_leaders(
+    rows: Sequence[Mapping[str, Any]], case_ids: Sequence[str] | None = None
+) -> dict[str, Any]:
     """Report independent metric leaders by case and regularizer family.
 
     Args:
         rows: Candidate metric records.
+        case_ids: Optional explicit case order; otherwise use first occurrence order.
 
     Returns:
         Nested leaders without any composite score or automatic winner.
     """
+    ordered_case_ids = tuple(case_ids or dict.fromkeys(str(row["case_id"]) for row in rows))
     result: dict[str, Any] = {}
-    for case_id in CASE_IDS:
+    for case_id in ordered_case_ids:
         case_rows = [row for row in rows if row["case_id"] == case_id]
         result[case_id] = {}
         families = sorted(
@@ -633,6 +637,7 @@ def _load_sweep(validated: dict[str, Any], stage: str) -> tuple[Path, dict[str, 
         Sweep manifest path and parsed payload.
     """
     root = Path(validated["layout"]["root"])
+    case_ids = configured_case_ids(validated)
     path = root / "sweeps" / stage / "sweep_manifest.json"
     sweep = load_json(path, f"pure-mask {stage} sweep manifest")
     if sweep.get("status") != "complete" or sweep.get("stage") != stage:
@@ -653,10 +658,10 @@ def _load_sweep(validated: dict[str, Any], stage: str) -> tuple[Path, dict[str, 
     if stage == "fine":
         allowed_roots.append(root / "sweeps" / "coarse")
     seen: set[tuple[Any, ...]] = set()
-    control_count = {case_id: 0 for case_id in CASE_IDS}
+    control_count = {case_id: 0 for case_id in case_ids}
     for record in records:
         case_id = record.get("case_id")
-        if case_id not in CASE_IDS:
+        if case_id not in case_ids:
             raise ValueError(f"Sweep contains an unknown case identifier: {case_id!r}.")
         candidate_path = Path(record["manifest"]).resolve()
         if not any(candidate_path.is_relative_to(candidate_root) for candidate_root in allowed_roots):
@@ -703,7 +708,7 @@ def _load_sweep(validated: dict[str, Any], stage: str) -> tuple[Path, dict[str, 
     if any(count != 1 for count in control_count.values()):
         raise ValueError("Every evaluated case must contain exactly one FISTA lambda-zero control.")
     if stage == "coarse":
-        for case_id in CASE_IDS:
+        for case_id in case_ids:
             if sum(record["case_id"] == case_id for record in records) != 23:
                 raise ValueError(f"Coarse sweep must contain 23 candidates for {case_id}.")
     return path, sweep
@@ -732,6 +737,7 @@ def evaluate(
         Validation summary or completed evaluation manifest.
     """
     validated = validate_config(config_path)
+    case_ids = configured_case_ids(validated)
     sweep_path, sweep = _load_sweep(validated, stage)
     candidate_count = len(sweep["candidate_manifests"])
     if validate_only:
@@ -804,12 +810,12 @@ def evaluate(
         case_id: [
             record for record in sweep["candidate_manifests"] if record["case_id"] == case_id
         ]
-        for case_id in CASE_IDS
+        for case_id in case_ids
     }
     rows: list[dict[str, Any]] = []
     figure_paths: list[Path] = []
     derived_mask_records: dict[str, dict[str, Any]] = {}
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         print(
             f"Evaluating {case_id}: {len(records_by_case[case_id])} candidates.",
             flush=True,
@@ -968,7 +974,7 @@ def evaluate(
     )
     csv_path = output_dir / "metrics.csv"
     _write_csv(csv_path, rows)
-    leaders = metric_leaders(rows)
+    leaders = metric_leaders(rows, case_ids)
     completed = {
         "format_version": 1,
         "derivation_version": EVALUATION_DERIVATION_VERSION,

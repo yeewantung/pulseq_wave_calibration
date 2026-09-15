@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Validate or prepare the five corrected pure-mask synthetic Wave cases."""
+"""Validate or prepare configured corrected pure-mask synthetic Wave cases."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,15 +14,14 @@ from typing import Any, Sequence
 import numpy as np
 
 from pure_mask_rerun import (
-    CASE_IDS,
     PureMaskCase,
     array_is_finite,
     bart_base,
+    configured_case_ids,
     direct_fft_reference,
     link_bart_pair,
     logical_array_sha256,
     open_cfl,
-    output_layout,
     sha256_file,
     synthesize_wave_from_no_wave_crop,
     validate_config,
@@ -48,7 +48,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.validate_only:
         print(json.dumps(result["layout"], indent=2))
-        print("Validated five pure-mask input contracts; no output was written.")
+        print(
+            f"Validated {len(result['cases'])} pure-mask input contract(s); "
+            "no output was written."
+        )
     return 0
 
 
@@ -109,7 +112,7 @@ def _complete_preparation_reusable(
             return False
         if manifest.get("source") != validated["source"]:
             return False
-        for case_id in CASE_IDS:
+        for case_id in configured_case_ids(validated):
             record = manifest["cases"][case_id]
             case_manifest = Path(record["case_manifest"])
             if not case_manifest.is_file() or sha256_file(case_manifest) != record["case_manifest_sha256"]:
@@ -119,6 +122,9 @@ def _complete_preparation_reusable(
                 return False
             mask = np.load(case_payload["sampling_mask"]["path"], allow_pickle=False)
             if logical_array_sha256(mask) != case_payload["sampling_mask"]["logical_sha256"]:
+                return False
+            reference = case_payload["direct_fft_reference"]
+            if sha256_file(reference["path"]) != reference["sha256"]:
                 return False
             for artifact in ("wave_kspace", "coil_sens", "psf"):
                 payload_path = Path(case_payload["bart_inputs"][artifact]["base"]).with_suffix(".cfl")
@@ -151,7 +157,10 @@ def _case_full_wave(
     Returns:
         Full Wave array and immutable source provenance record.
     """
-    if case.case_id in {"native_r3x1", "native_r3x2"}:
+    if (
+        case.resolved.target_logical_matrix_ro_lin_par
+        == case.resolved.source_logical_matrix_ro_lin_par
+    ):
         return native_full_wave, {
             "role": "reused accepted native full synthetic Wave source",
             "path": str(Path(native_full_wave.filename).resolve()),
@@ -253,19 +262,35 @@ def _prepare_case(
     if no_wave_crop.shape != expected_no_wave_shape:
         raise ValueError(f"{case.case_id} direct no-Wave crop has shape {no_wave_crop.shape}.")
     fft_workers = int(validated["config"]["snapshot"].get("runtime", {}).get("fft_workers", 4))
-    reference = direct_fft_reference(no_wave_crop, fft_workers=fft_workers)
     reference_path = case_root / "direct_fft_reference_logical.npy"
-    np.save(reference_path, reference)
-    reference_record = {
-        "path": str(reference_path),
-        "shape": list(reference.shape),
-        "dtype": str(reference.dtype),
-        "sha256": sha256_file(reference_path),
-        "logical_sha256": logical_array_sha256(reference),
-        "source_no_wave_crop_bounds_lin": list(case.resolved.crop_bounds_lin),
-        "source_no_wave_crop_bounds_par": list(case.resolved.crop_bounds_par),
-        "interpolation_performed": False,
-    }
+    if case.direct_fft_reference is not None:
+        accepted_reference_path = Path(case.direct_fft_reference["path"])
+        reference_path.symlink_to(os.path.relpath(accepted_reference_path, case_root))
+        reference_record = {
+            **case.direct_fft_reference,
+            "path": str(reference_path),
+            "accepted_source_path": str(accepted_reference_path),
+            "source_no_wave_crop_bounds_lin": list(case.resolved.crop_bounds_lin),
+            "source_no_wave_crop_bounds_par": list(case.resolved.crop_bounds_par),
+            "interpolation_performed": False,
+            "reused": True,
+            "recalculated": False,
+        }
+    else:
+        reference = direct_fft_reference(no_wave_crop, fft_workers=fft_workers)
+        np.save(reference_path, reference)
+        reference_record = {
+            "path": str(reference_path),
+            "shape": list(reference.shape),
+            "dtype": str(reference.dtype),
+            "sha256": sha256_file(reference_path),
+            "logical_sha256": logical_array_sha256(reference),
+            "source_no_wave_crop_bounds_lin": list(case.resolved.crop_bounds_lin),
+            "source_no_wave_crop_bounds_par": list(case.resolved.crop_bounds_par),
+            "interpolation_performed": False,
+            "reused": False,
+            "recalculated": True,
+        }
 
     native_full_wave = np.load(
         validated["source"]["native_full_wave_kspace"]["path"], mmap_mode="r"
@@ -336,7 +361,7 @@ def prepare(
     confirmed_output_root: Path | None,
     resume: bool,
 ) -> dict[str, Any]:
-    """Validate inputs and optionally materialize all five prepared cases.
+    """Validate inputs and optionally materialize all configured cases.
 
     Args:
         config_path: Ignored local configuration path.
@@ -380,7 +405,7 @@ def prepare(
         "status": "preparing",
         "workflow": "synthetic_wave_pure_mask_regularization_rerun",
         "config": validated["config"],
-        "layout": output_layout(configured_root),
+        "layout": validated["layout"],
         "source": validated["source"],
         "geometry": validated["geometry"],
         "cases": {},

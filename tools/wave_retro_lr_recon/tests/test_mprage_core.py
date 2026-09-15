@@ -48,9 +48,13 @@ from wave_retro_lr.mprage import (  # noqa: E402
     _calibrated_psf_inputs,
     _embed_image_stream,
     _ensure_r3x1_psf_coefficient_plot,
+    _file_identity,
+    _native_manifest_matches,
+    _native_r3x3_residue,
     _normalize_psf_coefficient_settings,
     _normalize_psf_spatial_settings,
     _recover_c_only_automatic_rejection,
+    _validate_same_grid_masked_wave,
     _write_automatic_psf_rejection_diagnostics,
 )
 from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
@@ -72,6 +76,10 @@ class SamplingTests(unittest.TestCase):
             ((256, 256), (3, 2), (1, 0)): (
                 10880,
                 "22c680851a8799e602ef3bdf8c0e0edc0eace80cc766a0210a8bc31fdca3926e",
+            ),
+            ((256, 256), (3, 3), (1, 2)): (
+                7225,
+                "36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3",
             ),
             ((256, 172), (3, 2), (1, 0)): (
                 7310,
@@ -111,6 +119,45 @@ class SamplingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Historical ACS-union"):
             validate_pure_cartesian_image_lattice(mask, metadata)
 
+    def test_r3x3_masked_wave_preserves_acquired_samples_exactly(self) -> None:
+        """Verify same-grid R3x3 data equal source samples and vanish elsewhere.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source_base = root / "source"
+            target_base = root / "target"
+            shape = (4, 6, 6, 2, 1)
+            source = create_cfl(source_base, shape)
+            values = (
+                np.arange(np.prod(shape), dtype=np.float32).reshape(shape, order="F")
+                + 1j
+            ).astype(np.complex64)
+            source[...] = values
+            source.flush()
+            del source
+            mask, _metadata = pure_cartesian_image_lattice_mask(
+                (6, 6), acceleration_lin_par=(3, 3), residue_lin_par=(1, 2)
+            )
+            target = create_cfl(target_base, shape)
+            target[...] = 0
+            target[..., 0][:, mask, :] = values[..., 0][:, mask, :]
+            target.flush()
+            del target
+            result = _validate_same_grid_masked_wave(
+                source_base, target_base, mask, readout_chunk=2
+            )
+            self.assertTrue(result["acquired_samples_equal_source_bitwise"])
+            self.assertTrue(result["unacquired_samples_are_exact_zero"])
+            target = open_cfl(target_base, mode="r+")
+            target[0, 0, 0, 0, 0] = 1
+            target.flush()
+            del target
+            with self.assertRaisesRegex(ValueError, "zero-exterior"):
+                _validate_same_grid_masked_wave(source_base, target_base, mask)
+
     def test_accepts_only_r1_or_regular_lin_r3x1(self) -> None:
         """Verify the two supported image-stream sampling classes.
 
@@ -135,6 +182,47 @@ class SamplingTests(unittest.TestCase):
         self.assertEqual(r3.name, "R3x1")
         self.assertEqual(r3.lin_residue, 1)
         self.assertEqual(int(r3.mask().sum()), 12)
+
+    def test_r3x3_residue_inherits_measured_r3x1_lattice(self) -> None:
+        """Verify R3x3 retains measured LIN support and center-aligns PAR.
+
+        Returns:
+            None.
+        """
+        source = SamplingPattern(
+            name="R3x1",
+            acceleration_lin_par=(3, 1),
+            lin_residue=2,
+            matrix_lin_par=(256, 192),
+            acquired_lin=tuple(range(2, 256, 3)),
+            acquired_par=tuple(range(192)),
+            measurement_index=1,
+        )
+        self.assertEqual(_native_r3x3_residue(source, 192), (2, 0))
+        mask, _metadata = pure_cartesian_image_lattice_mask(
+            (256, 192),
+            acceleration_lin_par=(3, 3),
+            residue_lin_par=_native_r3x3_residue(source, 192),
+        )
+        self.assertTrue(np.all(mask <= source.mask()))
+        self.assertEqual(int(mask.sum()), 5_440)
+
+    def test_r1_r3x3_residue_retains_reviewed_lin_choice(self) -> None:
+        """Verify a fully sampled source retains the reviewed LIN residue 1.
+
+        Returns:
+            None.
+        """
+        source = SamplingPattern(
+            name="R1",
+            acceleration_lin_par=(1, 1),
+            lin_residue=None,
+            matrix_lin_par=(8, 8),
+            acquired_lin=tuple(range(8)),
+            acquired_par=tuple(range(8)),
+            measurement_index=0,
+        )
+        self.assertEqual(_native_r3x3_residue(source, 8), (1, 1))
 
     def test_rejects_duplicate_and_irregular_coordinates(self) -> None:
         """Verify ambiguous or non-Cartesian MDH coordinate sets fail.
@@ -1336,6 +1424,35 @@ class BartInputTests(unittest.TestCase):
             self.assertEqual(metrics["sampled_coordinate_count"], 12)
             self.assertFalse(metrics["image_kspace_center_acquired"])
 
+    def test_measured_r1_accepts_explicit_reviewed_r3x3_residue(self) -> None:
+        """Verify R1 data can use the exact residue-1/2 R3x3 mask.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = create_cfl(root / "wave", (4, 8, 8, 1, 1))
+            source[...] = 1
+            source.flush()
+            del source
+            geometry = Geometry((8.0, 8.0, 4.0), (4, 8, 8))
+            case = resolve_case(CaseSpec((1.0, 1.0, 1.0), (3, 3)), geometry)
+            mask, _metadata = pure_cartesian_image_lattice_mask(
+                (8, 8), acceleration_lin_par=(3, 3), residue_lin_par=(1, 2)
+            )
+            metrics = write_measured_wave_crop(
+                root / "wave",
+                root / "r3x3",
+                case,
+                np.ones((8, 8), dtype=bool),
+                (1, 1),
+                target_mask=mask,
+            )
+            result = np.asarray(open_cfl(root / "r3x3"))[:, :, :, 0, 0]
+            np.testing.assert_array_equal(np.any(result != 0, axis=0), mask)
+            self.assertEqual(metrics["sampled_coordinate_count"], int(mask.sum()))
+
     def test_legacy_mask_does_not_infer_acs_from_fully_sampled_rows(self) -> None:
         """Verify legacy masking never treats full image rows as ACS.
 
@@ -1392,6 +1509,150 @@ class BartInputTests(unittest.TestCase):
             "wavelet", 0.0, block_size=8, iterations=100, tolerance=1e-6, maximum_eigenvalue=None
         )
         self.assertEqual(options, ["-w", "-f", "-r", "0", "-i", "100", "-t", "1e-06", "-g"])
+
+
+class ManifestReuseTests(unittest.TestCase):
+    def test_legacy_default_sine_line_manifest_is_reusable(self) -> None:
+        """Verify legacy default sine-line metadata passes strict hash checks.
+
+        Returns:
+            None.
+        """
+        legacy_paths = (
+            "external/wave-mprage/recon/recon_wave_mprage_from_twix_integrated_nifti.py",
+            "external/wave-mprage/recon/utils/psf_coefficient_processing.py",
+            "external/wave-mprage/recon/utils/psf_wrapped_phase_fit.py",
+        )
+        legacy_hashes = {
+            path: f"sha256-{index}" for index, path in enumerate(legacy_paths)
+        }
+        requested_hashes = {**legacy_hashes, "tool/local_calibration.py": "sha256-new"}
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"twix")
+            sequence.write_bytes(b"sequence")
+            manifest = {
+                "status": "measured_wave_mprage_bart_inputs_ready",
+                "source": {
+                    "twix": _file_identity(twix),
+                    "sequence": _file_identity(sequence, include_hash=True),
+                },
+                "psf_calibration": {
+                    "coefficient_processing": "sine-line",
+                    "fit_range_selection": "automatic",
+                    "requested_fit_kx_range": None,
+                    "fit_kx_range_convention": "half-open",
+                    "processing_diagnostics": {},
+                    "processing_implementation": {"files_sha256": legacy_hashes},
+                },
+            }
+            requested = {
+                **_normalize_psf_coefficient_settings("sine-line", None, None),
+                **_normalize_psf_spatial_settings(None, None, None, None),
+                "processing_implementation": {"files_sha256": requested_hashes},
+            }
+            self.assertTrue(
+                _native_manifest_matches(manifest, twix, sequence, requested)
+            )
+
+            manual_spatial = {
+                **requested,
+                **_normalize_psf_spatial_settings(1, 4, None, None),
+            }
+            self.assertFalse(
+                _native_manifest_matches(manifest, twix, sequence, manual_spatial)
+            )
+            mismatched_hashes = dict(requested_hashes)
+            mismatched_hashes[legacy_paths[0]] = "different"
+            mismatched_implementation = {
+                **requested,
+                "processing_implementation": {"files_sha256": mismatched_hashes},
+            }
+            self.assertFalse(
+                _native_manifest_matches(
+                    manifest, twix, sequence, mismatched_implementation
+                )
+            )
+
+    def test_legacy_reuse_does_not_require_unrecorded_diagnostics(self) -> None:
+        """Verify absent legacy auxiliary CFLs do not block normal reuse.
+
+        Returns:
+            None.
+        """
+        legacy_paths = (
+            "external/wave-mprage/recon/recon_wave_mprage_from_twix_integrated_nifti.py",
+            "external/wave-mprage/recon/utils/psf_coefficient_processing.py",
+            "external/wave-mprage/recon/utils/psf_wrapped_phase_fit.py",
+        )
+        implementation = {
+            "files_sha256": {
+                path: f"sha256-{index}"
+                for index, path in enumerate(legacy_paths)
+            }
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"twix")
+            sequence.write_bytes(b"sequence")
+            destination = root / "output" / "normal" / "bart_inputs"
+            destination.mkdir(parents=True)
+            for name, shape in (
+                ("wave_kspace", (4, 4, 4, 1, 1)),
+                ("kspace_calib", (2, 4, 4, 1)),
+                ("psf", (4, 4, 4, 1, 1)),
+                ("wave_trajectory", (4, 2)),
+                ("psf_coefficients", (4, 3)),
+            ):
+                array = create_cfl(destination / name, shape)
+                array[...] = 0
+                array.flush()
+                del array
+            manifest = {
+                "format_version": 1,
+                "status": "measured_wave_mprage_bart_inputs_ready",
+                "source": {
+                    "twix": _file_identity(twix),
+                    "sequence": _file_identity(sequence, include_hash=True),
+                },
+                "sampling": {"name": "R3x1"},
+                "psf_calibration": {
+                    "coefficient_processing": "sine-line",
+                    "fit_range_selection": "automatic",
+                    "requested_fit_kx_range": None,
+                    "fit_kx_range_convention": "half-open",
+                    "fit_kx_range": [1, 3],
+                    "processing_diagnostics": {},
+                    "processing_implementation": implementation,
+                    "wave_trajectory": "wave_trajectory",
+                    "psf_coefficients": "psf_coefficients",
+                },
+            }
+            (destination / "manifest.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            with (
+                patch(
+                    "wave_retro_lr.mprage._psf_processing_implementation_identity",
+                    return_value=implementation,
+                ),
+                patch(
+                    "wave_retro_lr.mprage._ensure_r3x1_psf_coefficient_plot",
+                    return_value=None,
+                ),
+            ):
+                reused = prepare_normal_mprage(twix, root / "output", sequence)
+            self.assertEqual(reused, manifest)
+            self.assertFalse(
+                (destination / "psf_coefficients_processing_input.hdr").exists()
+            )
+            self.assertFalse(
+                (destination / "psf_coefficient_c_branch_turns.hdr").exists()
+            )
 
 
 class PreparationIntegrationTests(unittest.TestCase):

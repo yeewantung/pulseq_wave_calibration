@@ -202,6 +202,35 @@ The older crop-first operation for a no-Wave dataset remains available as
 `wave_retro_lr.retrospective.synthesize_wave_from_no_wave_crop`. It is an
 explicit `synthetic_wave_for_reg_baseline` utility, not a measured-data mode.
 
+### 2a. Independent native R3x3 retrospective undersampling
+
+For measured native R1 or regular single-residue R3x1 Wave-MPRAGE data, the
+tracked global script below applies the reviewed native R3x3 image lattice:
+
+```bash
+scripts/sample_mprage_retro_r3x3_recon.sh \
+    /path/to/measured_r1_or_r3x1_wave_mprage.dat \
+    /path/to/output_root \
+    /path/to/matching_wave_mprage.seq \
+    -g
+```
+
+The script rejects incompatible accelerated sources. For R1 it explicitly
+selects residue 1 on LIN; for R3x1 it inherits the measured LIN residue so the
+R3x3 lattice is an exact subset of available samples. PAR uses the
+center-aligned residue `(Npar // 2) mod 3`. Consequently, the exact mask count
+and hash are geometry- and source-residue-specific and are recorded in each
+case manifest. For the reviewed synthetic `256 x 256` grid with residue
+`(1, 2)`, they remain 7,225 coordinates and
+`36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3`.
+It reuses the native calibrated PSF and CSM without changing geometry, keeps
+calibration k-space separate, and writes only
+`retro/native_r3x3/{bart_inputs,bart_output,nifti}`. The two reconstruction
+branches are FISTA-r0 and the explicitly reviewed Wavelet lambda `4.5e-2`;
+the corresponding selection-manifest SHA-256 is
+`07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d`.
+CPU remains the default and `-g` selects GPU BART.
+
 ### 3. NIfTI collection
 
 After normal reconstruction and any desired retrospective cases, build the
@@ -213,17 +242,28 @@ scripts/sample_mprage_nifti_collection.sh \
     --require-retro
 ```
 
-Omit `--require-retro` to collect only the normal reconstruction. This script
-never runs k-space preparation, ecalib, or Wave reconstruction.
+Omit `--require-retro` to collect every currently available normal and
+retrospective reconstruction. With `--require-retro`, the four standard R3x2
+cases must additionally be complete for every discovered normal branch. This
+script never runs k-space preparation, ecalib, or Wave reconstruction.
+
+Discovery is directory-backed rather than case-list-backed: every populated
+`normal/nifti/<branch>` and `retro/<case>/nifti/<branch>` directory is included,
+including `native_r3x3` and future case or branch names. Rerunning the builder
+validates the existing tool-owned collection and its hashes, then atomically
+synchronizes it with the source tree. Newly discovered case groups are added
+and recorded under `synchronization` in the manifest; previously collected
+groups are never silently removed when their source directory disappears.
 
 MPRAGE reconstruction and presentation masking remain separate. The collection
 copies canonical NIfTIs byte-for-byte and creates whole-head-masked derivatives
 without modifying the scientific source files under `normal/nifti` and
 `retro/<case>/nifti`.
 
-The mask is estimated once from the normal `optimal_wavelet` magnitude and
-applied identically to both reconstruction branches. Normal `fista_r0` is the
-documented fallback for an R1-only workflow. The mask uses a high-confidence
+The mask is estimated once from the normal `optimal_wavelet` magnitude when
+available, with normal `fista_r0` as the next preference and the first other
+normal branch as a general fallback. It is applied identically to every
+discovered reconstruction branch. The mask uses a high-confidence
 head core with distance-limited low-threshold growth, optional physical
 opening, physical closing, the largest 26-connected 3D component, 3D hole
 filling, and optional physical dilation. BET is not used. The same normal mask
@@ -254,8 +294,9 @@ OUTPUT_ROOT/
     └── manifest.json
 ```
 
-Here `<branch>` is `fista_r0` or `optimal_wavelet`, and `<case>` is one of the
-four case names in the table above.
+Here `<branch>` and `<case>` are discovered from the populated source tree;
+standard examples include `fista_r0`, `optimal_wavelet`, the four R3x2 cases,
+and `native_r3x3`.
 
 ## GRE workflow
 

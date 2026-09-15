@@ -30,6 +30,7 @@ from .bart_io import sha256_file
 
 COLLECTION_BUILDER = "wave_retro_lr.nifti_collection"
 RECONSTRUCTION_BRANCHES = ("fista_r0", "optimal_wavelet")
+MASK_BRANCH_PREFERENCE = ("optimal_wavelet", "fista_r0")
 RETRO_CASES = (
     "native_r3x2",
     "lr_x_1p5mm_r3x2",
@@ -107,17 +108,35 @@ def build_mprage_nifti_collection(
     mask_parameters = parameters or HeadMaskParameters()
     _validate_parameters(mask_parameters)
 
+    collection = root / "nifti_collection"
+    previous_manifest = _validate_existing_collection(collection)
     sampling_class = _read_sampling_class(root)
     branch_sources = _discover_case_sources(
         root, sampling_class=sampling_class, require_retro=require_retro
     )
-    mask_branch = "optimal_wavelet" if "optimal_wavelet" in branch_sources else "fista_r0"
+    synchronization = _collection_synchronization(
+        previous_manifest, branch_sources
+    )
+    missing_previous = synchronization["no_longer_discovered_case_groups"]
+    if missing_previous:
+        raise FileNotFoundError(
+            "Previously collected reconstruction groups are no longer discoverable; "
+            f"refusing to remove them during synchronization: {missing_previous}."
+        )
+    normal_branches = [
+        branch for branch, cases in branch_sources.items() if "normal" in cases
+    ]
+    mask_branch = next(
+        (
+            branch
+            for branch in (*MASK_BRANCH_PREFERENCE, *normal_branches)
+            if branch in normal_branches
+        )
+    )
     normal_magnitude = _select_normal_magnitude(branch_sources[mask_branch]["normal"])
     normal_image, _ = _load_validated_nifti(normal_magnitude)
     head_mask, mask_details = create_whole_head_mask(normal_image, mask_parameters)
 
-    collection = root / "nifti_collection"
-    _validate_existing_collection(collection)
     staging = Path(tempfile.mkdtemp(prefix=".nifti_collection-", dir=root))
     try:
         manifest = _materialize_collection(
@@ -131,6 +150,7 @@ def build_mprage_nifti_collection(
             mask_details,
             sampling_class,
         )
+        manifest["synchronization"] = synchronization
         _write_json(staging / "manifest.json", manifest)
         _replace_owned_collection(staging, collection)
     except Exception:
@@ -318,45 +338,115 @@ def _discover_case_sources(
         require_retro: Whether all four retrospective cases are mandatory.
 
     Returns:
-        Mapping from the sampling-compatible reconstruction branches and case
-        labels to sorted NIfTI and JSON sidecar pairs.
+        Mapping from every discovered reconstruction branch and case label to
+        sorted NIfTI and JSON sidecar pairs.
 
     Raises:
-        FileNotFoundError: If a required branch/case source is absent.
-        ValueError: If R1 is combined with retro outputs or an unsupported
-            positive-Wavelet branch, or a source pair is incomplete.
+        FileNotFoundError: If no normal source or a required retro source is
+            available.
+        ValueError: If a source path or NIfTI/sidecar pair is invalid.
     """
-    if require_retro and sampling_class != "R3x1":
-        raise ValueError("Retrospective R3x2 collection requires R3x1 source sampling.")
-    expected_branches = (
-        RECONSTRUCTION_BRANCHES if sampling_class == "R3x1" else ("fista_r0",)
-    )
+    if sampling_class not in {"R1", "R3x1"}:
+        raise ValueError(f"Unsupported normal sampling class: {sampling_class!r}")
     sources: dict[str, dict[str, list[tuple[Path, Path]]]] = {}
-    for branch in expected_branches:
-        normal_directory = output_root / "normal" / "nifti" / branch
-        normal_pairs = _discover_nifti_pairs(normal_directory)
-        if not normal_pairs:
-            raise FileNotFoundError(
-                f"No normal {branch} canonical NIfTI files found: {normal_directory}"
-            )
-        branch_cases = {"normal": normal_pairs}
-        for case in RETRO_CASES:
-            directory = output_root / "retro" / case / "nifti" / branch
-            pairs = _discover_nifti_pairs(directory)
+    normal_root = output_root / "normal" / "nifti"
+    if normal_root.exists() and not normal_root.is_dir():
+        raise ValueError(f"Normal canonical NIfTI path is not a directory: {normal_root}")
+    if normal_root.is_dir():
+        for branch_directory in sorted(
+            normal_root.iterdir(), key=lambda path: path.name
+        ):
+            if not branch_directory.is_dir():
+                continue
+            pairs = _discover_nifti_pairs(branch_directory)
             if pairs:
-                branch_cases[case] = pairs
-            elif require_retro:
-                raise FileNotFoundError(
-                    f"No {branch} canonical NIfTI files found for {case}: {directory}"
-                )
-        sources[branch] = branch_cases
-    if sampling_class == "R1":
-        unexpected = _discover_nifti_pairs(
-            output_root / "normal" / "nifti" / "optimal_wavelet"
+                sources.setdefault(branch_directory.name, {})["normal"] = pairs
+    normal_branches = {
+        branch for branch, cases in sources.items() if "normal" in cases
+    }
+    if not normal_branches:
+        raise FileNotFoundError(
+            f"No normal canonical NIfTI files found below: {normal_root}"
         )
-        if unexpected:
-            raise ValueError("Normal R1 has no approved optimal-Wavelet branch.")
-    return sources
+
+    retro_root = output_root / "retro"
+    if retro_root.exists() and not retro_root.is_dir():
+        raise ValueError(f"Retrospective output path is not a directory: {retro_root}")
+    if retro_root.is_dir():
+        for case_directory in sorted(
+            retro_root.iterdir(), key=lambda path: path.name
+        ):
+            nifti_root = case_directory / "nifti"
+            if not case_directory.is_dir() or not nifti_root.is_dir():
+                continue
+            for branch_directory in sorted(
+                nifti_root.iterdir(), key=lambda path: path.name
+            ):
+                if not branch_directory.is_dir():
+                    continue
+                pairs = _discover_nifti_pairs(branch_directory)
+                if pairs:
+                    sources.setdefault(branch_directory.name, {})[
+                        case_directory.name
+                    ] = pairs
+
+    if require_retro:
+        for branch in sorted(normal_branches):
+            for case in RETRO_CASES:
+                if case not in sources[branch]:
+                    directory = output_root / "retro" / case / "nifti" / branch
+                    raise FileNotFoundError(
+                        f"No {branch} canonical NIfTI files found for {case}: {directory}"
+                    )
+
+    branch_order = {
+        branch: index for index, branch in enumerate(RECONSTRUCTION_BRANCHES)
+    }
+    ordered: dict[str, dict[str, list[tuple[Path, Path]]]] = {}
+    for branch in sorted(
+        sources, key=lambda name: (branch_order.get(name, len(branch_order)), name)
+    ):
+        cases = sources[branch]
+        ordered[branch] = {
+            case: cases[case]
+            for case in sorted(cases, key=lambda name: (name != "normal", name))
+        }
+    return ordered
+
+
+def _collection_synchronization(
+    previous_manifest: dict[str, Any] | None,
+    branch_sources: dict[str, dict[str, list[tuple[Path, Path]]]],
+) -> dict[str, Any]:
+    """Summarize case groups added by the current atomic collection sync.
+
+    Args:
+        previous_manifest: Validated prior collection manifest, when present.
+        branch_sources: Complete currently discovered source mapping.
+
+    Returns:
+        Stable group identifiers for previous, discovered, retained, added, and
+        no-longer-discovered collection groups.
+    """
+    previous = set()
+    if previous_manifest is not None:
+        previous = {
+            f"{record['branch']}:{record['case']}"
+            for record in previous_manifest.get("cases", [])
+        }
+    discovered = {
+        f"{branch}:{case}"
+        for branch, cases in branch_sources.items()
+        for case in cases
+    }
+    return {
+        "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
+        "previous_case_groups": sorted(previous),
+        "discovered_case_groups": sorted(discovered),
+        "retained_case_groups": sorted(previous & discovered),
+        "added_case_groups": sorted(discovered - previous),
+        "no_longer_discovered_case_groups": sorted(previous - discovered),
+    }
 
 
 def _read_sampling_class(output_root: Path) -> str:
@@ -651,7 +741,7 @@ def _materialize_collection(
             )
 
     return {
-        "format_version": 2,
+        "format_version": 3,
         "builder": COLLECTION_BUILDER,
         "status": "complete",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -785,28 +875,28 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _validate_existing_collection(collection: Path) -> None:
-    """Reject replacement of a collection not owned by this utility.
+def _validate_existing_collection(collection: Path) -> dict[str, Any] | None:
+    """Validate and return an existing collection owned by this utility.
 
     Args:
         collection: Intended final collection directory.
 
     Returns:
-        None.
+        The validated manifest, or ``None`` when no prior collection exists.
 
     Raises:
         FileExistsError: If the path is a symlink, non-directory, nonempty
             unmanifested directory, or a collection from another builder.
     """
     if not collection.exists():
-        return
+        return None
     if collection.is_symlink() or not collection.is_dir():
         raise FileExistsError(f"Refusing to replace non-directory collection: {collection}")
     manifest = collection / "manifest.json"
     if not manifest.is_file():
         if any(collection.iterdir()):
             raise FileExistsError(f"Existing collection is not tool-owned: {collection}")
-        return
+        return None
     payload = _load_json(manifest)
     if payload.get("builder") != COLLECTION_BUILDER:
         raise FileExistsError(f"Existing collection has a different builder: {collection}")
@@ -827,6 +917,7 @@ def _validate_existing_collection(collection: Path) -> None:
             raise FileExistsError(
                 f"Existing collection file changed since its manifest: {path}"
             )
+    return payload
 
 
 def _manifest_owned_files(payload: dict[str, Any]) -> dict[str, str]:

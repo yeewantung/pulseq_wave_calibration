@@ -12,9 +12,15 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.nifti_collection import HeadMaskParameters  # noqa: E402
-from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
+from wave_retro_lr.mprage import (  # noqa: E402
+    R3X3_WAVELET_LAMBDA,
+    prepare_normal_mprage,
+    prepare_retro_mprage,
+    prepare_retro_mprage_r3x3,
+)
 from scripts.prepare_mprage_normal import _parser as normal_parser  # noqa: E402
 from scripts.prepare_mprage_retro import _parser as retro_parser  # noqa: E402
+from scripts.prepare_mprage_retro_r3x3 import _parser as r3x3_parser  # noqa: E402
 
 SCRIPTS = TOOL_ROOT / "scripts"
 
@@ -100,6 +106,32 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn("PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png", source)
         self.assertIn("TROUBLESHOOTING.md", source)
 
+    def test_r3x3_script_is_independent_and_uses_locked_wavelet(self) -> None:
+        """Verify the tracked R3x3 entry point runs only two explicit branches.
+
+        Returns:
+            None.
+        """
+        source = (SCRIPTS / "sample_mprage_retro_r3x3_recon.sh").read_text(
+            encoding="utf-8"
+        )
+        commands = [
+            line.strip()
+            for line in source.splitlines()
+            if line.strip().startswith("bart ")
+        ]
+        self.assertEqual(R3X3_WAVELET_LAMBDA, 0.045)
+        self.assertIn('R3X3_LAMBDA="4.5e-2"', source)
+        self.assertEqual(sum(line.startswith("bart ecalib -m 1 ") for line in commands), 1)
+        self.assertEqual(sum(line.startswith("bart wave -g ") for line in commands), 2)
+        self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 2)
+        self.assertEqual(sum("-r 0 " in line for line in commands), 2)
+        self.assertEqual(sum('-r "$R3X3_LAMBDA" ' in line for line in commands), 2)
+        self.assertIn("prepare_mprage_retro_r3x3.py", source)
+        self.assertNotIn("prepare_mprage_retro.py", source)
+        self.assertNotIn("prepare_mprage_retro_maps.py", source)
+        self.assertNotIn("native_r3x2", source)
+
     def test_samples_parse_and_offer_dataset_independent_help(self) -> None:
         """Verify all Bash samples parse and expose path-agnostic help.
 
@@ -109,6 +141,7 @@ class SampleCommandTests(unittest.TestCase):
         samples = {
             "sample_mprage_normal_recon.sh": "TWIX.dat OUTPUT_ROOT SEQUENCE.seq",
             "sample_mprage_retro_lr_recon.sh": "TWIX.dat OUTPUT_ROOT SEQUENCE.seq",
+            "sample_mprage_retro_r3x3_recon.sh": "TWIX.dat OUTPUT_ROOT SEQUENCE.seq",
             "sample_mprage_nifti_collection.sh": "OUTPUT_ROOT",
         }
         for name, expected_help in samples.items():
@@ -142,12 +175,16 @@ class SampleCommandTests(unittest.TestCase):
             None.
         """
         arguments = ["input.dat", "output", "input.seq"]
-        for parser in (normal_parser, retro_parser):
+        for parser in (normal_parser, retro_parser, r3x3_parser):
             parsed = parser().parse_args(arguments)
             self.assertEqual(parsed.psf_coefficient_processing, "sine-line")
             self.assertIsNone(parsed.psf_fit_kx_min)
             self.assertIsNone(parsed.psf_fit_kx_max)
-        for function in (prepare_normal_mprage, prepare_retro_mprage):
+        for function in (
+            prepare_normal_mprage,
+            prepare_retro_mprage,
+            prepare_retro_mprage_r3x3,
+        ):
             parameter = inspect.signature(function).parameters[
                 "psf_coefficient_processing"
             ]
@@ -164,6 +201,7 @@ class SampleCommandTests(unittest.TestCase):
             TOOL_ROOT / "wave_retro_lr" / "projection_psf.py",
             SCRIPTS / "prepare_mprage_normal.py",
             SCRIPTS / "prepare_mprage_retro.py",
+            SCRIPTS / "prepare_mprage_retro_r3x3.py",
             SCRIPTS / "prepare_mprage_retro_maps.py",
             SCRIPTS / "convert_mprage_bart_to_nifti.py",
             SCRIPTS / "build_mprage_nifti_collection.py",

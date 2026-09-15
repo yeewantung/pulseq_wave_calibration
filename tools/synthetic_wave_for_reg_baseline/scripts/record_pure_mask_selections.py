@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record five explicit user-reviewed pure-mask selections without ranking."""
+"""Record explicit user-reviewed pure-mask selections without ranking."""
 
 from __future__ import annotations
 
@@ -9,7 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from pure_mask_rerun import CASE_IDS, load_json, sha256_file, validate_config, write_json_atomic
+from pure_mask_rerun import (
+    configured_case_ids,
+    load_json,
+    sha256_file,
+    validate_config,
+    write_json_atomic,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -79,7 +85,7 @@ def record(
     confirm_manual_visual_review: bool,
     reviewer_note: str,
 ) -> dict[str, Any]:
-    """Hash-bind five manual choices to reviewed shortlist candidates.
+    """Hash-bind configured manual choices to reviewed shortlist candidates.
 
     Args:
         config_path: Ignored local rerun configuration containing decisions.
@@ -95,6 +101,7 @@ def record(
     if not reviewer_note.strip():
         raise ValueError("--reviewer-note must be nonempty.")
     validated = validate_config(config_path)
+    case_ids = configured_case_ids(validated)
     root = Path(validated["layout"]["root"])
     if confirmed_output_root.expanduser().resolve() != root:
         raise ValueError("Confirmed output root differs from the local rerun configuration.")
@@ -107,8 +114,10 @@ def record(
     raw = validated["config"]["snapshot"].get("evaluation", {}).get(
         "manual_final_selections"
     )
-    if not isinstance(raw, Mapping) or set(raw) != set(CASE_IDS):
-        raise ValueError("evaluation.manual_final_selections must contain all five cases.")
+    if not isinstance(raw, Mapping) or tuple(raw) != case_ids:
+        raise ValueError(
+            "evaluation.manual_final_selections must contain every configured case in order."
+        )
     shortlist_settings = shortlist["inputs"]["manual_shortlist"]
     sweep_binding = shortlist["inputs"]["sweep_manifest"]
     evaluation_binding = shortlist["inputs"]["evaluation_manifest"]
@@ -121,7 +130,7 @@ def record(
         raise ValueError("Reviewed shortlist inputs changed after rendering.")
     sweep = load_json(sweep_path, "shortlist sweep")
     selections = {}
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         setting = _normalized_setting(raw[case_id])
         if setting not in shortlist_settings[case_id]:
             raise ValueError(f"{case_id} final selection is absent from its reviewed shortlist.")

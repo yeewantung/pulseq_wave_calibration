@@ -11,7 +11,7 @@ Actions:
   validate-sources      Validate rebuildable source inputs without writing.
   materialize-sources   Rebuild hash-identical accepted sources in the new tree.
   validate-inputs       Validate immutable inputs without writing outputs.
-  prepare               Prepare the five pure-mask cases and references.
+  prepare               Prepare the configured pure-mask cases and references.
   validate-coarse       Validate the coarse candidate pool without BART.
   run-coarse            Run the coarse GPU BART sweep.
   evaluate-coarse       Evaluate the completed coarse sweep.
@@ -25,6 +25,8 @@ Actions:
   validate-shortlist    Validate the explicit manual-review shortlist.
   render-shortlist      Render the explicit manual-review shortlist.
   record-selections     Record reviewed choices; REVIEWER_NOTE is required.
+  validate-presentation Validate the selected presentation package inputs.
+  build-presentation    Export selected NIfTIs, center slices, and metrics CSV.
 
 This dispatcher never chains actions. The caller must activate the required
 Conda environment and source the host-compatible BART startup script before a
@@ -145,6 +147,17 @@ case "$ACTION" in
             --confirm-output-root "$OUTPUT_ROOT" \
             --confirm-manual-visual-review \
             --reviewer-note "$REVIEWER_NOTE"
+        ;;
+    validate-presentation)
+        exec python "$SCRIPT_DIR/build_pure_mask_presentation.py" \
+            --config "$CONFIG" \
+            --validate-only
+        ;;
+    build-presentation)
+        exec python "$SCRIPT_DIR/build_pure_mask_presentation.py" \
+            --config "$CONFIG" \
+            --confirm-output-dir "$OUTPUT_ROOT/presentation" \
+            --resume
         ;;
     *)
         echo "Error: unknown action: $ACTION" >&2

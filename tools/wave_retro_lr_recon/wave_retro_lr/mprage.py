@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib
 import json
+import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -37,7 +38,12 @@ from .projection_psf import (
     select_spatial_projection_region,
 )
 from .retrospective import resample_sensitivity_maps, write_measured_wave_crop
-from .sampling import SamplingPattern, inspect_twix_sampling
+from .sampling import (
+    SamplingPattern,
+    inspect_twix_sampling,
+    pure_cartesian_image_lattice_mask,
+    validate_pure_cartesian_image_lattice,
+)
 
 NORMAL_INPUT_RELATIVE = Path("normal") / "bart_inputs"
 NORMAL_OUTPUT_RELATIVE = Path("normal") / "bart_output"
@@ -47,6 +53,16 @@ RETRO_CASES = (
     ("lr_x_1p5mm_r3x2", (1.5, 1.0)),
     ("lr_y_1p5mm_r3x2", (1.0, 1.5)),
     ("lr_xy_1p25mm_r3x2", (1.25, 1.25)),
+)
+R3X3_CASE_ID = "native_r3x3"
+R3X3_WAVELET_LAMBDA = 0.045
+R3X3_SELECTION_MANIFEST_SHA256 = (
+    "07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d"
+)
+LEGACY_PSF_IMPLEMENTATION_PATHS = (
+    "external/wave-mprage/recon/recon_wave_mprage_from_twix_integrated_nifti.py",
+    "external/wave-mprage/recon/utils/psf_coefficient_processing.py",
+    "external/wave-mprage/recon/utils/psf_wrapped_phase_fit.py",
 )
 AUTOMATIC_C_RECOVERY_VERSION = 1
 AUTOMATIC_Y_CORE_RETRY_VERSION = 1
@@ -1809,31 +1825,113 @@ def _native_manifest_matches(
     recorded_requested_range = recorded_psf.get("requested_fit_kx_range")
     if recorded_requested_range is None and recorded_selection == "manual":
         recorded_requested_range = recorded_psf.get("fit_kx_range")
-    recorded_settings = {
+    recorded_coefficient_settings = {
         "coefficient_processing": recorded_mode,
         "fit_range_selection": recorded_selection,
         "requested_fit_kx_range": recorded_requested_range,
         "fit_kx_range_convention": recorded_psf.get(
             "fit_kx_range_convention", "half-open"
         ),
-        "spatial_region_selection": recorded_psf.get("spatial_region_selection"),
-        "spatial_region_selection_version": recorded_psf.get(
-            "spatial_region_selection_version"
-        ),
-        "requested_fit_y_range": recorded_psf.get("requested_fit_y_range"),
-        "requested_fit_z_range": recorded_psf.get("requested_fit_z_range"),
-        "fit_spatial_range_convention": recorded_psf.get(
-            "fit_spatial_range_convention"
-        ),
-        "processing_implementation": recorded_psf.get("processing_implementation"),
     }
+    requested_coefficient_settings = {
+        key: psf_settings.get(key) for key in recorded_coefficient_settings
+    }
+    spatial_keys = (
+        "spatial_region_selection",
+        "spatial_region_selection_version",
+        "requested_fit_y_range",
+        "requested_fit_z_range",
+        "fit_spatial_range_convention",
+    )
+    recorded_has_spatial_contract = any(key in recorded_psf for key in spatial_keys)
+    if recorded_has_spatial_contract:
+        spatial_settings_match = all(
+            recorded_psf.get(key) == psf_settings.get(key) for key in spatial_keys
+        )
+    else:
+        recorded_spatial_diagnostics = (
+            recorded_processing.get("spatial_region_selection")
+            if isinstance(recorded_processing, Mapping)
+            else None
+        )
+        spatial_settings_match = (
+            recorded_spatial_diagnostics is None
+            and psf_settings.get("requested_fit_y_range") is None
+            and psf_settings.get("requested_fit_z_range") is None
+        )
+
+    # Legacy accepted manifests recorded only the three pinned upstream files.
+    # Validate every recorded digest and require that complete legacy core;
+    # newer manifests remain stricter because their additional digests must
+    # also match the current implementation.
+    recorded_implementation = recorded_psf.get("processing_implementation")
+    requested_implementation = psf_settings.get("processing_implementation")
+    recorded_files = (
+        recorded_implementation.get("files_sha256")
+        if isinstance(recorded_implementation, Mapping)
+        else None
+    )
+    requested_files = (
+        requested_implementation.get("files_sha256")
+        if isinstance(requested_implementation, Mapping)
+        else None
+    )
+    implementation_matches = (
+        isinstance(recorded_files, Mapping)
+        and isinstance(requested_files, Mapping)
+        and all(path in recorded_files for path in LEGACY_PSF_IMPLEMENTATION_PATHS)
+        and all(
+            requested_files.get(path) == digest
+            for path, digest in recorded_files.items()
+        )
+    )
     return (
         manifest.get("status") == "measured_wave_mprage_bart_inputs_ready"
         and manifest.get("source", {}).get("twix") == _file_identity(twix_path)
         and manifest.get("source", {}).get("sequence")
         == _file_identity(sequence_path, include_hash=True)
-        and recorded_settings == dict(psf_settings)
+        and recorded_coefficient_settings == requested_coefficient_settings
+        and spatial_settings_match
+        and implementation_matches
     )
+
+
+def _native_r3x3_residue(
+    source_sampling: SamplingPattern, npar: int
+) -> tuple[int, int]:
+    """Resolve an R3x3 lattice that is a subset of measured source samples.
+
+    Args:
+        source_sampling: Validated native R1 or R3x1 image-stream sampling.
+        npar: Native logical partition count used for center alignment.
+
+    Returns:
+        LIN/PAR residues for the pure Cartesian R3x3 image lattice.
+
+    Raises:
+        ValueError: If the source is not R1 or regular single-residue R3x1.
+    """
+    if npar < 1:
+        raise ValueError("Native partition count must be positive.")
+    if (
+        source_sampling.name == "R1"
+        and source_sampling.acceleration_lin_par == (1, 1)
+    ):
+        lin_residue = 1
+    elif (
+        source_sampling.name == "R3x1"
+        and source_sampling.acceleration_lin_par == (3, 1)
+        and source_sampling.lin_residue is not None
+    ):
+        lin_residue = int(source_sampling.lin_residue)
+    else:
+        raise ValueError(
+            "Native R3x3 retrospective undersampling requires R1 or regular "
+            "single-residue R3x1 measured data."
+        )
+    if not 0 <= lin_residue < 3:
+        raise ValueError("Measured R3x1 LIN residue is outside [0, 3).")
+    return lin_residue, (int(npar) // 2) % 3
 
 
 def prepare_normal_mprage(
@@ -1908,12 +2006,19 @@ def prepare_normal_mprage(
             "psf",
             "wave_trajectory",
             "psf_coefficients",
-            "psf_coefficients_processing_input",
-            "psf_coefficient_c_branch_turns",
         ):
             read_shape(destination / name)
+        recorded_calibration = existing.get("psf_calibration", {})
+        for field in (
+            "raw_psf_coefficients",
+            "processing_input_psf_coefficients",
+            "c_phase_branch_turns",
+        ):
+            auxiliary_name = recorded_calibration.get(field)
+            if auxiliary_name is not None:
+                read_shape(destination / str(auxiliary_name))
         a_fit, b_fit, c_fit = _read_real_vectors(destination / "psf_coefficients", 3)
-        raw_name = existing.get("psf_calibration", {}).get("raw_psf_coefficients")
+        raw_name = recorded_calibration.get("raw_psf_coefficients")
         raw_coefficients = (
             None
             if raw_name is None
@@ -2449,6 +2554,265 @@ def prepare_retro_mprage(
         },
     )
     return results
+
+
+def _link_bart_pair(source_base: Path, destination_base: Path) -> None:
+    """Create relative links to one immutable BART CFL pair.
+
+    Args:
+        source_base: Existing source BART basename.
+        destination_base: New case-local BART basename.
+
+    Returns:
+        None. The destination header and payload become relative symlinks.
+
+    Raises:
+        FileExistsError: If either destination already exists.
+    """
+    for suffix in (".hdr", ".cfl"):
+        source = source_base.with_suffix(suffix).resolve()
+        destination = destination_base.with_suffix(suffix)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(destination)
+        destination.symlink_to(os.path.relpath(source, destination.parent))
+
+
+def _validate_same_grid_masked_wave(
+    source_base: Path,
+    target_base: Path,
+    target_mask: np.ndarray,
+    *,
+    readout_chunk: int = 8,
+) -> dict[str, Any]:
+    """Verify exact acquired samples and zeros for same-grid undersampling.
+
+    Args:
+        source_base: Native measured-Wave BART basename.
+        target_base: Retrospectively masked BART basename.
+        target_mask: Pure logical LIN/PAR target lattice.
+        readout_chunk: Maximum oversampled-readout planes checked together.
+
+    Returns:
+        Exact mismatch, zero-exterior, and finite-value validation metrics.
+
+    Raises:
+        ValueError: If geometry, acquired values, zero exterior, or finiteness
+            violates the retrospective-undersampling contract.
+    """
+    if readout_chunk < 1:
+        raise ValueError("Readout validation chunk must be positive.")
+    source_shape = read_shape(source_base) + (1,) * max(
+        0, 5 - len(read_shape(source_base))
+    )
+    target_shape = read_shape(target_base) + (1,) * max(
+        0, 5 - len(read_shape(target_base))
+    )
+    if source_shape[:5] != target_shape[:5] or any(
+        value != 1 for value in (*source_shape[5:], *target_shape[5:])
+    ):
+        raise ValueError("R3x3 undersampling must preserve native Wave dimensions.")
+    ro_os, nlin, npar, coils, maps = source_shape[:5]
+    mask = np.asarray(target_mask)
+    if maps != 1 or mask.dtype != np.bool_ or mask.shape != (nlin, npar):
+        raise ValueError("R3x3 target mask or Wave map geometry is invalid.")
+    source = open_cfl(source_base).reshape((ro_os, nlin, npar, coils, -1), order="F")
+    target = open_cfl(target_base).reshape((ro_os, nlin, npar, coils, -1), order="F")
+    acquired_mismatch = 0
+    unacquired_nonzero = 0
+    nonfinite = 0
+    for start in range(0, ro_os, readout_chunk):
+        stop = min(start + readout_chunk, ro_os)
+        source_block = np.asarray(source[start:stop, ..., 0])
+        target_block = np.asarray(target[start:stop, ..., 0])
+        acquired_mismatch += int(
+            np.count_nonzero(target_block[:, mask, :] != source_block[:, mask, :])
+        )
+        unacquired_nonzero += int(np.count_nonzero(target_block[:, ~mask, :]))
+        nonfinite += int(np.count_nonzero(~np.isfinite(target_block)))
+    if acquired_mismatch or unacquired_nonzero or nonfinite:
+        raise ValueError(
+            "R3x3 masked Wave data failed acquired-equality, zero-exterior, "
+            "or finite-value validation."
+        )
+    return {
+        "acquired_mismatch_count": acquired_mismatch,
+        "unacquired_nonzero_count": unacquired_nonzero,
+        "nonfinite_count": nonfinite,
+        "acquired_samples_equal_source_bitwise": True,
+        "unacquired_samples_are_exact_zero": True,
+    }
+
+
+def prepare_retro_mprage_r3x3(
+    twix: str | Path,
+    output_root: str | Path,
+    sequence: str | Path,
+    *,
+    psf_coefficient_processing: str = "sine-line",
+    psf_fit_kx_min: int | None = None,
+    psf_fit_kx_max: int | None = None,
+    psf_fit_y_min: int | None = None,
+    psf_fit_y_max: int | None = None,
+    psf_fit_z_min: int | None = None,
+    psf_fit_z_max: int | None = None,
+) -> dict[str, Any]:
+    """Prepare only native-grid R3x3 retrospective MPRAGE BART inputs.
+
+    The source may be fully sampled R1 or measured single-residue R3x1 Wave
+    data. R1 uses the reviewed LIN residue 1; R3x1 inherits its measured LIN
+    residue so the target remains a strict source subset. The PAR residue is
+    center aligned, while calibration remains separate from reconstruction
+    k-space.
+
+    Args:
+        twix: Native measured R1 or single-residue R3x1 Wave-MPRAGE TWIX file.
+        output_root: Dataset root shared with compatible normal preparation.
+        sequence: Matching integrated Wave-MPRAGE sequence.
+        psf_coefficient_processing: Existing normal PSF processing contract.
+        psf_fit_kx_min: Optional inclusive sine-line fitting index.
+        psf_fit_kx_max: Optional exclusive sine-line fitting index.
+        psf_fit_y_min: Optional inclusive sin-projection spatial index.
+        psf_fit_y_max: Optional exclusive sin-projection spatial index.
+        psf_fit_z_min: Optional inclusive cos-projection spatial index.
+        psf_fit_z_max: Optional exclusive cos-projection spatial index.
+
+    Returns:
+        Complete case-local preparation manifest.
+
+    Raises:
+        ValueError: If the source cannot supply a pure R3x3 subset or any exact
+            data contract differs from native R3x3.
+        FileExistsError: If an incompatible partial case directory exists.
+    """
+    root = Path(output_root).expanduser().resolve()
+    normal = prepare_normal_mprage(
+        twix,
+        root,
+        sequence,
+        psf_coefficient_processing=psf_coefficient_processing,
+        psf_fit_kx_min=psf_fit_kx_min,
+        psf_fit_kx_max=psf_fit_kx_max,
+        psf_fit_y_min=psf_fit_y_min,
+        psf_fit_y_max=psf_fit_y_max,
+        psf_fit_z_min=psf_fit_z_min,
+        psf_fit_z_max=psf_fit_z_max,
+        reuse=True,
+    )
+    source_sampling = _sampling_from_manifest(normal)
+    geometry_payload = normal["geometry"]
+    geometry = Geometry(
+        physical_fov_mm_xyz=tuple(
+            float(value) for value in geometry_payload["physical_fov_mm_xyz"]
+        ),
+        logical_matrix_ro_lin_par=tuple(
+            int(value) for value in geometry_payload["logical_matrix_ro_lin_par"]
+        ),
+    )
+    case = resolve_case(
+        CaseSpec(geometry.physical_resolution_mm_xyz, (3, 3), "native R3x3"),
+        geometry,
+    )
+    _, nlin, npar = case.target_logical_matrix_ro_lin_par
+    residue = _native_r3x3_residue(source_sampling, npar)
+    target_mask, sampling = pure_cartesian_image_lattice_mask(
+        (nlin, npar),
+        acceleration_lin_par=(3, 3),
+        residue_lin_par=residue,
+    )
+    validate_pure_cartesian_image_lattice(target_mask, sampling)
+
+    normal_inputs = root / NORMAL_INPUT_RELATIVE
+    inputs = root / RETRO_RELATIVE / R3X3_CASE_ID / "bart_inputs"
+    manifest_path = inputs / "manifest.json"
+    selection = {
+        "method": "wavelet",
+        "lambda": R3X3_WAVELET_LAMBDA,
+        "synthetic_selection_manifest_sha256": R3X3_SELECTION_MANIFEST_SHA256,
+        "automatic_selection_performed": False,
+    }
+    if manifest_path.is_file():
+        existing = _load_json(manifest_path)
+        if (
+            existing.get("source") != normal["source"]
+            or existing.get("case") != case.to_json()
+            or existing.get("sampling", {}).get("logical_sha256")
+            != sampling["logical_sha256"]
+            or existing.get("selected_regularization") != selection
+        ):
+            raise ValueError(f"Existing native R3x3 inputs are incompatible: {inputs}")
+        mask = np.load(inputs / "sampling_mask.npy", allow_pickle=False)
+        validate_pure_cartesian_image_lattice(mask, existing["sampling"])
+        read_shape(inputs / "psf")
+        _validate_same_grid_masked_wave(
+            normal_inputs / "wave_kspace", inputs / "wave_kspace", mask
+        )
+        print(f"Reusing compatible native R3x3 BART inputs: {inputs}")
+        return existing
+    if inputs.exists() and any(inputs.iterdir()):
+        raise FileExistsError(f"Native R3x3 BART input directory is not empty: {inputs}")
+    inputs.mkdir(parents=True, exist_ok=True)
+    mask_path = inputs / "sampling_mask.npy"
+    np.save(mask_path, target_mask)
+    crop_metrics = write_measured_wave_crop(
+        normal_inputs / "wave_kspace",
+        inputs / "wave_kspace",
+        case,
+        source_sampling.mask(),
+        source_sampling.acceleration_lin_par,
+        target_mask=target_mask,
+    )
+    if crop_metrics["sampled_coordinate_count"] != sampling["acquired_coordinate_count"]:
+        raise ValueError("Native R3x3 acquired coordinate count differs from its pure mask.")
+    validation = _validate_same_grid_masked_wave(
+        normal_inputs / "wave_kspace", inputs / "wave_kspace", target_mask
+    )
+    _link_bart_pair(normal_inputs / "psf", inputs / "psf")
+    if read_shape(inputs / "psf")[:3] != read_shape(normal_inputs / "psf")[:3]:
+        raise ValueError("Native R3x3 PSF link changed geometry.")
+    manifest = {
+        "format_version": 1,
+        "status": "direct_measured_wave_r3x3_bart_inputs_ready",
+        "source": normal["source"],
+        "source_normal_manifest": {
+            "path": str(normal_inputs / "manifest.json"),
+            "sha256": sha256_file(normal_inputs / "manifest.json"),
+        },
+        "case_directory": R3X3_CASE_ID,
+        "case": case.to_json(),
+        "operator": "same-grid retrospective Cartesian undersampling of measured Wave k-space",
+        "interpolation": False,
+        "forward_simulation": False,
+        "dimension_order": ["READ", "PHS1", "PHS2", "COIL", "MAPS"],
+        "sampling": {**sampling, "path": str(mask_path)},
+        "sampling_validation": validation,
+        "echoes": [
+            {
+                "echo": 1,
+                "wave_kspace": "wave_kspace",
+                "wave_kspace_shape": list(read_shape(inputs / "wave_kspace")),
+                "wave_kspace_norm": crop_metrics["wave_kspace_norm"],
+                "psf": "psf",
+                "psf_shape": list(read_shape(inputs / "psf")),
+            }
+        ],
+        "psf": {
+            "source": str(normal_inputs / "psf"),
+            "reused_without_recalibration": True,
+            "header_sha256": sha256_file((normal_inputs / "psf").with_suffix(".hdr")),
+            "payload_sha256": sha256_file((normal_inputs / "psf").with_suffix(".cfl")),
+        },
+        "calibration_kspace_included": False,
+        "selected_regularization": selection,
+        "prepared_at_utc": _utc_now(),
+    }
+    _write_json(manifest_path, manifest)
+    print(
+        f"Prepared {R3X3_CASE_ID}: logical={case.target_logical_matrix_ro_lin_par}, "
+        f"mask coordinates={sampling['acquired_coordinate_count']}"
+    )
+    return manifest
 
 
 def prepare_retro_sensitivity_maps(output_root: str | Path) -> None:

@@ -28,16 +28,27 @@ from pure_mask_rerun import (  # noqa: E402
     COARSE_LLR_LAMBDAS,
     COARSE_WAVELET_LAMBDAS,
     FINE_LAMBDA_POOL,
+    _case_specifications,
+    _remapped_residue,
     build_wave_command,
     coarse_candidate_settings,
+    configured_case_ids,
     output_layout,
     validate_bart_artifact,
     validate_csm_rss_normalization,
+    validate_direct_fft_reference,
+    validate_config,
     validate_manifest_binding,
     validate_psf_unit_magnitude,
     write_masked_wave_cfl,
 )
-from wave_retro_lr.bart_io import create_cfl, open_cfl, sha256_file  # noqa: E402
+from wave_retro_lr.core import Geometry, resolve_case  # noqa: E402
+from wave_retro_lr.bart_io import (  # noqa: E402
+    create_cfl,
+    logical_array_sha256,
+    open_cfl,
+    sha256_file,
+)
 from wave_retro_lr.sampling import pure_cartesian_image_lattice_mask  # noqa: E402
 
 
@@ -127,6 +138,71 @@ class PureMaskPreparationTests(unittest.TestCase):
                     label="accepted CSM",
                 )
 
+    def test_reused_direct_fft_reference_is_hash_and_source_bound(self) -> None:
+        """Verify reusable references require exact array and source provenance.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            reference = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+            reference_path = root / "reference.npy"
+            np.save(reference_path, reference)
+            source_hash = "1" * 64
+            manifest_path = root / "case_manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "source_no_wave_sha256": source_hash,
+                        "shape": [2, 3, 4],
+                        "reference_sha256": sha256_file(reference_path),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            specification = {
+                "path": str(reference_path),
+                "sha256": sha256_file(reference_path),
+                "logical_sha256": logical_array_sha256(reference),
+                "manifest": {
+                    "path": str(manifest_path),
+                    "sha256": sha256_file(manifest_path),
+                    "assertions": [
+                        {
+                            "label": "source_no_wave",
+                            "json_path": ["source_no_wave_sha256"],
+                            "equals": source_hash,
+                        },
+                        {
+                            "label": "dimensions",
+                            "json_path": ["shape"],
+                            "equals": [2, 3, 4],
+                        },
+                        {
+                            "label": "artifact",
+                            "json_path": ["reference_sha256"],
+                            "equals": sha256_file(reference_path),
+                        },
+                    ],
+                },
+            }
+            _path, record = validate_direct_fft_reference(
+                specification,
+                root,
+                expected_shape=(2, 3, 4),
+                source_no_wave_sha256=source_hash,
+                label="accepted reference",
+            )
+            self.assertTrue(record["reused"])
+            with self.assertRaisesRegex(ValueError, "different no-Wave source"):
+                validate_direct_fft_reference(
+                    specification,
+                    root,
+                    expected_shape=(2, 3, 4),
+                    source_no_wave_sha256="2" * 64,
+                    label="accepted reference",
+                )
     def test_provenance_binding_rejects_changed_upstream_manifest(self) -> None:
         """Verify a local binding index remains chained to immutable upstream JSON.
 
@@ -235,6 +311,263 @@ class PureMaskPreparationTests(unittest.TestCase):
         self.assertTrue(layout["sweeps"]["coarse"].endswith("sweeps/coarse"))
         self.assertTrue(layout["evaluation"]["review"].endswith("evaluation/review"))
 
+    def test_manifest_defined_native_r3x3_case_has_exact_mask_contract(self) -> None:
+        """Verify a single native R3x3 case resolves without legacy case assumptions.
+
+        Returns:
+            None.
+        """
+        config = {
+            "format_version": 2,
+            "cases": {
+                "native_r3x3": {
+                    "requested_resolution_mm_xyz": [1.0, 1.0, 1.0],
+                    "acceleration_lin_par": [3, 3],
+                    "label": "native R3x3",
+                }
+            },
+        }
+        geometry = Geometry((256.0, 256.0, 256.0), (256, 256, 256))
+        specifications = _case_specifications(config, geometry)
+        self.assertEqual(tuple(case_id for case_id, _ in specifications), ("native_r3x3",))
+        case = resolve_case(specifications[0][1], geometry)
+        residue = _remapped_residue((1, 2), case)
+        mask, metadata = pure_cartesian_image_lattice_mask(
+            case.target_logical_matrix_ro_lin_par[1:],
+            acceleration_lin_par=case.acceleration_ry_rz,
+            residue_lin_par=residue,
+        )
+        self.assertEqual(residue, (1, 2))
+        self.assertEqual(int(mask.sum()), 7225)
+        self.assertEqual(
+            metadata["logical_sha256"],
+            "36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3",
+        )
+        layout = output_layout(
+            "/path/to/r3x3-run",
+            case_ids=("native_r3x3",),
+            native_case_ids=("native_r3x3",),
+            include_source_materialization=False,
+        )
+        self.assertEqual(tuple(layout["cases"]), ("native_r3x3",))
+        self.assertNotIn("source_materialization", layout)
+        self.assertNotIn("full_wave_kspace", layout["cases"]["native_r3x3"])
+
+    def test_format_two_single_case_validates_all_reused_artifacts(self) -> None:
+        """Verify one native R3x3 config is fully hash and provenance validated.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            no_wave_path = root / "no_wave.npy"
+            full_wave_path = root / "full_wave.npy"
+            reference_path = root / "reference.npy"
+            np.save(no_wave_path, np.ones((4, 8, 8, 2), dtype=np.complex64))
+            np.save(full_wave_path, np.ones((8, 8, 8, 2), dtype=np.complex64))
+            reference = np.ones((4, 8, 8), dtype=np.float32)
+            np.save(reference_path, reference)
+            csm_base = root / "coil_sens"
+            csm = create_cfl(csm_base, (4, 8, 8, 2, 1))
+            csm[...] = np.complex64(1 / np.sqrt(2))
+            csm.flush()
+            del csm
+            psf_base = root / "psf"
+            psf = create_cfl(psf_base, (8, 8, 8, 1, 1))
+            psf[...] = np.complex64(1)
+            psf.flush()
+            del psf
+            bet_path = root / "brain_mask.nii.gz"
+            nib.save(
+                nib.Nifti1Image(np.ones((8, 8, 4), dtype=np.uint8), np.eye(4)),
+                bet_path,
+            )
+            dataset = "a" * 64
+            coil_order = "b" * 64
+            trajectory = "c" * 64
+            binding = {
+                "dataset": dataset,
+                "fov": [8.0, 8.0, 4.0],
+                "source": {
+                    "no_wave_dimensions": [4, 8, 8, 2],
+                    "full_wave_dimensions": [8, 8, 8, 2],
+                },
+                "coil_order": coil_order,
+                "trajectory": trajectory,
+                "psf_model": "theoretical_sequence_trajectory_without_calibrated_correction",
+                "wave_data_origin": "synthetic_from_fully_sampled_no_wave",
+                "calibration_samples_merged_into_wave_kspace": False,
+                "calibration_source": "fully_sampled_image_kspace",
+                "cases": {
+                    "native_r3x3": {
+                        "csm_dimensions": [4, 8, 8, 2, 1],
+                        "psf_dimensions": [8, 8, 8, 1, 1],
+                    }
+                },
+                "brain_mask": {"approved": True, "canonical_ras": True},
+                "orientation": {
+                    "logical_to_canonical_axis_flips": [False, False, True],
+                    "canonical_ras": True,
+                },
+                "reference": {
+                    "source_no_wave_sha256": sha256_file(no_wave_path),
+                    "shape": [4, 8, 8],
+                    "sha256": sha256_file(reference_path),
+                },
+            }
+            binding_path = root / "binding.json"
+            binding_path.write_text(json.dumps(binding), encoding="utf-8")
+
+            def manifest(assertions: list[dict[str, object]]) -> dict[str, object]:
+                """Build one test binding against the shared provenance object.
+
+                Args:
+                    assertions: Labeled JSON assertions to bind.
+
+                Returns:
+                    Test manifest specification with exact file hash.
+                """
+                return {
+                    "path": str(binding_path),
+                    "sha256": sha256_file(binding_path),
+                    "assertions": assertions,
+                }
+
+            mask, mask_metadata = pure_cartesian_image_lattice_mask(
+                (8, 8), acceleration_lin_par=(3, 3), residue_lin_par=(1, 2)
+            )
+            del mask
+            common_manifest = manifest(
+                [
+                    {"label": "dataset", "json_path": ["dataset"], "equals": dataset},
+                    {"label": "fov", "json_path": ["fov"], "equals": [8.0, 8.0, 4.0]},
+                    {"label": "coil_order", "json_path": ["coil_order"], "equals": coil_order},
+                ]
+            )
+            config = {
+                "format_version": 2,
+                "workflow": "synthetic_wave_pure_mask_regularization_rerun",
+                "output_root": str(root / "unused_output"),
+                "geometry": {
+                    "physical_fov_mm_xyz": [8.0, 8.0, 4.0],
+                    "native_logical_matrix_ro_lin_par": [4, 8, 8],
+                    "extended_wave_readout": 8,
+                    "virtual_coils": 2,
+                },
+                "sampling": {
+                    "mask_kind": "pure_cartesian_image_lattice",
+                    "native_residue_lin_par": [1, 2],
+                },
+                "source": {
+                    "no_wave_kspace": {
+                        "path": str(no_wave_path),
+                        "sha256": sha256_file(no_wave_path),
+                        "manifest": {
+                            **common_manifest,
+                            "assertions": common_manifest["assertions"]
+                            + [
+                                {
+                                    "label": "dimensions",
+                                    "json_path": ["source", "no_wave_dimensions"],
+                                    "equals": [4, 8, 8, 2],
+                                }
+                            ],
+                        },
+                    },
+                    "native_full_wave_kspace": {
+                        "path": str(full_wave_path),
+                        "sha256": sha256_file(full_wave_path),
+                        "manifest": manifest(
+                            [
+                                {"label": "dataset", "json_path": ["dataset"], "equals": dataset},
+                                {"label": "fov", "json_path": ["fov"], "equals": [8.0, 8.0, 4.0]},
+                                {"label": "dimensions", "json_path": ["source", "full_wave_dimensions"], "equals": [8, 8, 8, 2]},
+                                {"label": "coil_order", "json_path": ["coil_order"], "equals": coil_order},
+                                {"label": "trajectory", "json_path": ["trajectory"], "equals": trajectory},
+                                {"label": "psf_model", "json_path": ["psf_model"], "equals": binding["psf_model"]},
+                                {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": binding["wave_data_origin"]},
+                                {"label": "calibration_samples_merged", "json_path": ["calibration_samples_merged_into_wave_kspace"], "equals": False},
+                            ]
+                        ),
+                    },
+                    "approved_bet_mask": {
+                        "path": str(bet_path),
+                        "sha256": sha256_file(bet_path),
+                        "manifest": manifest(
+                            [
+                                {"label": "approval", "json_path": ["brain_mask", "approved"], "equals": True},
+                                {"label": "geometry", "json_path": ["brain_mask", "canonical_ras"], "equals": True},
+                            ]
+                        ),
+                    },
+                },
+                "cases": {
+                    "native_r3x3": {
+                        "requested_resolution_mm_xyz": [1.0, 1.0, 1.0],
+                        "acceleration_lin_par": [3, 3],
+                        "label": "native R3x3",
+                        "expected_mask_logical_sha256": mask_metadata["logical_sha256"],
+                        "direct_fft_reference": {
+                            "path": str(reference_path),
+                            "sha256": sha256_file(reference_path),
+                            "logical_sha256": logical_array_sha256(reference),
+                            "manifest": manifest(
+                                [
+                                    {"label": "source_no_wave", "json_path": ["reference", "source_no_wave_sha256"], "equals": sha256_file(no_wave_path)},
+                                    {"label": "dimensions", "json_path": ["reference", "shape"], "equals": [4, 8, 8]},
+                                    {"label": "artifact", "json_path": ["reference", "sha256"], "equals": sha256_file(reference_path)},
+                                ]
+                            ),
+                        },
+                        "csm": {
+                            "base": str(csm_base),
+                            "header_sha256": sha256_file(csm_base.with_suffix(".hdr")),
+                            "payload_sha256": sha256_file(csm_base.with_suffix(".cfl")),
+                            "manifest": manifest(
+                                [
+                                    {"label": "dataset", "json_path": ["dataset"], "equals": dataset},
+                                    {"label": "fov", "json_path": ["fov"], "equals": [8.0, 8.0, 4.0]},
+                                    {"label": "dimensions", "json_path": ["cases", "native_r3x3", "csm_dimensions"], "equals": [4, 8, 8, 2, 1]},
+                                    {"label": "coil_order", "json_path": ["coil_order"], "equals": coil_order},
+                                    {"label": "calibration_source", "json_path": ["calibration_source"], "equals": "fully_sampled_image_kspace"},
+                                ]
+                            ),
+                        },
+                        "psf": {
+                            "base": str(psf_base),
+                            "header_sha256": sha256_file(psf_base.with_suffix(".hdr")),
+                            "payload_sha256": sha256_file(psf_base.with_suffix(".cfl")),
+                            "manifest": manifest(
+                                [
+                                    {"label": "dataset", "json_path": ["dataset"], "equals": dataset},
+                                    {"label": "fov", "json_path": ["fov"], "equals": [8.0, 8.0, 4.0]},
+                                    {"label": "dimensions", "json_path": ["cases", "native_r3x3", "psf_dimensions"], "equals": [8, 8, 8, 1, 1]},
+                                    {"label": "trajectory", "json_path": ["trajectory"], "equals": trajectory},
+                                    {"label": "psf_model", "json_path": ["psf_model"], "equals": binding["psf_model"]},
+                                    {"label": "wave_data_origin", "json_path": ["wave_data_origin"], "equals": binding["wave_data_origin"]},
+                                ]
+                            ),
+                        },
+                    }
+                },
+                "evaluation": {
+                    "logical_to_canonical_axis_order": [2, 1, 0],
+                    "logical_to_canonical_axis_flips": [False, False, True],
+                    "orientation_manifest": manifest(
+                        [
+                            {"label": "orientation", "json_path": ["orientation", "logical_to_canonical_axis_flips"], "equals": [False, False, True]},
+                            {"label": "canonical_ras", "json_path": ["orientation", "canonical_ras"], "equals": True},
+                        ]
+                    ),
+                },
+            }
+            config_path = root / "config.local.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            validated = validate_config(config_path)
+            self.assertEqual(configured_case_ids(validated), ("native_r3x3",))
+            self.assertTrue(validated["cases"][0].direct_fft_reference["reused"])
+
 
 class PureMaskSweepTests(unittest.TestCase):
     """Validate FISTA, Wavelet, corrected-LLR, and selection contracts."""
@@ -286,12 +619,28 @@ class PureMaskSweepTests(unittest.TestCase):
         self.assertEqual(llr[llr.index("-b") + 1], "16")
 
     def test_fine_pool_brackets_the_reviewed_wavelet_optima(self) -> None:
-        """Verify the fine pool supports the reviewed native and LR intervals.
+        """Verify the fine pool supports reviewed intervals and R3x3 extension.
 
         Returns:
             None.
         """
-        expected = {0.0175, 0.02, 0.025, 0.0275, 0.0325, 0.035, 0.04}
+        expected = {
+            0.0175,
+            0.02,
+            0.025,
+            0.0275,
+            0.0325,
+            0.035,
+            0.04,
+            0.045,
+            0.055,
+            0.06,
+            0.065,
+            0.07,
+            0.08,
+            0.09,
+            0.1,
+        }
         self.assertTrue(expected.issubset(FINE_LAMBDA_POOL))
 
     def test_presentation_keys_normalize_selected_settings(self) -> None:
