@@ -29,7 +29,7 @@ class GreNiftiCollectionTests(unittest.TestCase):
     """Verify complete, hash-identical collection without mask products."""
 
     def test_complete_collection_copies_all_echo_parts_without_masking(self) -> None:
-        """Collect three geometries and two branches with exact source hashes."""
+        """Collect four geometries and two branches with exact source hashes."""
 
         with tempfile.TemporaryDirectory() as folder:
             temporary = Path(folder)
@@ -50,8 +50,8 @@ class GreNiftiCollectionTests(unittest.TestCase):
             destination = source_root / "nifti_collection"
             manifest = build_gre_nifti_collection(source_root, require_retro=True)
 
-            self.assertEqual(manifest["case_branch_count"], 6)
-            self.assertEqual(manifest["nifti_count"], 24)
+            self.assertEqual(manifest["case_branch_count"], 8)
+            self.assertEqual(manifest["nifti_count"], 32)
             self.assertFalse(manifest["scientific_scope"]["masking_applied"])
             self.assertFalse(
                 manifest["scientific_scope"]["masked_derivatives_generated"]
@@ -102,6 +102,68 @@ class GreNiftiCollectionTests(unittest.TestCase):
                 (destination / "user_file.txt").read_text(encoding="utf-8"),
                 "preserve\n",
             )
+
+    def test_legacy_collection_appends_r3x3_and_never_silently_removes_it(self) -> None:
+        """Atomically add R3x3 to an old collection and protect prior groups."""
+
+        with tempfile.TemporaryDirectory() as folder:
+            source_root = Path(folder) / "reconstruction"
+            for geometry_id, case_location in CASE_LOCATIONS[:-1]:
+                self._write_case(source_root, geometry_id, case_location)
+            initial = build_gre_nifti_collection(source_root, require_retro=True)
+            self.assertEqual(initial["case_branch_count"], 6)
+            self.assertEqual(
+                initial["synchronization"]["mode"], "initial_build"
+            )
+
+            geometry_id, case_location = CASE_LOCATIONS[-1]
+            self.assertEqual(geometry_id, "native_r3x3")
+            self._write_case(source_root, geometry_id, case_location)
+            appended = build_gre_nifti_collection(source_root, require_retro=True)
+            self.assertEqual(appended["case_branch_count"], 8)
+            self.assertEqual(
+                appended["synchronization"]["added_case_groups"],
+                ["fista_r0:native_r3x3", "selected_wavelet:native_r3x3"],
+            )
+            self.assertEqual(
+                len(appended["synchronization"]["retained_case_groups"]), 6
+            )
+
+            for path in (source_root / case_location / "nifti").rglob("*"):
+                if path.is_file():
+                    path.unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "refusing to remove"):
+                build_gre_nifti_collection(source_root)
+
+    def test_require_retro_accepts_legacy_layout_but_rejects_started_r3x3(self) -> None:
+        """Keep old two-case retro roots valid while requiring a started R3x3."""
+
+        with tempfile.TemporaryDirectory() as folder:
+            source_root = Path(folder) / "reconstruction"
+            for geometry_id, case_location in CASE_LOCATIONS[:-1]:
+                self._write_case(source_root, geometry_id, case_location)
+            manifest = build_gre_nifti_collection(source_root, require_retro=True)
+            self.assertEqual(manifest["case_branch_count"], 6)
+
+        with tempfile.TemporaryDirectory() as folder:
+            source_root = Path(folder) / "reconstruction"
+            for geometry_id, case_location in CASE_LOCATIONS[:-1]:
+                self._write_case(source_root, geometry_id, case_location)
+            geometry_id, case_location = CASE_LOCATIONS[-1]
+            self._write_case(
+                source_root,
+                geometry_id,
+                case_location,
+            )
+            selected = source_root / case_location / "nifti" / "selected_wavelet"
+            for path in selected.rglob("*"):
+                if path.is_file():
+                    path.unlink()
+            selected.rmdir()
+            with self.assertRaisesRegex(
+                (FileNotFoundError, ValueError), "native_r3x3|incomplete"
+            ):
+                build_gre_nifti_collection(source_root, require_retro=True)
 
     def test_incomplete_echo_part_and_masked_source_are_rejected(self) -> None:
         """Reject source drift, missing phase data, and masked sidecars."""

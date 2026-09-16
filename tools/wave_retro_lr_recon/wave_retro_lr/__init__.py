@@ -1,7 +1,13 @@
 """Measured and synthetic retrospective Wave reconstruction utilities."""
 
 from .core import CaseSpec, Geometry, ResolvedCase, resolve_case
-from .gre import GreCase, gre_cases, prepare_normal_gre, prepare_retro_gre
+from .gre import (
+    GreCase,
+    gre_cases,
+    prepare_normal_gre,
+    prepare_retro_gre,
+    prepare_retro_gre_r3x3,
+)
 from .psf import evaluate_calibrated_psf
 from .retrospective import synthesize_wave_from_no_wave_crop
 from .sampling import (
@@ -21,6 +27,7 @@ __all__ = [
     "gre_cases",
     "prepare_normal_gre",
     "prepare_retro_gre",
+    "prepare_retro_gre_r3x3",
     "resolve_case",
     "synthesize_wave_from_no_wave_crop",
     "validate_pure_cartesian_image_lattice",

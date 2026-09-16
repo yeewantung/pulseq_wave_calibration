@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -21,7 +22,11 @@ from .psf import (
     evaluate_calibrated_psf,
     write_psf_coefficient_plot,
 )
-from .retrospective import resample_sensitivity_maps
+from .retrospective import (
+    link_bart_pair,
+    resample_sensitivity_maps,
+    validate_same_grid_masked_wave,
+)
 from .sampling import pure_cartesian_image_lattice_mask, validate_pure_cartesian_image_lattice
 
 NATIVE_MATRIX_RO_LIN_PAR = (250, 250, 72)
@@ -36,6 +41,7 @@ GRE_GEOMETRY_IDS = (
     "native_r3x1",
     "native_r3x2",
     "lin_low_resolution_r3x2",
+    "native_r3x3",
 )
 GRE_SHARED_WAVELET_LAMBDA = 0.015
 GRE_LOGICAL_AXIS_ROLES = ("readout", "phase", "slice")
@@ -45,6 +51,8 @@ GRE_BART_OUTPUT_CONVENTION_VERSION = 2
 NORMAL_INPUT_RELATIVE = Path("normal") / "bart_inputs"
 NORMAL_OUTPUT_RELATIVE = Path("normal") / "bart_output"
 RETRO_RELATIVE = Path("retro")
+R3X3_CASE_ID = "native_r3x3"
+NORMAL_REUSE_ATTESTATION_NAME = "NORMAL_INPUT_REUSE_ATTESTATION.json"
 
 
 @dataclass(frozen=True)
@@ -281,6 +289,16 @@ def gre_cases(
             (3, 2),
             (low_lin_residue, 0),
             resolve_gre_wavelet_lambda("lin_low_resolution_r3x2"),
+        ),
+        "native_r3x3": GreCase(
+            "native_r3x3",
+            matrix,
+            matrix,
+            fov,
+            native_bounds,
+            (3, 3),
+            (2, (matrix[2] // 2) % 3),
+            resolve_gre_wavelet_lambda("native_r3x3"),
         ),
     }
 
@@ -1047,6 +1065,370 @@ def _source_matches(existing: Mapping[str, Any], twix: Path, sequence: Path, set
     )
 
 
+def _normal_manifest_matches_reusable_artifact(
+    manifest: Mapping[str, Any],
+    twix: Path,
+    sequence: Path,
+    settings: Mapping[str, Any],
+) -> bool:
+    """Check whether legacy GRE normal artifacts may be reused unchanged.
+
+    This retrospective-only path binds the recorded sources and accepts the
+    already materialized measured PSFs without claiming that current defaults
+    or implementation code produced them. Manual fit overrides remain strict.
+
+    Args:
+        manifest: Existing normal GRE preparation manifest.
+        twix: Requested measured GRE TWIX path.
+        sequence: Requested matching Pulseq sequence path.
+        settings: Normalized current PSF-processing request.
+
+    Returns:
+        ``True`` when source identity and the narrow compatibility policy match.
+    """
+
+    source = manifest.get("source", {})
+    echoes = manifest.get("echoes")
+    if (
+        manifest.get("status") != "measured_multi_echo_wave_gre_bart_inputs_ready"
+        or source.get("twix") != _file_identity(twix)
+        or source.get("sequence") != _file_identity(sequence, include_hash=True)
+        or not isinstance(manifest.get("geometry"), Mapping)
+        or not isinstance(manifest.get("sampling"), Mapping)
+        or not isinstance(echoes, list)
+        or not echoes
+        or [item.get("echo") for item in echoes]
+        != list(range(1, len(echoes) + 1))
+    ):
+        return False
+    if settings.get("requested_fit_kx_range") is not None:
+        return False
+    psf_calibration = manifest.get("psf_calibration", {})
+    if not isinstance(psf_calibration, Mapping):
+        return False
+    recorded_request = psf_calibration.get("request")
+    if isinstance(recorded_request, Mapping):
+        recorded_mode = recorded_request.get("coefficient_processing")
+        if recorded_mode not in {None, "smooth", "sine-line"}:
+            return False
+    return True
+
+
+def _validated_normal_sampling(
+    destination: Path, manifest: Mapping[str, Any]
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Load and validate the measured normal GRE image-stream lattice.
+
+    Args:
+        destination: Existing ``normal/bart_inputs`` directory.
+        manifest: Normal preparation manifest containing sampling metadata.
+
+    Returns:
+        Boolean source mask and recomputed canonical pure-lattice metadata.
+
+    Raises:
+        FileNotFoundError: If the local sampling mask is absent.
+        ValueError: If the mask differs from its recorded pure-lattice contract.
+    """
+
+    mask_path = destination / "sampling_mask.npy"
+    if not mask_path.is_file():
+        raise FileNotFoundError(f"Missing normal GRE sampling mask: {mask_path}")
+    mask = np.load(mask_path, allow_pickle=False)
+    metadata = dict(manifest.get("sampling", {}))
+    canonical = validate_pure_cartesian_image_lattice(mask, metadata)
+    return np.asarray(mask, dtype=bool), canonical
+
+
+def _finite_cfl(base: Path, *, readout_chunk: int = 8) -> bool:
+    """Check one BART CFL for finite values without a full-memory copy.
+
+    Args:
+        base: BART CFL basename.
+        readout_chunk: Maximum first-axis planes checked together.
+
+    Returns:
+        ``True`` only when every complex sample is finite.
+    """
+
+    if readout_chunk < 1:
+        raise ValueError("Readout finite-check chunk must be positive.")
+    values = open_cfl(base)
+    for start in range(0, values.shape[0], readout_chunk):
+        if not np.isfinite(np.asarray(values[start : start + readout_chunk])).all():
+            return False
+    return True
+
+
+def _normal_core_artifact_records(
+    destination: Path, manifest: Mapping[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate reusable multi-echo GRE core artifacts and record identities.
+
+    Args:
+        destination: Existing ``normal/bart_inputs`` directory.
+        manifest: Historical manifest supplying geometry and echo filenames.
+
+    Returns:
+        Core artifact records and missing nonessential legacy diagnostics.
+
+    Raises:
+        FileNotFoundError: If required measured k-space, calibration, mask, or
+            per-echo PSF files are absent.
+        ValueError: If geometry or finite-value checks fail.
+    """
+
+    geometry = manifest["geometry"]
+    matrix = tuple(int(value) for value in geometry["matrix_ro_lin_par"])
+    if len(matrix) != 3 or any(value <= 0 for value in matrix):
+        raise ValueError("Legacy normal GRE manifest has invalid geometry.")
+    source_mask, sampling = _validated_normal_sampling(destination, manifest)
+    if source_mask.shape != matrix[1:]:
+        raise ValueError("Legacy normal GRE mask and geometry disagree.")
+    if tuple(sampling["acceleration_lin_par"]) != (3, 1):
+        raise ValueError("Legacy normal GRE source is not a regular R3x1 lattice.")
+
+    echoes = manifest["echoes"]
+    calibration_shape = read_shape(destination / str(manifest.get("kspace_calib", "kspace_calib")))
+    padded_calibration = calibration_shape + (1,) * max(0, 5 - len(calibration_shape))
+    if (
+        padded_calibration[:3] != matrix
+        or padded_calibration[3] <= 0
+        or any(value != 1 for value in padded_calibration[4:])
+    ):
+        raise ValueError("Legacy normal GRE calibration geometry is inconsistent.")
+    records: dict[str, Any] = {
+        "sampling_mask": {
+            "shape_lin_par": list(source_mask.shape),
+            "logical_sha256": sampling["logical_sha256"],
+            "acquired_coordinate_count": sampling["acquired_coordinate_count"],
+        },
+        "kspace_calib": {
+            "shape": list(calibration_shape),
+            "header_sha256": sha256_file(
+                (destination / str(manifest.get("kspace_calib", "kspace_calib"))).with_suffix(".hdr")
+            ),
+            "payload_size_bytes": (
+                destination / str(manifest.get("kspace_calib", "kspace_calib"))
+            ).with_suffix(".cfl").stat().st_size,
+        },
+        "echoes": [],
+    }
+    expected_coils = padded_calibration[3]
+    for echo_index, echo in enumerate(echoes, start=1):
+        wave_name = str(echo.get("wave_kspace", f"wave_kspace_echo-{echo_index:02d}"))
+        psf_name = str(echo.get("psf", f"psf_echo-{echo_index:02d}"))
+        wave_base = destination / wave_name
+        psf_base = destination / psf_name
+        wave_shape = read_shape(wave_base)
+        psf_shape = read_shape(psf_base)
+        padded_wave = wave_shape + (1,) * max(0, 5 - len(wave_shape))
+        padded_psf = psf_shape + (1,) * max(0, 5 - len(psf_shape))
+        if (
+            padded_wave[:5] != (EXTENDED_READOUT, matrix[1], matrix[2], expected_coils, 1)
+            or any(value != 1 for value in padded_wave[5:])
+            or padded_psf[:3] != (EXTENDED_READOUT, matrix[1], matrix[2])
+            or any(value != 1 for value in padded_psf[3:])
+        ):
+            raise ValueError(
+                f"Legacy normal GRE echo {echo_index} has inconsistent core geometry."
+            )
+        if not _finite_cfl(psf_base):
+            raise ValueError(f"Legacy normal GRE echo {echo_index} PSF is non-finite.")
+        records["echoes"].append(
+            {
+                "echo": echo_index,
+                "wave_kspace": wave_name,
+                "wave_kspace_shape": list(wave_shape),
+                "wave_kspace_header_sha256": sha256_file(wave_base.with_suffix(".hdr")),
+                "wave_kspace_payload_size_bytes": wave_base.with_suffix(".cfl").stat().st_size,
+                "psf": psf_name,
+                "psf_shape": list(psf_shape),
+                "psf_header_sha256": sha256_file(psf_base.with_suffix(".hdr")),
+                "psf_payload_sha256": sha256_file(psf_base.with_suffix(".cfl")),
+                "psf_finite": True,
+            }
+        )
+
+    missing: list[str] = []
+    coefficient_path = destination / "shared_psf_coefficients.npz"
+    if coefficient_path.is_file():
+        coefficients, _ = _read_shared_psf_coefficients(coefficient_path)
+        if not all(np.isfinite(value).all() for value in coefficients):
+            raise ValueError("Legacy normal GRE PSF coefficients are non-finite.")
+        records["shared_psf_coefficients"] = {
+            "sha256": sha256_file(coefficient_path),
+            "processed_values_finite": True,
+        }
+    else:
+        missing.append("shared_psf_coefficients.npz")
+    for echo_index, echo in enumerate(echoes, start=1):
+        trajectory_name = echo.get("sequence_trajectory")
+        if trajectory_name is None or not (destination / str(trajectory_name)).is_file():
+            missing.append(str(trajectory_name or f"sequence_trajectory_echo-{echo_index:02d}.npz"))
+            continue
+        trajectory_path = destination / str(trajectory_name)
+        with np.load(trajectory_path) as values:
+            delta_lin = np.asarray(values["delta_lin"])
+            delta_par = np.asarray(values["delta_par"])
+        if (
+            delta_lin.size != EXTENDED_READOUT
+            or delta_par.size != EXTENDED_READOUT
+            or not np.isfinite(delta_lin).all()
+            or not np.isfinite(delta_par).all()
+        ):
+            raise ValueError(f"Legacy normal GRE echo {echo_index} trajectory is invalid.")
+    return records, missing
+
+
+def _write_normal_reuse_attestation(
+    destination: Path,
+    manifest: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    artifact_records: Mapping[str, Any],
+    missing_artifacts: Sequence[str],
+) -> Path:
+    """Record non-destructive retrospective reuse of legacy GRE normal inputs.
+
+    Args:
+        destination: Existing ``normal/bart_inputs`` directory.
+        manifest: Unmodified historical normal manifest.
+        settings: Current default request that was not applied to the PSF.
+        artifact_records: Validated core artifact identities.
+        missing_artifacts: Nonessential legacy diagnostics not present.
+
+    Returns:
+        Atomically written attestation path beside ``bart_inputs``.
+    """
+
+    manifest_path = destination / "manifest.json"
+    calibration = manifest.get("psf_calibration", {})
+    recorded_request = (
+        calibration.get("request", {}) if isinstance(calibration, Mapping) else {}
+    )
+    path = destination.parent / NORMAL_REUSE_ATTESTATION_NAME
+    stable_payload = {
+        "format_version": 1,
+        "status": "legacy_normal_inputs_accepted_for_retrospective_reuse",
+        "source_manifest": {
+            "path": str(manifest_path),
+            "sha256": sha256_file(manifest_path),
+            "modified": False,
+        },
+        "reuse_scope": "retrospective preparation only; no PSF refit or recalibration",
+        "recorded_psf_coefficient_processing": (
+            recorded_request.get("coefficient_processing")
+            if isinstance(recorded_request, Mapping)
+            else None
+        ),
+        "current_default_request_not_applied_to_existing_psf": dict(settings),
+        "core_artifacts": artifact_records,
+        "missing_nonessential_artifacts": list(missing_artifacts),
+        "scientific_artifacts_modified": False,
+    }
+    if path.is_file():
+        existing = _load_json(path)
+        existing_stable = {
+            key: value for key, value in existing.items() if key != "created_at_utc"
+        }
+        if existing_stable == stable_payload:
+            return path
+    _write_json(path, {**stable_payload, "created_at_utc": _utc_now()})
+    return path
+
+
+def _native_r3x3_residue(
+    sampling: Mapping[str, Any], npar: int
+) -> tuple[int, int]:
+    """Derive a source-subset native R3x3 residue from measured GRE sampling.
+
+    Args:
+        sampling: Validated normal pure-lattice sampling metadata.
+        npar: Native logical slice/partition count.
+
+    Returns:
+        LIN residue inherited from measured R3x1 and center-aligned PAR residue.
+
+    Raises:
+        ValueError: If the source is not a regular single-residue R3x1 lattice.
+    """
+
+    acceleration = tuple(int(value) for value in sampling["acceleration_lin_par"])
+    residue = tuple(int(value) for value in sampling["residue_lin_par"])
+    if acceleration != (3, 1) or len(residue) != 2 or residue[1] != 0:
+        raise ValueError(
+            "Native GRE R3x3 retrospective undersampling requires regular R3x1 data."
+        )
+    if not 0 <= residue[0] < 3 or int(npar) <= 0:
+        raise ValueError("Measured GRE R3x1 residue or partition count is invalid.")
+    return residue[0], (int(npar) // 2) % 3
+
+
+def _normal_shared_calibration_id(
+    destination: Path, manifest: Mapping[str, Any]
+) -> str:
+    """Resolve one stable shared-calibration identity for legacy GRE echoes.
+
+    Args:
+        destination: Existing normal GRE BART-input directory.
+        manifest: Normal preparation manifest.
+
+    Returns:
+        Recorded coefficient identity, recomputed coefficient identity, or a
+        clearly labeled digest of the immutable per-echo PSF payload set.
+
+    Raises:
+        ValueError: If recorded echo calibration identities disagree.
+    """
+
+    echoes = manifest.get("echoes", [])
+    recorded = {echo.get("shared_calibration_id") for echo in echoes}
+    recorded.discard(None)
+    if len(recorded) > 1:
+        raise ValueError("Normal GRE echoes disagree on shared calibration identity.")
+    if recorded:
+        return str(next(iter(recorded)))
+    calibration = manifest.get("psf_calibration", {})
+    calibration_id = (
+        calibration.get("shared_calibration_id")
+        if isinstance(calibration, Mapping)
+        else None
+    )
+    if calibration_id:
+        return str(calibration_id)
+    coefficient_path = destination / "shared_psf_coefficients.npz"
+    if coefficient_path.is_file():
+        coefficients, _ = _read_shared_psf_coefficients(coefficient_path)
+        return _shared_calibration_id(*coefficients)
+    digest = hashlib.sha256()
+    for echo in echoes:
+        psf = destination / str(echo["psf"])
+        digest.update(sha256_file(psf.with_suffix(".hdr")).encode("ascii"))
+        digest.update(sha256_file(psf.with_suffix(".cfl")).encode("ascii"))
+    return f"legacy-psf-set-sha256:{digest.hexdigest()}"
+
+
+def _single_map_wave_values(base: Path) -> np.ndarray:
+    """Expose one normal GRE Wave CFL as extended-RO/LIN/PAR/COIL data.
+
+    Args:
+        base: Normal per-echo measured-Wave BART basename.
+
+    Returns:
+        Memory-mapped logical values with singleton map/trailing axes removed.
+
+    Raises:
+        ValueError: If the BART input contains more than one map or a
+            non-singleton trailing dimension.
+    """
+
+    shape = read_shape(base)
+    padded = shape + (1,) * max(0, 5 - len(shape))
+    if padded[4] != 1 or any(value != 1 for value in padded[5:]):
+        raise ValueError("Normal GRE measured-Wave input must contain one map.")
+    return open_cfl(base).reshape((*padded[:4], -1), order="F")[..., 0]
+
+
 def _coefficient_arrays(
     values: Sequence[Any],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1227,6 +1609,7 @@ def prepare_normal_gre(
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
     reuse: bool = True,
+    allow_legacy_artifact_reuse: bool = False,
 ) -> dict[str, Any]:
     """Prepare native measured R3x1 GRE BART inputs for one or more echoes.
 
@@ -1239,6 +1622,9 @@ def prepare_normal_gre(
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
         reuse: Reuse an identity-matched completed input set.
+        allow_legacy_artifact_reuse: Permit retrospective callers to reuse
+            source-matched legacy measured k-space and PSFs without rewriting
+            their historical manifest or recalibrating the operator.
 
     Returns:
         Native preparation manifest.
@@ -1253,17 +1639,83 @@ def prepare_normal_gre(
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
-        if not _source_matches(existing, twix_path, sequence_path, settings):
+        exact_match = _source_matches(existing, twix_path, sequence_path, settings)
+        artifact_match = allow_legacy_artifact_reuse and (
+            _normal_manifest_matches_reusable_artifact(
+                existing, twix_path, sequence_path, settings
+            )
+        )
+        if not exact_match and not artifact_match:
             raise ValueError("Existing normal GRE inputs use different sources or PSF settings.")
+        if artifact_match and not exact_match:
+            artifact_records, missing_artifacts = _normal_core_artifact_records(
+                destination, existing
+            )
+            attestation = _write_normal_reuse_attestation(
+                destination,
+                existing,
+                settings,
+                artifact_records,
+                missing_artifacts,
+            )
+            calibration = existing.get("psf_calibration", {})
+            recorded_request = (
+                calibration.get("request", {})
+                if isinstance(calibration, Mapping)
+                else {}
+            )
+            recorded_mode = (
+                recorded_request.get("coefficient_processing")
+                if isinstance(recorded_request, Mapping)
+                else None
+            )
+            print(
+                "Accepted existing normal GRE artifacts without recalibration; "
+                f"recorded PSF mode: {recorded_mode or 'unknown'}; "
+                f"current defaults were not applied; reuse attestation: {attestation}"
+            )
+            return existing
         for echo in existing["echoes"]:
             read_shape(destination / str(echo["wave_kspace"]))
             read_shape(destination / str(echo["psf"]))
         read_shape(destination / "kspace_calib")
         coefficient_path = destination / "shared_psf_coefficients.npz"
+        if allow_legacy_artifact_reuse and not coefficient_path.is_file():
+            artifact_records, missing_artifacts = _normal_core_artifact_records(
+                destination, existing
+            )
+            attestation = _write_normal_reuse_attestation(
+                destination,
+                existing,
+                settings,
+                artifact_records,
+                missing_artifacts,
+            )
+            print(
+                "Accepted existing normal GRE artifacts without diagnostic upgrade; "
+                f"reuse attestation: {attestation}"
+            )
+            return existing
         coefficients, raw_coefficients = _read_shared_psf_coefficients(coefficient_path)
         if raw_coefficients is None:
             raw_coefficients = _recover_legacy_raw_psf_coefficients(destination)
             if raw_coefficients is None:
+                if allow_legacy_artifact_reuse:
+                    artifact_records, missing_artifacts = _normal_core_artifact_records(
+                        destination, existing
+                    )
+                    attestation = _write_normal_reuse_attestation(
+                        destination,
+                        existing,
+                        settings,
+                        artifact_records,
+                        missing_artifacts,
+                    )
+                    print(
+                        "Accepted existing normal GRE artifacts without raw-coefficient "
+                        f"diagnostic upgrade; reuse attestation: {attestation}"
+                    )
+                    return existing
                 raise ValueError(
                     "Existing GRE inputs predate raw PSF persistence and their "
                     "projection caches are unavailable; use a new output root to "
@@ -1574,6 +2026,7 @@ def prepare_retro_gre(
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
         reuse=True,
+        allow_legacy_artifact_reuse=True,
     )
     normal_inputs = root / NORMAL_INPUT_RELATIVE
     normal_echoes = normal.get("echoes")
@@ -1717,6 +2170,283 @@ def prepare_retro_gre(
         },
     )
     return results
+
+
+def _validate_gre_r3x3_case_inputs(
+    normal_inputs: Path,
+    inputs: Path,
+    normal_echoes: Sequence[Mapping[str, Any]],
+    target_mask: np.ndarray,
+) -> list[dict[str, Any]]:
+    """Validate every reused native-R3x3 GRE echo and measured PSF.
+
+    Args:
+        normal_inputs: Existing native measured GRE BART-input directory.
+        inputs: Native-R3x3 case-local BART-input directory.
+        normal_echoes: Ordered normal-manifest echo records.
+        target_mask: Exact pure Cartesian native-R3x3 mask.
+
+    Returns:
+        One acquired-equality, zero-exterior, and finite-value record per echo.
+
+    Raises:
+        FileNotFoundError: If a required case or source CFL pair is absent.
+        ValueError: If any echo, PSF, or same-grid data contract fails.
+    """
+
+    validation: list[dict[str, Any]] = []
+    for echo_index, echo in enumerate(normal_echoes, start=1):
+        echo_label = f"echo-{echo_index:02d}"
+        source_wave = normal_inputs / str(echo["wave_kspace"])
+        target_wave = inputs / f"wave_kspace_{echo_label}"
+        source_psf = normal_inputs / str(echo["psf"])
+        target_psf = inputs / f"psf_{echo_label}"
+        metrics = validate_same_grid_masked_wave(
+            source_wave, target_wave, target_mask
+        )
+        source_psf_shape = read_shape(source_psf)
+        target_psf_shape = read_shape(target_psf)
+        if source_psf_shape != target_psf_shape:
+            raise ValueError(f"Native GRE R3x3 {echo_label} PSF geometry changed.")
+        if not _finite_cfl(target_psf):
+            raise ValueError(f"Native GRE R3x3 {echo_label} PSF is non-finite.")
+        validation.append(
+            {
+                "echo": echo_index,
+                **metrics,
+                "psf_geometry_equal_source": True,
+                "psf_finite": True,
+            }
+        )
+    return validation
+
+
+def prepare_retro_gre_r3x3(
+    twix: str | Path,
+    output_root: str | Path,
+    sequence: str | Path,
+    *,
+    psf_coefficient_processing: str = "sine-line",
+    psf_fit_kx_min: int | None = None,
+    psf_fit_kx_max: int | None = None,
+) -> dict[str, Any]:
+    """Prepare only native-grid R3x3 retrospective multi-echo GRE inputs.
+
+    The LIN residue is inherited from the measured regular R3x1 image stream;
+    the PAR residue is center aligned. Each echo is masked independently on
+    the same native grid, while its measured-data PSF and the native CSM remain
+    separate reusable artifacts.
+
+    Args:
+        twix: Measured regular-R3x1 Wave-GRE TWIX file.
+        output_root: Reconstruction root containing or receiving normal inputs.
+        sequence: Matching integrated Wave-GRE Pulseq sequence.
+        psf_coefficient_processing: Existing normal PSF processing contract.
+        psf_fit_kx_min: Optional inclusive manual sine-line bound.
+        psf_fit_kx_max: Optional exclusive manual sine-line bound.
+
+    Returns:
+        Complete native-R3x3 case-local preparation manifest.
+
+    Raises:
+        ValueError: If source, echo, geometry, mask, PSF, or exact data checks fail.
+        FileExistsError: If incompatible existing or partial case inputs are found.
+    """
+
+    root = Path(output_root).expanduser().resolve()
+    normal = prepare_normal_gre(
+        twix,
+        root,
+        sequence,
+        psf_coefficient_processing=psf_coefficient_processing,
+        psf_fit_kx_min=psf_fit_kx_min,
+        psf_fit_kx_max=psf_fit_kx_max,
+        reuse=True,
+        allow_legacy_artifact_reuse=True,
+    )
+    normal_inputs = root / NORMAL_INPUT_RELATIVE
+    normal_echoes = normal.get("echoes")
+    if not isinstance(normal_echoes, list) or not normal_echoes:
+        raise ValueError("Normal GRE manifest has no ordered echoes.")
+    echo_count = len(normal_echoes)
+    if [item.get("echo") for item in normal_echoes] != list(
+        range(1, echo_count + 1)
+    ):
+        raise ValueError("Normal GRE manifest echoes are incomplete or out of order.")
+
+    geometry = normal.get("geometry", {})
+    native_matrix = tuple(int(value) for value in geometry["matrix_ro_lin_par"])
+    native_fov_mm = tuple(float(value) for value in geometry["fov_mm_ro_lin_par"])
+    source_mask, source_sampling = _validated_normal_sampling(normal_inputs, normal)
+    residue = _native_r3x3_residue(source_sampling, native_matrix[2])
+    case = replace(
+        gre_cases(native_matrix, native_fov_mm)[R3X3_CASE_ID],
+        residue_lin_par=residue,
+    )
+    target_mask, sampling = _case_mask(case)
+    if np.any(target_mask & ~source_mask):
+        raise ValueError("Native GRE R3x3 mask is not a subset of measured R3x1 samples.")
+    selection = gre_wavelet_selection_provenance(R3X3_CASE_ID, echo_count)
+    calibration_id = _normal_shared_calibration_id(normal_inputs, normal)
+    reuse_attestation_path = normal_inputs.parent / NORMAL_REUSE_ATTESTATION_NAME
+    reuse_attestation = None
+    if reuse_attestation_path.is_file():
+        attestation_payload = _load_json(reuse_attestation_path)
+        normal_manifest_hash = sha256_file(normal_inputs / "manifest.json")
+        if (
+            attestation_payload.get("status")
+            == "legacy_normal_inputs_accepted_for_retrospective_reuse"
+            and attestation_payload.get("source_manifest", {}).get("sha256")
+            == normal_manifest_hash
+        ):
+            reuse_attestation = {
+                "path": str(reuse_attestation_path),
+                "sha256": sha256_file(reuse_attestation_path),
+            }
+
+    inputs = root / RETRO_RELATIVE / R3X3_CASE_ID / "bart_inputs"
+    manifest_path = inputs / "manifest.json"
+    if manifest_path.is_file():
+        existing = _load_json(manifest_path)
+        if (
+            existing.get("source") != normal.get("source")
+            or existing.get("case") != case.to_json()
+            or existing.get("sampling", {}).get("logical_sha256")
+            != sampling["logical_sha256"]
+            or existing.get("wavelet_selection") != selection
+            or int(existing.get("echo_count", 0)) != echo_count
+        ):
+            raise ValueError(f"Existing native GRE R3x3 inputs are incompatible: {inputs}")
+        recorded_attestation = existing.get("normal_reuse_attestation")
+        if recorded_attestation is not None and (
+            not isinstance(recorded_attestation, Mapping)
+            or not reuse_attestation_path.is_file()
+            or recorded_attestation.get("path") != str(reuse_attestation_path)
+            or recorded_attestation.get("sha256")
+            != sha256_file(reuse_attestation_path)
+        ):
+            raise ValueError(
+                "Existing native GRE R3x3 inputs reference a changed reuse attestation."
+            )
+        mask = np.load(inputs / "sampling_mask.npy", allow_pickle=False)
+        validate_pure_cartesian_image_lattice(mask, existing["sampling"])
+        _validate_gre_r3x3_case_inputs(
+            normal_inputs, inputs, normal_echoes, np.asarray(mask, dtype=bool)
+        )
+        print(f"Reusing compatible native GRE R3x3 BART inputs: {inputs}")
+        return existing
+
+    _validate_recoverable_retro_directory(inputs, echo_count)
+    inputs.mkdir(parents=True, exist_ok=True)
+    mask_path = inputs / "sampling_mask.npy"
+    np.save(mask_path, target_mask, allow_pickle=False)
+    echo_records: list[dict[str, Any]] = []
+    sampling_validation: list[dict[str, Any]] = []
+    psf_records: list[dict[str, Any]] = []
+    for echo_index, echo in enumerate(normal_echoes, start=1):
+        echo_label = f"echo-{echo_index:02d}"
+        source_wave = normal_inputs / str(echo["wave_kspace"])
+        wave_name = f"wave_kspace_{echo_label}"
+        norm = _write_echo_wave(
+            _single_map_wave_values(source_wave),
+            inputs / wave_name,
+            case,
+            target_mask,
+        )
+        validation = validate_same_grid_masked_wave(
+            source_wave, inputs / wave_name, target_mask
+        )
+        sampling_validation.append({"echo": echo_index, **validation})
+
+        source_psf = normal_inputs / str(echo["psf"])
+        psf_name = f"psf_{echo_label}"
+        target_psf = inputs / psf_name
+        for suffix in (".hdr", ".cfl"):
+            partial = target_psf.with_suffix(suffix)
+            if partial.exists() or partial.is_symlink():
+                partial.unlink()
+        link_bart_pair(source_psf, target_psf)
+        psf_shape = read_shape(target_psf)
+        if read_shape(source_psf) != psf_shape or not _finite_cfl(target_psf):
+            raise ValueError(f"Native GRE R3x3 {echo_label} PSF reuse failed validation.")
+        psf_records.append(
+            {
+                "echo": echo_index,
+                "source": str(source_psf),
+                "case_local": psf_name,
+                "header_sha256": sha256_file(source_psf.with_suffix(".hdr")),
+                "payload_sha256": sha256_file(source_psf.with_suffix(".cfl")),
+                "reused_without_recalibration": True,
+                "finite": True,
+            }
+        )
+        echo_records.append(
+            {
+                "echo": echo_index,
+                "eco_counter": int(echo.get("eco_counter", echo_index - 1)),
+                "te_s": float(echo["te_s"]),
+                "wave_kspace": wave_name,
+                "wave_kspace_shape": list(read_shape(inputs / wave_name)),
+                "wave_kspace_norm": norm,
+                "psf": psf_name,
+                "psf_shape": list(psf_shape),
+                "shared_calibration_id": calibration_id,
+                "selected_wavelet_lambda": case.shared_wavelet_lambda,
+            }
+        )
+
+    manifest = {
+        "format_version": 1,
+        "status": "direct_measured_multi_echo_wave_gre_r3x3_bart_inputs_ready",
+        "source": normal["source"],
+        "source_normal_manifest": {
+            "path": str(normal_inputs / "manifest.json"),
+            "sha256": sha256_file(normal_inputs / "manifest.json"),
+        },
+        "normal_reuse_attestation": reuse_attestation,
+        "case": case.to_json(),
+        "operator": "same-grid retrospective Cartesian undersampling of measured multi-echo Wave k-space",
+        "interpolation": False,
+        "forward_simulation_from_no_wave_data": False,
+        "sampling": {**sampling, "path": str(mask_path)},
+        "source_subset_validation": {
+            "source_sampling_logical_sha256": source_sampling["logical_sha256"],
+            "target_sampling_logical_sha256": sampling["logical_sha256"],
+            "target_is_exact_source_subset": True,
+            "source_acquired_coordinate_count": source_sampling[
+                "acquired_coordinate_count"
+            ],
+            "target_acquired_coordinate_count": sampling[
+                "acquired_coordinate_count"
+            ],
+        },
+        "sampling_validation_by_echo": sampling_validation,
+        "echo_count": echo_count,
+        "echoes": echo_records,
+        "psf_by_echo": psf_records,
+        "psf_calibration": {
+            "reused_without_recalibration": True,
+            "shared_coefficient_fit_across_echoes": True,
+            "echo_specific_measured_psfs_preserved": True,
+        },
+        "calibration_kspace_included": False,
+        "csm_policy": "reuse native measured GRE maps unchanged across echoes",
+        "wavelet_selection": selection,
+        "dimension_order": ["READ", "PHS1", "PHS2", "COIL", "MAPS"],
+        "output_orientation": {
+            "logical_axis_roles": list(GRE_LOGICAL_AXIS_ROLES),
+            "validated_array_axis_flips": list(GRE_BART_ARRAY_AXIS_FLIPS),
+            "stored_coordinate_system": "canonical RAS",
+            "interpolation": False,
+        },
+        "prepared_at_utc": _utc_now(),
+    }
+    _write_json(manifest_path, manifest)
+    print(
+        f"Prepared {R3X3_CASE_ID}: logical={case.matrix_ro_lin_par}, "
+        f"mask coordinates={sampling['acquired_coordinate_count']}, echoes={echo_count}"
+    )
+    return manifest
 
 
 def prepare_retro_gre_sensitivity_maps(output_root: str | Path) -> None:

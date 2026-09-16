@@ -1,0 +1,64 @@
+{
+  "format_version": 2,
+  "workflow": "synthetic_wave_gre_regularization_sweep",
+  "output_parent": "/path/to/approved/output_parent",
+  "run_name": "gre_sweep_native_r3x3",
+  "geometry": {
+    "source_matrix_ro_lin_par": [256, 256, 72],
+    "native_matrix_ro_lin_par": [250, 250, 72],
+    "fov_mm_ro_lin_par": [220.0, 220.0, 180.0],
+    "extended_wave_readout": 1000,
+    "low_resolution_matrix_ro_lin_par": [250, 148, 72]
+  },
+  "sampling": {
+    "mask_kind": "pure_cartesian_image_lattice",
+    "residue_lin_par": [2, 0]
+  },
+  "coil_compression": {
+    "physical_coils": 44,
+    "virtual_coils": 12,
+    "partition_chunk": 4,
+    "readout_step": 4,
+    "covariance": "trace_balanced_across_two_echoes"
+  },
+  "csm": {
+    "calibration_echo": 1,
+    "calibration_size_ro_lin_par": [250, 32, 32],
+    "ecalib_maps": 1,
+    "ecalib_crop": 0.6,
+    "shared_across_echoes": true
+  },
+  "brain_mask": {
+    "source_case": "native_r3x1",
+    "source_echo": 1,
+    "fractional_intensity_threshold": 0.3,
+    "vertical_gradient": 0.0,
+    "robust_center": true,
+    "dilation_voxels": 0
+  },
+  "sweep": {
+    "wavelet_lambdas": [1e-6, 1e-5, 1e-4, 1e-3, 1e-2],
+    "llr_lambdas": [1e-6, 1e-5, 1e-4, 1e-3, 1e-2],
+    "llr_blocks": [4, 8, 16],
+    "iterations": 100,
+    "tolerance": 1e-6
+  },
+  "runtime": {
+    "backend": "gpu",
+    "bart": "bart",
+    "fft_workers": 4
+  },
+  "native_r3x3_extension": {
+    "case_ids": ["native_r3x3"],
+    "base_case_id": "native_r3x1",
+    "shared_lambda_across_echoes": true,
+    "reuse_manifests": {
+      "source": {"path": "/path/to/completed/gre_sweep/preparation/source/manifest.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+      "theoretical_operator": {"path": "/path/to/completed/gre_sweep/preparation/theoretical_operator/manifest.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+      "csm": {"path": "/path/to/completed/gre_sweep/preparation/csm/manifest.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+      "references": {"path": "/path/to/completed/gre_sweep/preparation/references/manifest.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+      "brain_mask": {"path": "/path/to/completed/gre_sweep/preparation/brain_mask/manifest.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+      "cases": {"path": "/path/to/completed/gre_sweep/preparation/cases/manifest.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+    }
+  }
+}

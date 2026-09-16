@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import math
 import subprocess
 import sys
@@ -29,7 +30,11 @@ from wave_retro_lr.gre import (  # noqa: E402
     WAVELET_SELECTION_SHA256,
     _crop_gre_wave_coil_in_pe,
     _evaluate_echo_psfs,
+    _file_identity,
     _normalize_psf_settings,
+    _normal_manifest_matches_reusable_artifact,
+    _native_r3x3_residue,
+    _case_mask,
     _read_shared_psf_coefficients,
     _resolve_gre_twix_logical_matrix,
     _shared_calibration_id,
@@ -43,6 +48,7 @@ from wave_retro_lr.gre import (  # noqa: E402
     gre_wavelet_selection_provenance,
     prepare_normal_gre,
     prepare_retro_gre,
+    prepare_retro_gre_r3x3,
     resolve_gre_wavelet_lambda,
     restore_bart_wave_image,
     validate_gre_echo_consistency,
@@ -54,9 +60,11 @@ from wave_retro_lr.psf import (  # noqa: E402
     PSF_COEFFICIENT_PLOT_NAME,
 )
 from wave_retro_lr.retrospective import resample_sensitivity_maps  # noqa: E402
+from wave_retro_lr.sampling import pure_cartesian_image_lattice_mask  # noqa: E402
 from scripts.convert_gre_bart_to_nifti import _canonicalize_saved_nifti  # noqa: E402
 from scripts.prepare_gre_normal import _parser as normal_parser  # noqa: E402
 from scripts.prepare_gre_retro import _parser as retro_parser  # noqa: E402
+from scripts.prepare_gre_retro_r3x3 import _parser as r3x3_parser  # noqa: E402
 
 
 class GreGeometryAndEchoTests(unittest.TestCase):
@@ -180,6 +188,70 @@ class GreGeometryAndEchoTests(unittest.TestCase):
             pediatric_metadata["echoes"][0]["acquired_coordinate_count"],
             65 * 72,
         )
+
+    def test_native_r3x3_residue_mask_count_and_hash_follow_measured_gre(self) -> None:
+        """Derive the reviewed R3x3 lattice from the measured R3x1 residue."""
+
+        source = {
+            "acceleration_lin_par": [3, 1],
+            "residue_lin_par": [2, 0],
+        }
+        self.assertEqual(_native_r3x3_residue(source, 72), (2, 0))
+        case = gre_cases()["native_r3x3"]
+        mask, metadata = _case_mask(case)
+        self.assertEqual(case.acceleration_lin_par, (3, 3))
+        self.assertEqual(case.residue_lin_par, (2, 0))
+        self.assertEqual(mask.shape, (250, 72))
+        self.assertEqual(metadata["acquired_coordinate_count"], 1992)
+        self.assertEqual(
+            metadata["logical_sha256"],
+            "e57069cd4f3cc9af4a78e70cb10f66b79ad1ceb35efac966c871df3822febefa",
+        )
+        with self.assertRaisesRegex(ValueError, "regular R3x1"):
+            _native_r3x3_residue(
+                {"acceleration_lin_par": [3, 2], "residue_lin_par": [2, 0]},
+                72,
+            )
+
+    def test_legacy_normal_compatibility_is_source_bound_and_rejects_manual_fit(self) -> None:
+        """Permit only source-matched retrospective reuse without manual overrides."""
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"twix")
+            sequence.write_bytes(b"sequence")
+            manifest = {
+                "status": "measured_multi_echo_wave_gre_bart_inputs_ready",
+                "source": {
+                    "twix": _file_identity(twix),
+                    "sequence": _file_identity(sequence, include_hash=True),
+                },
+                "geometry": {},
+                "sampling": {},
+                "psf_calibration": {"request": {"coefficient_processing": "smooth"}},
+                "echoes": [{"echo": 1}, {"echo": 2}],
+            }
+            automatic = _normalize_psf_settings("sine-line", None, None)
+            self.assertTrue(
+                _normal_manifest_matches_reusable_artifact(
+                    manifest, twix, sequence, automatic
+                )
+            )
+            manual = _normalize_psf_settings("sine-line", 10, 900)
+            self.assertFalse(
+                _normal_manifest_matches_reusable_artifact(
+                    manifest, twix, sequence, manual
+                )
+            )
+            other = root / "other.dat"
+            other.write_bytes(b"other")
+            self.assertFalse(
+                _normal_manifest_matches_reusable_artifact(
+                    manifest, other, sequence, automatic
+                )
+            )
 
     def test_sequence_and_twix_echo_count_and_te_must_match(self) -> None:
         """Reject count or TE disagreement before reconstruction preparation."""
@@ -409,6 +481,120 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
             with self.assertRaisesRegex(FileExistsError, "unexpected entries"):
                 _validate_recoverable_retro_directory(directory, 1)
 
+    def test_native_r3x3_preparation_preserves_every_echo_and_reuses_psfs(self) -> None:
+        """Build exact same-grid multi-echo data with separate linked PSFs."""
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            twix.write_bytes(b"legacy measured GRE")
+            sequence.write_bytes(b"matching sequence")
+            inputs = root / "normal" / "bart_inputs"
+            inputs.mkdir(parents=True)
+            source_mask, source_sampling = pure_cartesian_image_lattice_mask(
+                (12, 72),
+                acceleration_lin_par=(3, 1),
+                residue_lin_par=(2, 0),
+            )
+            np.save(inputs / "sampling_mask.npy", source_mask, allow_pickle=False)
+            echoes = []
+            for echo_number, scale in ((1, 1 + 2j), (2, 3 - 1j)):
+                echo_label = f"echo-{echo_number:02d}"
+                wave_name = f"wave_kspace_{echo_label}"
+                psf_name = f"psf_{echo_label}"
+                wave = create_cfl(inputs / wave_name, (1000, 12, 72, 1, 1))
+                values = np.zeros((1000, 12, 72), dtype=np.complex64)
+                values[:, source_mask] = scale
+                wave[..., 0, 0] = values
+                wave.flush()
+                del wave
+                psf = create_cfl(inputs / psf_name, (1000, 12, 72, 1, 1))
+                psf[:] = np.complex64(1 + echo_number * 0.01j)
+                psf.flush()
+                del psf
+                echoes.append(
+                    {
+                        "echo": echo_number,
+                        "eco_counter": echo_number - 1,
+                        "te_s": echo_number * 0.01,
+                        "wave_kspace": wave_name,
+                        "psf": psf_name,
+                        "shared_calibration_id": "shared-test-calibration",
+                    }
+                )
+            calibration = create_cfl(inputs / "kspace_calib", (250, 12, 72, 1))
+            calibration[:] = 1
+            calibration.flush()
+            del calibration
+            normal = {
+                "status": "measured_multi_echo_wave_gre_bart_inputs_ready",
+                "source": {
+                    "twix": _file_identity(twix),
+                    "sequence": _file_identity(sequence, include_hash=True),
+                },
+                "geometry": {
+                    "case_id": "native_r3x1",
+                    "matrix_ro_lin_par": [250, 12, 72],
+                    "fov_mm_ro_lin_par": [220.0, 10.8, 180.0],
+                },
+                "sampling": {**source_sampling, "path": str(inputs / "sampling_mask.npy")},
+                "psf_calibration": {
+                    "request": {"coefficient_processing": "smooth"},
+                    "shared_calibration_id": "shared-test-calibration",
+                },
+                "echoes": echoes,
+            }
+            normal_manifest_path = inputs / "manifest.json"
+            normal_manifest_path.write_text(
+                json.dumps(normal), encoding="utf-8"
+            )
+            historical_manifest_bytes = normal_manifest_path.read_bytes()
+
+            reused = prepare_normal_gre(
+                twix, root, sequence, allow_legacy_artifact_reuse=True
+            )
+            self.assertEqual(reused, normal)
+            self.assertEqual(normal_manifest_path.read_bytes(), historical_manifest_bytes)
+            attestation = root / "normal" / "NORMAL_INPUT_REUSE_ATTESTATION.json"
+            self.assertTrue(attestation.is_file())
+            first_attestation = attestation.read_bytes()
+
+            manifest = prepare_retro_gre_r3x3(twix, root, sequence)
+            resumed = prepare_retro_gre_r3x3(twix, root, sequence)
+
+            self.assertEqual(manifest, resumed)
+            self.assertEqual(attestation.read_bytes(), first_attestation)
+            self.assertEqual(normal_manifest_path.read_bytes(), historical_manifest_bytes)
+            self.assertEqual(manifest["case"]["case_id"], "native_r3x3")
+            self.assertEqual(manifest["case"]["residue_lin_par"], [2, 0])
+            self.assertEqual(
+                manifest["sampling"]["acquired_coordinate_count"], 96
+            )
+            self.assertTrue(
+                manifest["source_subset_validation"]["target_is_exact_source_subset"]
+            )
+            self.assertFalse(manifest["calibration_kspace_included"])
+            self.assertEqual(len(manifest["echoes"]), 2)
+            self.assertTrue(
+                all(
+                    record["acquired_samples_equal_source_bitwise"]
+                    and record["unacquired_samples_are_exact_zero"]
+                    for record in manifest["sampling_validation_by_echo"]
+                )
+            )
+            case_inputs = root / "retro" / "native_r3x3" / "bart_inputs"
+            for echo_number in (1, 2):
+                echo_label = f"echo-{echo_number:02d}"
+                self.assertTrue((case_inputs / f"psf_{echo_label}.hdr").is_symlink())
+                source = np.asarray(open_cfl(inputs / f"wave_kspace_{echo_label}"))
+                target = np.asarray(open_cfl(case_inputs / f"wave_kspace_{echo_label}"))
+                target_mask = np.load(case_inputs / "sampling_mask.npy", allow_pickle=False)
+                np.testing.assert_array_equal(
+                    target[:, target_mask, ...], source[:, target_mask, ...]
+                )
+                self.assertEqual(np.count_nonzero(target[:, ~target_mask, ...]), 0)
+
     def test_fista_and_wavelet_command_construction(self) -> None:
         """Build explicit 100-iteration FISTA-r0 and selected Wavelet commands."""
 
@@ -448,7 +634,7 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
                 )
                 records.append(record)
 
-        self.assertEqual(len(records), 9)
+        self.assertEqual(len(records), 12)
         self.assertTrue(all(record["command"][5] == "0.015" for record in records))
         for geometry_id in GRE_GEOMETRY_IDS:
             echoes = [record for record in records if record["geometry_id"] == geometry_id]
@@ -510,7 +696,8 @@ class GreSampleInterfaceTests(unittest.TestCase):
 
         normal = SCRIPTS / "sample_gre_normal_recon.sh"
         retro = SCRIPTS / "sample_gre_retro_lr_recon.sh"
-        for script in (normal, retro):
+        r3x3 = SCRIPTS / "sample_gre_retro_r3x3_recon.sh"
+        for script in (normal, retro, r3x3):
             subprocess.run(["bash", "-n", str(script)], check=True)
             help_result = subprocess.run(["bash", str(script), "--help"], capture_output=True, text=True)
             self.assertEqual(help_result.returncode, 0)
@@ -527,7 +714,8 @@ class GreSampleInterfaceTests(unittest.TestCase):
             self.assertEqual(len(ecalib_commands), 1)
         normal_source = normal.read_text(encoding="utf-8")
         retro_source = retro.read_text(encoding="utf-8")
-        for source in (normal_source, retro_source):
+        r3x3_source = r3x3.read_text(encoding="utf-8")
+        for source in (normal_source, retro_source, r3x3_source):
             self.assertIn('GRE_SHARED_WAVELET_LAMBDA="0.015"', source)
             self.assertNotIn("ECHO1_LAMBDA", source)
             self.assertNotIn("ECHO2_LAMBDA", source)
@@ -537,17 +725,20 @@ class GreSampleInterfaceTests(unittest.TestCase):
             self.assertIn("wave_kspace_$echo_label", source)
             self.assertIn("conversion_args+=(--image", source)
         self.assertNotIn("-l -v", normal_source + retro_source)
+        self.assertEqual(retro_source.count("sample_gre_retro_r3x3_recon.sh"), 1)
+        self.assertIn("Skipping completed $branch/$echo_label", r3x3_source)
+        self.assertNotIn("native_r3x2", r3x3_source)
 
     def test_gre_preparation_defaults_to_automatic_sine_line(self) -> None:
         """Keep the sample, preparation CLI, and Python API defaults aligned."""
 
         arguments = ["input.dat", "output", "input.seq"]
-        for parser in (normal_parser, retro_parser):
+        for parser in (normal_parser, retro_parser, r3x3_parser):
             parsed = parser().parse_args(arguments)
             self.assertEqual(parsed.psf_coefficient_processing, "sine-line")
             self.assertIsNone(parsed.psf_fit_kx_min)
             self.assertIsNone(parsed.psf_fit_kx_max)
-        for function in (prepare_normal_gre, prepare_retro_gre):
+        for function in (prepare_normal_gre, prepare_retro_gre, prepare_retro_gre_r3x3):
             parameter = inspect.signature(function).parameters[
                 "psf_coefficient_processing"
             ]
@@ -560,6 +751,7 @@ class GreSampleInterfaceTests(unittest.TestCase):
             TOOL_ROOT / "wave_retro_lr" / "gre.py",
             SCRIPTS / "prepare_gre_normal.py",
             SCRIPTS / "prepare_gre_retro.py",
+            SCRIPTS / "prepare_gre_retro_r3x3.py",
             SCRIPTS / "prepare_gre_retro_maps.py",
             SCRIPTS / "convert_gre_bart_to_nifti.py",
         ]

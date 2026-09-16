@@ -35,12 +35,12 @@ if str(RETRO_TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(RETRO_TOOL_ROOT))
 
 from gre_synthetic_wave import (  # noqa: E402
-    CASE_IDS,
     COARSE_LAMBDAS,
     ECHO_IDS,
     ECHO_TIMES_S,
     EXTENDED_READOUT,
     LLR_BLOCK_SIZES,
+    NATIVE_R3X3_CASE_ID,
     NATIVE_FOV_MM,
     NATIVE_MATRIX,
     SOURCE_MATRIX,
@@ -58,6 +58,7 @@ from gre_synthetic_wave import (  # noqa: E402
     inter_echo_metrics,
     json_sha256,
     restore_bart_normalization,
+    native_r3x3_case,
     theoretical_psf,
     validate_config_document,
     validate_echo_counters,
@@ -1496,6 +1497,334 @@ def _map_mask_to_lr(native_path: Path, output_path: Path) -> dict[str, Any]:
     return {**file_identity(output_path), "shape": list(values.shape), "voxel_count": int(values.sum())}
 
 
+def _load_reuse_manifests(
+    config: Mapping[str, Any], *, verify_payloads: bool
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Load and validate the completed GRE manifests reused by native R3x3.
+
+    Args:
+        config: Validated format-version 2 GRE configuration.
+        verify_payloads: Verify every directly reused file and CFL payload hash.
+
+    Returns:
+        Reused operation manifests and the two native-R3x1 echo manifests.
+
+    Raises:
+        ValueError: If provenance, geometry, echo, or artifact contracts differ.
+    """
+
+    extension = config["native_r3x3_extension"]
+    operations: dict[str, dict[str, Any]] = {}
+    for label, binding in extension["reuse_manifests"].items():
+        path = Path(str(binding["path"])).expanduser().resolve()
+        if not path.is_file() or sha256_file(path) != binding["sha256"]:
+            raise ValueError(f"Pinned reused manifest changed or disappeared: {label}: {path}")
+        document = load_json(path, f"reused {label} manifest")
+        expected_operation = "theoretical_operator" if label == "theoretical_operator" else label
+        if document.get("status") != "complete" or document.get("operation") != expected_operation:
+            raise ValueError(f"Reused {label} manifest is not a completed {expected_operation} stage.")
+        operations[label] = document
+    if operations["brain_mask"].get("approved") is not True:
+        raise ValueError("The reused native GRE brain mask is not approved.")
+    if operations["source"].get("native_geometry", {}).get("native_matrix_ro_lin_par") != list(NATIVE_MATRIX):
+        raise ValueError("The reused no-Wave source does not use native GRE geometry.")
+    case_index = operations["cases"].get("cases", {}).get("native_r3x1")
+    if not isinstance(case_index, Mapping) or set(case_index) != set(ECHO_IDS):
+        raise ValueError("The reused cases manifest must bind both native_r3x1 echoes.")
+    echoes: dict[str, dict[str, Any]] = {}
+    expected_case = case_definitions()["native_r3x1"].to_json()
+    for echo_index, echo_id in enumerate(ECHO_IDS):
+        binding = case_index[echo_id]
+        path = Path(str(binding["path"]))
+        if not path.is_file() or sha256_file(path) != binding["sha256"]:
+            raise ValueError(f"Pinned native_r3x1 case manifest changed: {path}")
+        case = load_json(path, f"native_r3x1/{echo_id} manifest")
+        if (
+            case.get("status") != "complete"
+            or case.get("geometry") != expected_case
+            or case.get("echo_id") != echo_id
+            or case.get("echo") != echo_index + 1
+            or not math.isclose(float(case.get("te_s", math.nan)), ECHO_TIMES_S[echo_index])
+        ):
+            raise ValueError(f"Reused native_r3x1 scientific contract changed for {echo_id}.")
+        provenance_labels = {
+            "source": "source_manifest",
+            "theoretical_operator": "operator_manifest",
+            "csm": "csm_manifest",
+            "references": "reference_manifest",
+            "brain_mask": "brain_mask_manifest",
+        }
+        for operation_label, provenance_label in provenance_labels.items():
+            recorded = case.get("provenance", {}).get(provenance_label, {})
+            binding = extension["reuse_manifests"][operation_label]
+            if recorded.get("path") != binding["path"] or recorded.get("sha256") != binding["sha256"]:
+                raise ValueError(f"Reused case provenance is inconsistent for {operation_label}.")
+        source_mask_path = Path(case["sampling_mask"]["path"])
+        if sha256_file(source_mask_path) != case["sampling_mask"]["file_sha256"]:
+            raise ValueError(f"Reused native_r3x1 sampling mask changed for {echo_id}.")
+        source_mask = np.load(source_mask_path, allow_pickle=False)
+        validate_pure_cartesian_image_lattice(source_mask, case["sampling_mask"])
+        target_mask, target_metadata = build_case_mask(native_r3x3_case())
+        if np.any(target_mask & ~source_mask):
+            raise ValueError("GRE native_r3x3 is not an exact subset of native_r3x1.")
+        if target_metadata["acquired_coordinate_count"] != 1992 or target_metadata[
+            "logical_sha256"
+        ] != "e57069cd4f3cc9af4a78e70cb10f66b79ad1ceb35efac966c871df3822febefa":
+            raise ValueError("GRE native_r3x3 mask count/hash contract changed.")
+        expected_records = (
+            operations["csm"]["native"],
+            operations["theoretical_operator"]["echoes"][echo_index]["cases"]["native_r3x1"],
+            operations["references"]["cases"]["native_r3x1"]["echoes"][echo_id],
+            operations["brain_mask"]["approved_mask"],
+        )
+        actual_records = (
+            case["bart_inputs"]["maps"],
+            case["bart_inputs"]["psf"],
+            case["direct_fft_reference"],
+            case["brain_mask"],
+        )
+        for expected_record, actual_record in zip(expected_records, actual_records, strict=True):
+            expected_path = expected_record.get("base", expected_record.get("path"))
+            actual_path = actual_record.get("base", actual_record.get("path"))
+            expected_hash = expected_record.get("payload_sha256", expected_record.get("sha256"))
+            actual_hash = actual_record.get("payload_sha256", actual_record.get("sha256"))
+            if expected_path != actual_path or expected_hash != actual_hash:
+                raise ValueError(f"Reused input binding changed for native_r3x1/{echo_id}.")
+        if verify_payloads:
+            _verify_embedded_hashes(case["bart_inputs"])
+            _verify_embedded_hashes(case["direct_fft_reference"])
+            _verify_embedded_hashes(case["brain_mask"])
+            for label, record in case["bart_inputs"].items():
+                values = open_cfl(Path(record["base"]))
+                for start in range(0, values.shape[0], 16):
+                    if not np.isfinite(np.asarray(values[start : start + 16])).all():
+                        raise ValueError(f"Reused {label} contains non-finite values for {echo_id}.")
+            reference = np.load(case["direct_fft_reference"]["complex"]["path"], mmap_mode="r")
+            for start in range(0, reference.shape[0], 16):
+                if not np.isfinite(np.asarray(reference[start : start + 16])).all():
+                    raise ValueError(f"Reused direct-FFT reference is non-finite for {echo_id}.")
+            source_record = operations["source"]["echoes"][echo_index]
+            _verify_embedded_hashes(source_record)
+            source_values = np.load(source_record["path"], mmap_mode="r")
+            if tuple(source_values.shape) != (*NATIVE_MATRIX, VIRTUAL_COILS):
+                raise ValueError(f"Reused no-Wave source shape changed for {echo_id}.")
+            for start in range(0, source_values.shape[0], 16):
+                if not np.isfinite(np.asarray(source_values[start : start + 16])).all():
+                    raise ValueError(f"Reused no-Wave source is non-finite for {echo_id}.")
+            import nibabel as nib
+
+            brain_values = np.asarray(nib.load(case["brain_mask"]["path"]).dataobj)
+            if brain_values.shape != NATIVE_MATRIX or not np.isfinite(brain_values).all():
+                raise ValueError(f"Reused brain mask geometry or finite-value check failed for {echo_id}.")
+            if not np.all((brain_values == 0) | (brain_values == 1)):
+                raise ValueError(f"Reused brain mask is not binary for {echo_id}.")
+        echoes[echo_id] = {"path": str(path), "manifest": case}
+    return operations, echoes
+
+
+def validate_reused_inputs(config: Mapping[str, Any], validated: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate native-R3x3 reused inputs without creating the new run root.
+
+    Args:
+        config: Validated format-version 2 GRE configuration.
+        validated: Resolved configuration and exact mask metadata.
+
+    Returns:
+        Read-only validation summary for the two reused echo sources.
+    """
+
+    if config.get("format_version") != 2:
+        raise ValueError("validate-reused-inputs is only valid for the native R3x3 extension.")
+    operations, echoes = _load_reuse_manifests(config, verify_payloads=True)
+    return {
+        "status": "validated_only",
+        "case_ids": validated["case_ids"],
+        "echo_ids": list(echoes),
+        "mask": validated["masks"][NATIVE_R3X3_CASE_ID],
+        "reused_operations": sorted(operations),
+        "production_output_created": False,
+    }
+
+
+def prepare_reused_r3x3_case(
+    config: Mapping[str, Any], validated: Mapping[str, Any], root: Path
+) -> dict[str, Any]:
+    """Create native-R3x3 inputs by exact subsetting of completed R3x1 Wave data.
+
+    Args:
+        config: Validated format-version 2 GRE configuration.
+        validated: Resolved configuration and mask metadata.
+        root: Explicitly confirmed new native-R3x3 run root.
+
+    Returns:
+        Completed manifest for two echo-specific native-R3x3 case manifests.
+
+    Side Effects:
+        Writes only below the new run root; reused R3x1/R3x2 data remain read-only.
+    """
+
+    if config.get("format_version") != 2:
+        raise ValueError("prepare-reused-r3x3 is only valid for the native R3x3 extension.")
+    output = root / "preparation" / "cases"
+    reusable = _reuse_completed_operation(output / "manifest.json", validated)
+    if reusable is not None:
+        return reusable
+    operations, source_echoes = _load_reuse_manifests(config, verify_payloads=True)
+    case = native_r3x3_case()
+    target_mask, mask_metadata = build_case_mask(case)
+    mask_path = output / NATIVE_R3X3_CASE_ID / "sampling_mask.npy"
+    mask_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(mask_path, target_mask, allow_pickle=False)
+    source_manifest_bindings = {
+        label: dict(config["native_r3x3_extension"]["reuse_manifests"][label])
+        for label in sorted(operations)
+    }
+    reused_inputs_path = root / "preparation" / "reused_inputs" / "manifest.json"
+    reused_inputs_manifest = {
+        "format_version": 1,
+        "status": "complete",
+        "operation": "reused_inputs",
+        "created_utc": utc_now(),
+        "config_sha256": validated["config_sha256"],
+        "bindings": source_manifest_bindings,
+        "validated_case_ids": [NATIVE_R3X3_CASE_ID],
+        "validated_echo_ids": list(ECHO_IDS),
+        "validation": {
+            "manifest_hashes": True,
+            "artifact_hashes": True,
+            "finite_values": True,
+            "native_geometry": True,
+            "approved_brain_mask": True,
+            "acs_or_refscan_merged": False,
+        },
+    }
+    write_json_atomic(reused_inputs_path, reused_inputs_manifest)
+    reused_inputs_identity = file_identity(reused_inputs_path)
+    case_echoes: dict[str, dict[str, Any]] = {}
+    for echo_index, echo_id in enumerate(ECHO_IDS):
+        source_binding = source_echoes[echo_id]
+        source_case = source_binding["manifest"]
+        source_mask = np.load(source_case["sampling_mask"]["path"], allow_pickle=False)
+        source_base = Path(source_case["bart_inputs"]["wave_kspace"]["base"])
+        source_values = open_cfl(source_base)
+        expected_source_shape = (EXTENDED_READOUT, NATIVE_MATRIX[1], NATIVE_MATRIX[2], VIRTUAL_COILS, 1)
+        if tuple(source_values.shape[:5]) != expected_source_shape:
+            raise ValueError(f"Reused Wave k-space shape changed for {echo_id}: {source_values.shape}")
+        echo_dir = output / NATIVE_R3X3_CASE_ID / echo_id
+        echo_dir.mkdir(parents=True, exist_ok=True)
+        target_base = echo_dir / "wave_kspace"
+        target = create_cfl(target_base, expected_source_shape)
+        target[...] = 0
+        norm_squared = 0.0
+        acquired_mismatch = 0
+        outside_nonzero = 0
+        for coil in range(VIRTUAL_COILS):
+            acquired = np.asarray(source_values[:, target_mask, coil, 0])
+            if not np.isfinite(acquired).all():
+                raise ValueError(f"Reused acquired samples are non-finite for {echo_id}, coil {coil}.")
+            target[:, target_mask, coil, 0] = acquired
+            copied = np.asarray(target[:, target_mask, coil, 0])
+            acquired_mismatch += int(np.count_nonzero(copied != acquired))
+            outside_nonzero += int(np.count_nonzero(np.asarray(target[:, ~target_mask, coil, 0])))
+            norm_squared += float(np.vdot(acquired, acquired).real)
+        target.flush()
+        del target
+        if acquired_mismatch != 0 or outside_nonzero != 0 or norm_squared <= 0:
+            raise ValueError(f"R3x3 source-subset/zero-mask validation failed for {echo_id}.")
+        wave_record = cfl_record(target_base)
+        wave_record.update(
+            {
+                "l2_norm": math.sqrt(norm_squared),
+                "acquired_mismatch_count": acquired_mismatch,
+                "unacquired_nonzero_count": outside_nonzero,
+                "finite_acquired_samples": True,
+                "source_subset": {
+                    "case_id": "native_r3x1",
+                    "case_manifest": file_identity(Path(source_binding["path"])),
+                    "source_sampling_mask_logical_sha256": source_case["sampling_mask"]["logical_sha256"],
+                    "target_is_subset": bool(np.all(~target_mask | source_mask)),
+                    "acquired_sample_equality": "bitwise exact",
+                },
+            }
+        )
+        manifest = {
+            "format_version": 2,
+            "status": "complete",
+            "case_id": NATIVE_R3X3_CASE_ID,
+            "echo_id": echo_id,
+            "echo": echo_index + 1,
+            "te_s": ECHO_TIMES_S[echo_index],
+            "geometry": case.to_json(),
+            "sampling_mask": {
+                **mask_metadata,
+                "path": str(mask_path),
+                "file_sha256": sha256_file(mask_path),
+            },
+            "bart_inputs": {
+                "maps": source_case["bart_inputs"]["maps"],
+                "psf": source_case["bart_inputs"]["psf"],
+                "wave_kspace": wave_record,
+            },
+            "direct_fft_reference": source_case["direct_fft_reference"],
+            "brain_mask": source_case["brain_mask"],
+            "provenance": {
+                "reused_inputs_manifest": reused_inputs_identity,
+                "reuse_manifests": source_manifest_bindings,
+                "source_case_manifest": file_identity(Path(source_binding["path"])),
+                "implementation": {
+                    "scientific_contract": file_identity(SCRIPT_ROOT / "gre_synthetic_wave.py"),
+                    "workflow": file_identity(Path(__file__).resolve()),
+                },
+            },
+            "calibration_samples_merged_into_wave_kspace": False,
+            "measured_wave_samples_used": False,
+            "reused_without_regeneration": [
+                "no-Wave source provenance",
+                "coil sensitivity maps",
+                "20260821 theoretical PSF",
+                "direct-FFT reference",
+                "approved BET brain mask",
+            ],
+        }
+        manifest_path = echo_dir / "manifest.json"
+        write_json_atomic(manifest_path, manifest)
+        case_echoes[echo_id] = file_identity(manifest_path)
+    run_manifest = {
+        "format_version": 2,
+        "status": "initialized",
+        "workflow": config["workflow"],
+        "run_name": validated["run_name"],
+        "run_root": str(root),
+        "created_utc": utc_now(),
+        "config": {
+            "path": validated["config_path"],
+            "sha256": validated["config_sha256"],
+            "snapshot": config,
+        },
+        "repository": {
+            "head": subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+        },
+        "production_execution_by_agent": False,
+    }
+    write_json_atomic(root / "run_manifest.json", run_manifest)
+    manifest = {
+        "format_version": 2,
+        "status": "complete",
+        "operation": "cases",
+        "created_utc": utc_now(),
+        "config_sha256": validated["config_sha256"],
+        "case_ids": [NATIVE_R3X3_CASE_ID],
+        "cases": {NATIVE_R3X3_CASE_ID: case_echoes},
+        "reused_inputs_manifest": reused_inputs_identity,
+        "source_subset_case": "native_r3x1",
+    }
+    write_json_atomic(output / "manifest.json", manifest)
+    return manifest
+
+
 def prepare_cases(config: Mapping[str, Any], validated: Mapping[str, Any], root: Path) -> dict[str, Any]:
     """Generate case-matched pure-mask synthetic-Wave data and bind inputs.
 
@@ -1881,7 +2210,7 @@ def _bart_identity(bart: str) -> dict[str, Any]:
 
 
 def _validated_case_manifests(root: Path) -> dict[tuple[str, str], dict[str, Any]]:
-    """Load all six hash-bound prepared case/echo manifests.
+    """Load all manifest-indexed, hash-bound prepared case/echo manifests.
 
     Args:
         root: Confirmed experiment run root.
@@ -1891,18 +2220,28 @@ def _validated_case_manifests(root: Path) -> dict[tuple[str, str], dict[str, Any
     """
 
     preparation = _require_complete(root, "cases")
+    indexed_cases = preparation.get("cases")
+    allowed = case_definitions(include_native_r3x3=True)
+    if not isinstance(indexed_cases, Mapping) or not indexed_cases or not set(indexed_cases) <= set(allowed):
+        raise ValueError("Prepared cases contain no cases or an unsupported case identifier.")
     result = {}
-    for case_id in CASE_IDS:
+    for case_id in indexed_cases:
+        if not isinstance(indexed_cases[case_id], Mapping) or set(indexed_cases[case_id]) != set(ECHO_IDS):
+            raise ValueError(f"Prepared case must contain both echoes: {case_id}")
         for echo_id in ECHO_IDS:
-            record = preparation["cases"][case_id][echo_id]
+            record = indexed_cases[case_id][echo_id]
             path = Path(record["path"])
             if sha256_file(path) != record["sha256"]:
                 raise ValueError(f"Prepared case manifest changed: {path}")
             manifest = load_json(path, f"{case_id}/{echo_id} manifest")
             if manifest.get("status") != "complete":
                 raise ValueError(f"Prepared case is not complete: {case_id}/{echo_id}")
+            if manifest.get("geometry") != allowed[case_id].to_json():
+                raise ValueError(f"Prepared case geometry changed: {case_id}/{echo_id}")
             mask = np.load(manifest["sampling_mask"]["path"], allow_pickle=False)
             validate_pure_cartesian_image_lattice(mask, manifest["sampling_mask"])
+            if sha256_file(Path(manifest["sampling_mask"]["path"])) != manifest["sampling_mask"]["file_sha256"]:
+                raise ValueError(f"Prepared sampling mask changed: {case_id}/{echo_id}")
             for input_record in manifest["bart_inputs"].values():
                 base = Path(input_record["base"])
                 if sha256_file(base.with_suffix(".cfl")) != input_record["payload_sha256"]:
@@ -1926,7 +2265,8 @@ def _fine_settings(root: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
     if document.get("status") != "approved_for_fine_sweep":
         raise ValueError("Fine sweep requires an approved refinement request.")
     result = {}
-    for case_id in CASE_IDS:
+    case_ids = sorted({case_id for case_id, _ in _validated_case_manifests(root)})
+    for case_id in case_ids:
         for echo_id in ECHO_IDS:
             settings = document["groups"][case_id][echo_id]
             result[(case_id, echo_id)] = [dict(value) for value in settings]
@@ -2855,7 +3195,8 @@ def evaluate_sweep(
         metric_records.append(record)
         complex_cache[key] = candidate
     cross_echo = []
-    for case_id in CASE_IDS:
+    case_ids = sorted({case_id for case_id, _ in cases})
+    for case_id in case_ids:
         names_echo1 = {key[2] for key in candidates if key[:2] == (case_id, "echo-01")}
         names_echo2 = {key[2] for key in candidates if key[:2] == (case_id, "echo-02")}
         for name in sorted(names_echo1 & names_echo2):
@@ -2977,7 +3318,8 @@ def plot_sweep(root: Path, *, sweep_name: str) -> dict[str, Any]:
         "median_absolute_error_rad",
         "background_energy_fraction",
     )
-    for case_id in CASE_IDS:
+    case_ids = sorted({case_id for case_id, _ in cases})
+    for case_id in case_ids:
         for echo_id in ECHO_IDS:
             records = [
                 record
@@ -3171,11 +3513,12 @@ def record_refinement(root: Path, review_path: Path, *, reviewer: str) -> dict[s
     review = load_json(review_path.expanduser().resolve(), "refinement review")
     if review.get("format_version") != 2:
         raise ValueError("Explicit GRE refinement review requires format_version 2.")
+    case_ids = sorted({case_id for case_id, _ in _validated_case_manifests(root)})
     groups = review.get("groups")
-    if not isinstance(groups, Mapping) or set(groups) != set(CASE_IDS):
-        raise ValueError("Refinement review must contain all three cases.")
+    if not isinstance(groups, Mapping) or set(groups) != set(case_ids):
+        raise ValueError(f"Refinement review must contain exactly {case_ids}.")
     settings_by_group = {}
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         if not isinstance(groups[case_id], Mapping) or set(groups[case_id]) != set(ECHO_IDS):
             raise ValueError(f"Refinement review must contain both echoes for {case_id}.")
         settings_by_group[case_id] = {}
@@ -3185,6 +3528,10 @@ def record_refinement(root: Path, review_path: Path, *, reviewer: str) -> dict[s
                 case_id=case_id,
                 echo_id=echo_id,
             )
+        if case_id == NATIVE_R3X3_CASE_ID and (
+            settings_by_group[case_id]["echo-01"] != settings_by_group[case_id]["echo-02"]
+        ):
+            raise ValueError("native_r3x3 refinement must use identical settings for both echoes.")
     document = {
         "format_version": 1,
         "status": "approved_for_fine_sweep",
@@ -3196,7 +3543,7 @@ def record_refinement(root: Path, review_path: Path, *, reviewer: str) -> dict[s
         "coarse_evaluation_bart_convention_audit": convention_audit,
         "coarse_figures": file_identity(figures_path),
         "refinement_rule": "explicit user-reviewed lambda lists; no automatic interpolation or ranking",
-        "fine_job_count": sum(len(settings_by_group[case][echo]) for case in CASE_IDS for echo in ECHO_IDS),
+        "fine_job_count": sum(len(settings_by_group[case][echo]) for case in case_ids for echo in ECHO_IDS),
         "groups": settings_by_group,
         "automatic_selection_performed": False,
     }
@@ -3229,11 +3576,12 @@ def record_final_selection(root: Path, review_path: Path, *, reviewer: str) -> d
         resolved, sweep = _load_sweep(root, sweep_name)
         available.update(_candidate_documents(sweep))
         sweep_bindings.append({"path": str(resolved), "sha256": sha256_file(resolved)})
+    case_ids = sorted({case_id for case_id, _ in _validated_case_manifests(root)})
     groups = review.get("groups")
-    if not isinstance(groups, Mapping) or set(groups) != set(CASE_IDS):
-        raise ValueError("Final selection must contain all three cases.")
+    if not isinstance(groups, Mapping) or set(groups) != set(case_ids):
+        raise ValueError(f"Final selection must contain exactly {case_ids}.")
     selected = {}
-    for case_id in CASE_IDS:
+    for case_id in case_ids:
         if not isinstance(groups[case_id], Mapping) or set(groups[case_id]) != set(ECHO_IDS):
             raise ValueError(f"Final selection must contain both echoes for {case_id}.")
         selected[case_id] = {}
@@ -3289,7 +3637,8 @@ def evaluate_final_selection(root: Path) -> dict[str, Any]:
         raise ValueError("A complete explicit final selection is required.")
     cases = _validated_case_manifests(root)
     records = []
-    for case_id in CASE_IDS:
+    case_ids = sorted({case_id for case_id, _ in cases})
+    for case_id in case_ids:
         case1 = cases[(case_id, "echo-01")]["manifest"]
         case2 = cases[(case_id, "echo-02")]["manifest"]
         reference1 = np.load(case1["direct_fft_reference"]["complex"]["path"], allow_pickle=False)
@@ -3350,47 +3699,50 @@ def evaluate_final_selection(root: Path) -> dict[str, Any]:
     return manifest
 
 
-def evaluate_shared_lambda(root: Path) -> dict[str, Any]:
-    """Evaluate each fine Wavelet lambda after pooling both GRE echoes.
+def evaluate_shared_lambda(root: Path, *, sweep_name: str = "fine") -> dict[str, Any]:
+    """Evaluate echo-matched regularizer settings after pooling both GRE echoes.
 
     Args:
         root: Confirmed experiment run root.
+        sweep_name: Coarse or fine sweep identifier.
 
     Returns:
-        Completed non-ranking evaluation manifest for three shared-lambda curves.
+        Completed non-ranking evaluation manifest for all shared-lambda curves.
     """
 
     import csv
     import nibabel as nib
 
-    fine_evaluation_path = root / "evaluation" / "fine" / "evaluation_manifest.json"
-    fine_evaluation = load_json(fine_evaluation_path, "fine evaluation manifest")
-    fine_sweep_path, fine_sweep = _load_sweep(root, "fine")
-    convention_audit = _audit_evaluation_bart_convention(fine_evaluation, fine_sweep)
-    fine_metrics = load_json(Path(fine_evaluation["metrics"]["path"]), "fine metrics")
-    candidates = _candidate_documents(fine_sweep)
+    evaluation_path = root / "evaluation" / sweep_name / "evaluation_manifest.json"
+    evaluation = load_json(evaluation_path, f"{sweep_name} evaluation manifest")
+    sweep_path, sweep = _load_sweep(root, sweep_name)
+    convention_audit = _audit_evaluation_bart_convention(evaluation, sweep)
+    sweep_metrics = load_json(Path(evaluation["metrics"]["path"]), f"{sweep_name} metrics")
+    candidates = _candidate_documents(sweep)
     cases = _validated_case_manifests(root)
     per_echo_index = {
         (record["case_id"], record["echo_id"], record["candidate_name"]): record
-        for record in fine_metrics["per_echo"]
+        for record in sweep_metrics["per_echo"]
     }
     cross_echo_index = {
         (record["case_id"], record["candidate_name"]): record
-        for record in fine_metrics["same_setting_cross_echo"]
+        for record in sweep_metrics["same_setting_cross_echo"]
     }
     records = []
-    for case_id in CASE_IDS:
+    case_ids = sorted({case_id for case_id, _ in cases})
+    for case_id in case_ids:
         echo_names = [
             {
                 key[2]
                 for key, document in candidates.items()
-                if key[:2] == (case_id, echo_id) and document["setting"]["method"] == "wavelet"
+                if key[:2] == (case_id, echo_id)
+                and float(document["setting"]["lambda"]) > 0
             }
             for echo_id in ECHO_IDS
         ]
         shared_names = set.intersection(*echo_names)
         if len(shared_names) != len(echo_names[0]) or any(names != shared_names for names in echo_names):
-            raise ValueError(f"Fine Wavelet candidates are not echo-matched for {case_id}.")
+            raise ValueError(f"{sweep_name} candidates are not echo-matched for {case_id}.")
 
         references = []
         masks = []
@@ -3406,14 +3758,16 @@ def evaluate_shared_lambda(root: Path) -> dict[str, Any]:
 
         ordered_names = sorted(
             shared_names,
-            key=lambda name: float(candidates[(case_id, ECHO_IDS[0], name)]["setting"]["lambda"]),
+            key=lambda name: (
+                _curve_key(candidates[(case_id, ECHO_IDS[0], name)]["setting"]),
+                float(candidates[(case_id, ECHO_IDS[0], name)]["setting"]["lambda"]),
+            ),
         )
         for name in ordered_names:
             documents = [candidates[(case_id, echo_id, name)] for echo_id in ECHO_IDS]
             settings = [document["setting"] for document in documents]
-            lambdas = [float(setting["lambda"]) for setting in settings]
-            if lambdas[0] != lambdas[1]:
-                raise ValueError(f"Candidate {case_id}/{name} does not use one shared lambda.")
+            if settings[0] != settings[1]:
+                raise ValueError(f"Candidate {case_id}/{name} does not use one shared setting.")
             echo_metric_records = [
                 per_echo_index[(case_id, echo_id, name)] for echo_id in ECHO_IDS
             ]
@@ -3447,7 +3801,9 @@ def evaluate_shared_lambda(root: Path) -> dict[str, Any]:
             )
             del candidates_by_echo
 
-    output = root / "evaluation" / "fine_shared_lambda"
+    if not records:
+        raise ValueError(f"No positive echo-matched candidates exist in the {sweep_name} sweep.")
+    output = root / "evaluation" / f"{sweep_name}_shared_lambda"
     output.mkdir(parents=True, exist_ok=True)
     metrics_path = output / "metrics.json"
     write_json_atomic(
@@ -3477,6 +3833,7 @@ def evaluate_shared_lambda(root: Path) -> dict[str, Any]:
                 "case_id",
                 "method",
                 "lambda",
+                "block_size",
                 *global_names,
                 *(f"cross_echo_{name}" for name in cross_names),
             ],
@@ -3488,6 +3845,7 @@ def evaluate_shared_lambda(root: Path) -> dict[str, Any]:
                     "case_id": record["case_id"],
                     "method": record["shared_setting"]["method"],
                     "lambda": record["shared_setting"]["lambda"],
+                    "block_size": record["shared_setting"]["block_size"],
                     **record["global_metrics"],
                     **{
                         f"cross_echo_{name}": value
@@ -3499,24 +3857,26 @@ def evaluate_shared_lambda(root: Path) -> dict[str, Any]:
         "format_version": 1,
         "status": "complete",
         "created_utc": utc_now(),
-        "fine_sweep": file_identity(fine_sweep_path),
-        "fine_evaluation": file_identity(fine_evaluation_path),
+        "sweep": sweep_name,
+        "sweep_manifest": file_identity(sweep_path),
+        "evaluation": file_identity(evaluation_path),
         "bart_convention_audit": convention_audit,
         "metrics": file_identity(metrics_path),
         "metrics_csv": file_identity(csv_path),
-        "case_count": len(CASE_IDS),
-        "lambda_count_per_case": len(records) // len(CASE_IDS),
+        "case_count": len(case_ids),
+        "setting_count_per_case": len(records) // len(case_ids),
         "automatic_selection_performed": False,
     }
     write_json_atomic(output / "evaluation_manifest.json", manifest)
     return manifest
 
 
-def plot_shared_lambda(root: Path) -> dict[str, Any]:
-    """Plot global two-echo metrics for each fine shared Wavelet lambda.
+def plot_shared_lambda(root: Path, *, sweep_name: str = "fine") -> dict[str, Any]:
+    """Plot global two-echo metrics for each regularizer curve.
 
     Args:
         root: Confirmed experiment run root.
+        sweep_name: Coarse or fine sweep identifier.
 
     Returns:
         Completed figure manifest with one curve panel set per geometry.
@@ -3524,13 +3884,13 @@ def plot_shared_lambda(root: Path) -> dict[str, Any]:
 
     import matplotlib.pyplot as plt
 
-    evaluation_path = root / "evaluation" / "fine_shared_lambda" / "evaluation_manifest.json"
+    evaluation_path = root / "evaluation" / f"{sweep_name}_shared_lambda" / "evaluation_manifest.json"
     evaluation = load_json(evaluation_path, "shared-lambda evaluation manifest")
     if evaluation.get("status") != "complete" or evaluation.get("automatic_selection_performed") is not False:
         raise ValueError("Shared-lambda plotting requires a complete non-ranking evaluation.")
     _verify_embedded_hashes(evaluation)
     metrics = load_json(Path(evaluation["metrics"]["path"]), "shared-lambda metrics")
-    output = root / "figures" / "fine_shared_lambda"
+    output = root / "figures" / f"{sweep_name}_shared_lambda"
     output.mkdir(parents=True, exist_ok=True)
     specifications = (
         ("global", "global_magnitude_nrmse_brain", "Global magnitude NRMSE ↓"),
@@ -3547,29 +3907,39 @@ def plot_shared_lambda(root: Path) -> dict[str, Any]:
         ("cross", "magnitude_ratio_mad", "Magnitude-ratio MAD ↓"),
     )
     figures = []
-    for case_id in CASE_IDS:
-        records = sorted(
-            [record for record in metrics["records"] if record["case_id"] == case_id],
-            key=lambda record: float(record["shared_setting"]["lambda"]),
+    case_ids = sorted({record["case_id"] for record in metrics["records"]})
+    for case_id in case_ids:
+        case_records = [record for record in metrics["records"] if record["case_id"] == case_id]
+        curve_keys = sorted(
+            {_curve_key(record["shared_setting"]) for record in case_records},
+            key=lambda value: (value[0], -1 if value[1] is None else value[1]),
         )
-        lambdas = [float(record["shared_setting"]["lambda"]) for record in records]
-        figure, axes = plt.subplots(4, 3, figsize=(15, 16), squeeze=False)
-        for axis, (source, name, label) in zip(axes.flat, specifications, strict=True):
-            key = "global_metrics" if source == "global" else "cross_echo_metrics"
-            axis.plot(lambdas, [float(record[key][name]) for record in records], marker="o")
-            axis.set_xscale("log")
-            axis.set_xlabel("Shared Wavelet lambda")
-            axis.set_ylabel(label)
-            axis.grid(True, alpha=0.25)
-        figure.suptitle(
-            f"{case_id}: fine shared-lambda two-echo metrics (no automatic selection)",
-            fontsize=15,
-        )
-        figure.tight_layout()
-        path = output / f"{case_id}_shared_lambda_curves.png"
-        figure.savefig(path, dpi=180)
-        plt.close(figure)
-        figures.append(file_identity(path))
+        for curve_key in curve_keys:
+            records = sorted(
+                [record for record in case_records if _curve_key(record["shared_setting"]) == curve_key],
+                key=lambda record: float(record["shared_setting"]["lambda"]),
+            )
+            lambdas = [float(record["shared_setting"]["lambda"]) for record in records]
+            figure, axes = plt.subplots(4, 3, figsize=(15, 16), squeeze=False)
+            for axis, (source, name, label) in zip(axes.flat, specifications, strict=True):
+                key = "global_metrics" if source == "global" else "cross_echo_metrics"
+                axis.plot(lambdas, [float(record[key][name]) for record in records], marker="o")
+                axis.set_xscale("log")
+                axis.set_xlabel("Shared lambda")
+                axis.set_ylabel(label)
+                axis.grid(True, alpha=0.25)
+            method, block = curve_key
+            descriptor = method if block is None else f"{method}_block-{block}"
+            figure.suptitle(
+                f"{case_id}: {sweep_name} {descriptor} shared-lambda metrics "
+                "(no automatic selection)",
+                fontsize=15,
+            )
+            figure.tight_layout()
+            path = output / f"{case_id}_{descriptor}_shared_lambda_curves.png"
+            figure.savefig(path, dpi=180)
+            plt.close(figure)
+            figures.append(file_identity(path))
     manifest = {
         "format_version": 1,
         "status": "complete",
@@ -3598,6 +3968,7 @@ def build_parser() -> argparse.ArgumentParser:
         "operation",
         choices=(
             "validate-config",
+            "validate-reused-inputs",
             "inspect-metadata",
             "prepare-source",
             "prepare-operator",
@@ -3607,6 +3978,7 @@ def build_parser() -> argparse.ArgumentParser:
             "prepare-brain-mask",
             "approve-brain-mask",
             "prepare-cases",
+            "prepare-reused-r3x3",
             "reconstruct",
             "export-nifti",
             "evaluate",
@@ -3645,6 +4017,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.operation == "validate-config":
         print(json.dumps(validated, indent=2, sort_keys=True))
         return 0
+    if args.operation == "validate-reused-inputs":
+        result = validate_reused_inputs(config, validated)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
     root = require_confirmed_root(validated, args.confirm_run_root)
     operation_functions = {
         "inspect-metadata": inspect_metadata,
@@ -3654,6 +4030,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "prepare-csm": prepare_csm,
         "prepare-references": prepare_references,
         "prepare-cases": prepare_cases,
+        "prepare-reused-r3x3": prepare_reused_r3x3_case,
     }
     if args.operation == "prepare-brain-mask":
         result = prepare_brain_mask_candidate(
@@ -3707,9 +4084,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.operation == "evaluate-selection":
         result = evaluate_final_selection(root)
     elif args.operation == "evaluate-shared-lambda":
-        result = evaluate_shared_lambda(root)
+        result = evaluate_shared_lambda(root, sweep_name=args.sweep or "fine")
     elif args.operation == "plot-shared-lambda":
-        result = plot_shared_lambda(root)
+        result = plot_shared_lambda(root, sweep_name=args.sweep or "fine")
     else:
         raise AssertionError(f"Unhandled operation: {args.operation}")
     print(json.dumps({"operation": args.operation, "status": result.get("status")}, indent=2))

@@ -20,7 +20,7 @@ from .gre import resolve_gre_wavelet_lambda
 
 COLLECTION_BUILDER = "wave_retro_lr.gre_nifti_collection"
 RECONSTRUCTION_BRANCHES = ("fista_r0", "selected_wavelet")
-CASE_LOCATIONS = (
+REQUIRED_CASE_LOCATIONS = (
     ("native_r3x1", Path("normal")),
     ("native_r3x2", Path("retro") / "native_r3x2"),
     (
@@ -28,6 +28,10 @@ CASE_LOCATIONS = (
         Path("retro") / "lin_low_resolution_r3x2",
     ),
 )
+OPTIONAL_CASE_LOCATIONS = (
+    ("native_r3x3", Path("retro") / "native_r3x3"),
+)
+CASE_LOCATIONS = (*REQUIRED_CASE_LOCATIONS, *OPTIONAL_CASE_LOCATIONS)
 
 
 def build_gre_nifti_collection(
@@ -40,7 +44,8 @@ def build_gre_nifti_collection(
     Args:
         output_root: Reconstruction root containing normal and optional
             retrospective branch-specific NIfTI directories.
-        require_retro: Require both retrospective geometries when true.
+        require_retro: Require both established retrospective geometries and
+            a complete native-R3x3 case whenever that optional case is started.
 
     Returns:
         JSON-native collection manifest installed with the copied files.
@@ -62,14 +67,23 @@ def build_gre_nifti_collection(
     if not source_root.is_dir():
         raise FileNotFoundError(f"GRE reconstruction root does not exist: {source_root}")
     destination = source_root / "nifti_collection"
-    _validate_existing_collection(destination)
+    previous_manifest = _validate_existing_collection(destination)
 
     sources = _discover_sources(source_root, require_retro=require_retro)
+    synchronization = _collection_synchronization(previous_manifest, sources)
+    missing_previous = synchronization["no_longer_discovered_case_groups"]
+    if missing_previous:
+        raise FileNotFoundError(
+            "Previously collected GRE reconstruction groups are no longer "
+            "discoverable; refusing to remove them during synchronization: "
+            f"{missing_previous}."
+        )
     staging = Path(
         tempfile.mkdtemp(prefix=".nifti_collection-", dir=source_root)
     )
     try:
         manifest = _materialize_collection(staging, source_root, destination, sources)
+        manifest["synchronization"] = synchronization
         _write_json(staging / "manifest.json", manifest)
         _replace_owned_collection(staging, destination)
     except Exception:
@@ -86,7 +100,8 @@ def _discover_sources(
 
     Args:
         source_root: Existing GRE reconstruction root.
-        require_retro: Require both retrospective geometries when true.
+        require_retro: Require both established retrospective geometries and
+            a complete native-R3x3 case whenever that optional case is started.
 
     Returns:
         Ordered case/branch records containing validated source artifacts.
@@ -103,10 +118,17 @@ def _discover_sources(
             for branch in RECONSTRUCTION_BRANCHES
         }
         availability = {
-            branch: directory.is_dir()
+            branch: (directory / "conversion_manifest.json").is_file()
             for branch, directory in branch_directories.items()
         }
-        required = geometry_id == "native_r3x1" or require_retro
+        legacy_required = (geometry_id, case_location) in REQUIRED_CASE_LOCATIONS
+        optional_started = (
+            (geometry_id, case_location) in OPTIONAL_CASE_LOCATIONS
+            and (source_root / case_location).exists()
+        )
+        required = geometry_id == "native_r3x1" or (
+            require_retro and (legacy_required or optional_started)
+        )
         if not any(availability.values()):
             if required:
                 raise FileNotFoundError(
@@ -143,6 +165,39 @@ def _discover_sources(
         ):
             raise ValueError(f"GRE branches disagree on {geometry_id} NIfTI geometry.")
     return records
+
+
+def _collection_synchronization(
+    previous_manifest: Mapping[str, Any] | None,
+    sources: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Summarize groups added or retained by an atomic GRE collection sync.
+
+    Args:
+        previous_manifest: Validated prior GRE collection manifest, if present.
+        sources: Complete currently discovered geometry/branch records.
+
+    Returns:
+        Stable previous, discovered, retained, added, and missing group IDs.
+    """
+
+    previous: set[str] = set()
+    if previous_manifest is not None:
+        previous = {
+            f"{record['branch']}:{record['geometry_id']}"
+            for record in previous_manifest.get("cases", [])
+        }
+    discovered = {
+        f"{record['branch']}:{record['geometry_id']}" for record in sources
+    }
+    return {
+        "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
+        "previous_case_groups": sorted(previous),
+        "discovered_case_groups": sorted(discovered),
+        "retained_case_groups": sorted(previous & discovered),
+        "added_case_groups": sorted(discovered - previous),
+        "no_longer_discovered_case_groups": sorted(previous - discovered),
+    }
 
 
 def _validate_branch(
@@ -548,14 +603,14 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _validate_existing_collection(collection: Path) -> None:
-    """Allow replacement only for an intact collection owned by this builder.
+def _validate_existing_collection(collection: Path) -> dict[str, Any] | None:
+    """Validate and return an intact collection owned by this builder.
 
     Args:
         collection: Intended ``OUTPUT_ROOT/nifti_collection`` directory.
 
     Returns:
-        None.
+        Validated prior manifest, or ``None`` when no collection exists.
 
     Raises:
         FileExistsError: If the path is not a directory, is unmanifested, was
@@ -563,7 +618,7 @@ def _validate_existing_collection(collection: Path) -> None:
     """
 
     if not collection.exists():
-        return
+        return None
     if collection.is_symlink() or not collection.is_dir():
         raise FileExistsError(f"Refusing to replace non-directory collection: {collection}")
     manifest_path = collection / "manifest.json"
@@ -593,6 +648,7 @@ def _validate_existing_collection(collection: Path) -> None:
             raise FileExistsError(
                 f"Existing GRE collection file changed since its manifest: {path}"
             )
+    return manifest
 
 
 def _replace_owned_collection(staging: Path, collection: Path) -> None:

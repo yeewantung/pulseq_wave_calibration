@@ -375,6 +375,13 @@ MPRAGE under `OUTPUT_ROOT/normal`: the fixed `[-2*pi, 2*pi]`
 calibration and backfills both plots when compatible prepared inputs are
 reused; it does not generate redundant per-case copies.
 
+Retrospective entry points also support a narrow legacy-artifact compatibility
+path. It requires exact TWIX and sequence identities, validates the measured
+R3x1 mask, native geometry, calibration grid, and every echo k-space/PSF grid,
+and requires finite PSFs. It never refits coefficients or regenerates PSFs,
+never rewrites a legacy normal manifest, and records the decision in
+`normal/NORMAL_INPUT_REUSE_ATTESTATION.json`. Manual kx bounds remain strict.
+
 ### 1. Normal reconstruction
 
 ```bash
@@ -398,7 +405,7 @@ separately from display-normalized magnitude and wrapped-phase NIfTIs. GRE uses
 the orientation-sweep-validated flips `(False, True, False)` followed only by
 axis permutation/flips to store canonical RAS, without interpolation.
 
-### 2. Retrospective R3x2 and LIN-low-resolution reconstruction
+### 2. Retrospective R3x2, LIN-low-resolution, and native-R3x3 reconstruction
 
 Use the same three inputs and output root:
 
@@ -410,13 +417,14 @@ scripts/sample_gre_retro_lr_recon.sh \
     -g
 ```
 
-This creates two retrospective cases, each with `fista_r0` and
+This creates three retrospective cases, each with `fista_r0` and
 `selected_wavelet` branches and the same shared `0.015` lambda for every echo:
 
 | Case | Matrix | Construction |
 | --- | --- | --- |
 | `native_r3x2` | `250 x sequence-Ny x 72` | native measured data with an R3x2 Cartesian mask |
 | `lin_low_resolution_r3x2` | `250 x target-Ny x 72` | centered LIN crop nearest to 1.5 mm and divisible by four, followed by the R3x2 mask |
+| `native_r3x3` | `250 x sequence-Ny x 72` | native measured data with a source-derived R3x3 Cartesian mask |
 
 All retrospective k-space comes from direct measured-Wave cropping and pure
 Cartesian masking, never from no-Wave forward simulation. The LIN-low CSM is
@@ -424,6 +432,32 @@ derived from the accepted native map by centered Fourier PE resampling at
 unchanged FOV followed by coil-RSS normalization; readout maps are not resized.
 For the adult grid, `target-Ny=148` and the crop is `[51:199]`; for the
 `Ny=196`, `172 mm` pediatric grid, `target-Ny=116` and the crop is `[40:156]`.
+
+The native-R3x3 case inherits its LIN residue from the validated measured R3x1
+image stream and center-aligns the PAR residue. For the reviewed adult grid the
+residue is `(2, 0)`, the exact mask contains 1992 coordinates, and its logical
+SHA-256 is
+`e57069cd4f3cc9af4a78e70cb10f66b79ad1ceb35efac966c871df3822febefa`.
+ACS/refscan calibration remains separate. Each echo preserves its acquired
+samples bitwise, is exactly zero outside the R3x3 mask, links its own existing
+measured PSF without recalibration, and reuses the native CSM unchanged.
+
+To add only R3x3 to an older completed GRE root, use the focused resumable
+entry point:
+
+```bash
+scripts/sample_gre_retro_r3x3_recon.sh \
+    /path/to/measured_wave_gre.dat \
+    /path/to/existing_output_root \
+    /path/to/matching_wave_gre.seq \
+    -g
+```
+
+Completed echo/branch CFL pairs with a matching recorded CPU or GPU command
+are skipped. Missing echoes resume independently; a command mismatch or an
+incomplete recorded result fails instead of silently replacing accepted data.
+The standard retrospective script invokes this focused implementation after
+the two established R3x2 cases.
 
 ### 3. NIfTI collection
 
@@ -437,7 +471,10 @@ scripts/sample_gre_nifti_collection.sh \
 ```
 
 Omit `--require-retro` to collect normal outputs plus any complete
-retrospective geometries already present. Every included geometry must contain
+retrospective geometries already present. `--require-retro` remains compatible
+with a legacy root containing the two established retro cases; once a
+`retro/native_r3x3` directory exists, both R3x3 branches become mandatory.
+Every included geometry must contain
 both reconstruction branches and a magnitude/phase NIfTI and JSON pair for
 every echo. Before copying, the script validates conversion manifests, echo
 times, canonical RAS geometry, shared-Wavelet provenance, and echo-specific
@@ -447,6 +484,9 @@ The collection is written to `OUTPUT_ROOT/nifti_collection`. NIfTIs and JSON
 sidecars are copied byte-for-byte and recorded by SHA-256, along with each
 branch conversion manifest and a top-level `manifest.json`. An existing
 collection is refreshed only when its builder and all owned-file hashes match.
+Refreshing performs an atomic source sync: newly completed R3x3 groups are
+appended to the rebuilt collection, while a previously collected group that is
+no longer discoverable causes a hard failure rather than silent removal.
 It creates no mask, masked derivative, synthetic evaluation output, or copy of
 the quantitative complex `.npy` arrays.
 
@@ -490,8 +530,8 @@ source ~/cluster/bart/bart_startup.sh
 - `wave_retro_lr/retrospective.py`: measured-Wave crop, CSM resampling, and the
   explicitly named synthetic no-Wave utility;
 - `wave_retro_lr/gre.py`: measured multi-echo GRE geometry, sampling, shared
-  calibration, direct retrospective crop, CSM, command, and normalization
-  contracts;
+  calibration, legacy compatibility, native-R3x3 preparation, direct
+  retrospective crop, CSM, command, and normalization contracts;
 - `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
   split-complex output recombination;
 - `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,

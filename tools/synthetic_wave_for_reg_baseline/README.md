@@ -12,6 +12,10 @@ samples. The measured-Wave TWIX is restricted to geometry, metadata,
 orientation, and qualitative validation; the Wave operator is evaluated from
 the theoretical trajectory in the configured Pulseq file.
 
+The manifest-bound native-grid R3x3 extension, exact mask identity, reuse-only
+preparation, lambda grids, and tmux stage order are documented in
+[`synthetic_gre_regularization_pipeline.md`](docs/synthetic_gre_regularization_pipeline.md).
+
 The immutable logical geometry is:
 
 - source R1 GRE: `256 x 256 x 72` in `(RO, LIN, PAR)` order;

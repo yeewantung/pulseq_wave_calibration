@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import importlib
 import json
-import os
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -37,7 +36,12 @@ from .projection_psf import (
     centered_spatial_core_bounds,
     select_spatial_projection_region,
 )
-from .retrospective import resample_sensitivity_maps, write_measured_wave_crop
+from .retrospective import (
+    link_bart_pair,
+    resample_sensitivity_maps,
+    validate_same_grid_masked_wave,
+    write_measured_wave_crop,
+)
 from .sampling import (
     SamplingPattern,
     inspect_twix_sampling,
@@ -2789,14 +2793,7 @@ def _link_bart_pair(source_base: Path, destination_base: Path) -> None:
     Raises:
         FileExistsError: If either destination already exists.
     """
-    for suffix in (".hdr", ".cfl"):
-        source = source_base.with_suffix(suffix).resolve()
-        destination = destination_base.with_suffix(suffix)
-        if not source.is_file():
-            raise FileNotFoundError(source)
-        if destination.exists() or destination.is_symlink():
-            raise FileExistsError(destination)
-        destination.symlink_to(os.path.relpath(source, destination.parent))
+    link_bart_pair(source_base, destination_base)
 
 
 def _validate_same_grid_masked_wave(
@@ -2821,48 +2818,12 @@ def _validate_same_grid_masked_wave(
         ValueError: If geometry, acquired values, zero exterior, or finiteness
             violates the retrospective-undersampling contract.
     """
-    if readout_chunk < 1:
-        raise ValueError("Readout validation chunk must be positive.")
-    source_shape = read_shape(source_base) + (1,) * max(
-        0, 5 - len(read_shape(source_base))
+    return validate_same_grid_masked_wave(
+        source_base,
+        target_base,
+        target_mask,
+        readout_chunk=readout_chunk,
     )
-    target_shape = read_shape(target_base) + (1,) * max(
-        0, 5 - len(read_shape(target_base))
-    )
-    if source_shape[:5] != target_shape[:5] or any(
-        value != 1 for value in (*source_shape[5:], *target_shape[5:])
-    ):
-        raise ValueError("R3x3 undersampling must preserve native Wave dimensions.")
-    ro_os, nlin, npar, coils, maps = source_shape[:5]
-    mask = np.asarray(target_mask)
-    if maps != 1 or mask.dtype != np.bool_ or mask.shape != (nlin, npar):
-        raise ValueError("R3x3 target mask or Wave map geometry is invalid.")
-    source = open_cfl(source_base).reshape((ro_os, nlin, npar, coils, -1), order="F")
-    target = open_cfl(target_base).reshape((ro_os, nlin, npar, coils, -1), order="F")
-    acquired_mismatch = 0
-    unacquired_nonzero = 0
-    nonfinite = 0
-    for start in range(0, ro_os, readout_chunk):
-        stop = min(start + readout_chunk, ro_os)
-        source_block = np.asarray(source[start:stop, ..., 0])
-        target_block = np.asarray(target[start:stop, ..., 0])
-        acquired_mismatch += int(
-            np.count_nonzero(target_block[:, mask, :] != source_block[:, mask, :])
-        )
-        unacquired_nonzero += int(np.count_nonzero(target_block[:, ~mask, :]))
-        nonfinite += int(np.count_nonzero(~np.isfinite(target_block)))
-    if acquired_mismatch or unacquired_nonzero or nonfinite:
-        raise ValueError(
-            "R3x3 masked Wave data failed acquired-equality, zero-exterior, "
-            "or finite-value validation."
-        )
-    return {
-        "acquired_mismatch_count": acquired_mismatch,
-        "unacquired_nonzero_count": unacquired_nonzero,
-        "nonfinite_count": nonfinite,
-        "acquired_samples_equal_source_bitwise": True,
-        "unacquired_samples_are_exact_zero": True,
-    }
 
 
 def prepare_retro_mprage_r3x3(

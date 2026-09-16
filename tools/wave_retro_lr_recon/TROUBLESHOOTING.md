@@ -11,6 +11,7 @@ be copied into normal reconstruction commands:
 | Native-R3x3 logical mask on the reviewed `256 x 256` grid, residue `(1, 2)` | `36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3` |
 | Native-R3x3 MPRAGE selection manifest | `07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d` |
 | Shared-echo GRE Wavelet selection manifest | `0c43a9d31672e90ad851decfca66c253c362cbd67ca5ba97c4fd8ef1f5a61afd` |
+| Native-R3x3 GRE logical mask on the reviewed `250 x 72` LIN/PAR grid, residue `(2, 0)` | `e57069cd4f3cc9af4a78e70cb10f66b79ad1ceb35efac966c871df3822febefa` |
 
 Current output manifests remain authoritative for individual artifact hashes.
 
@@ -29,6 +30,15 @@ nearest to `1.5 mm` with a LIN matrix divisible by four. This is matrix
 `250 x 148 x 72`, PSF shape `1000 x 148 x 72`, and crop `[51:199]` for the
 adult grid, or matrix `250 x 116 x 72`, PSF shape `1000 x 116 x 72`, and crop
 `[40:156]` for a `Ny=196`, `172 mm` pediatric phase FOV.
+
+For native R3x3, require acceleration `(3, 3)` with the LIN residue inherited
+from measured R3x1 and the PAR residue center-aligned. The reviewed adult
+`250 x 250 x 72` grid resolves to residue `(2, 0)`, 1992 acquired coordinates,
+and logical mask SHA-256
+`e57069cd4f3cc9af4a78e70cb10f66b79ad1ceb35efac966c871df3822febefa`.
+Each target echo must be bitwise equal to its normal source on acquired
+coordinates, exactly zero elsewhere, finite, and paired with its own unchanged
+measured PSF. Calibration k-space must not appear in the R3x3 image mask.
 
 `normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` must overlay raw `a/b/c`
 scatter samples on the processed curves using the fixed `[-2*pi, 2*pi]` range.
@@ -65,10 +75,30 @@ masking step is part of the measured GRE workflow or its NIfTI collection.
 The GRE collection is intentionally unmasked. If
 `sample_gre_nifti_collection.sh` rejects an input, fix or regenerate the
 incomplete canonical branch rather than adding a mask or copying files by
-hand. Use `--require-retro` only after both retrospective geometries and both
-reconstruction branches have completed. The collection destination must be a
+hand. Use `--require-retro` only after both established retrospective
+geometries have completed; if `retro/native_r3x3` has been started, both of its
+branches must also be complete. Rerunning the collector atomically appends newly
+discovered R3x3 outputs and refuses to drop any previously collected group.
+The collection destination must be a
 tool-owned `OUTPUT_ROOT/nifti_collection`; unexpected or locally modified files
 there cause a hard failure instead of being overwritten.
+
+## A legacy GRE normal manifest does not match current metadata
+
+Do not edit the historical manifest. Run the focused
+`sample_gre_retro_r3x3_recon.sh` entry point with the original TWIX, sequence,
+output root, and matching ecalib crop. Retrospective compatibility accepts only
+source-identical regular-R3x1 normal artifacts, validates their core grids and
+per-echo finite PSFs, and writes
+`normal/NORMAL_INPUT_REUSE_ATTESTATION.json`. The existing PSFs, k-space,
+manifest, and CSM are not rewritten or recalibrated. Missing nonessential
+coefficient/trajectory diagnostics may be recorded in the attestation because
+native R3x3 links the already calibrated per-echo PSFs directly.
+
+Manual PSF fit bounds disable compatibility. Source mismatch, a non-R3x1
+sampling mask, incomplete CFL pairs, non-finite PSFs, or a mismatched recorded
+ecalib command remains a hard failure. Use a new output root when a new PSF or
+CSM calibration is scientifically intended.
 
 ## MPRAGE checks
 

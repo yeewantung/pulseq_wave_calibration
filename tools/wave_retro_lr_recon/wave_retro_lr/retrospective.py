@@ -2,12 +2,110 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from .bart_io import create_cfl, open_cfl, read_shape
 from .core import ResolvedCase, apply_wave_forward, centered_fftn
+
+
+def link_bart_pair(source_base: str | Path, destination_base: str | Path) -> None:
+    """Create relative links to one immutable BART CFL pair.
+
+    Args:
+        source_base: Existing source BART basename.
+        destination_base: New case-local BART basename.
+
+    Returns:
+        None. The destination header and payload become relative symlinks.
+
+    Raises:
+        FileNotFoundError: If either source file is absent.
+        FileExistsError: If either destination already exists.
+    """
+
+    source_root = Path(source_base)
+    destination_root = Path(destination_base)
+    for suffix in (".hdr", ".cfl"):
+        source = source_root.with_suffix(suffix).resolve()
+        destination = destination_root.with_suffix(suffix)
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(destination)
+        destination.symlink_to(os.path.relpath(source, destination.parent))
+
+
+def validate_same_grid_masked_wave(
+    source_base: str | Path,
+    target_base: str | Path,
+    target_mask: np.ndarray,
+    *,
+    readout_chunk: int = 8,
+) -> dict[str, Any]:
+    """Verify exact acquired samples and zeros after same-grid undersampling.
+
+    Args:
+        source_base: Native measured-Wave BART basename.
+        target_base: Retrospectively masked BART basename.
+        target_mask: Pure logical LIN/PAR target lattice.
+        readout_chunk: Maximum oversampled-readout planes checked together.
+
+    Returns:
+        Exact mismatch, zero-exterior, and finite-value validation metrics.
+
+    Raises:
+        ValueError: If geometry, acquired values, zero exterior, or finiteness
+            violates the same-grid retrospective-undersampling contract.
+    """
+
+    if readout_chunk < 1:
+        raise ValueError("Readout validation chunk must be positive.")
+    source_shape = read_shape(source_base)
+    target_shape = read_shape(target_base)
+    source_shape = source_shape + (1,) * max(0, 5 - len(source_shape))
+    target_shape = target_shape + (1,) * max(0, 5 - len(target_shape))
+    if source_shape[:5] != target_shape[:5] or any(
+        value != 1 for value in (*source_shape[5:], *target_shape[5:])
+    ):
+        raise ValueError("Same-grid undersampling must preserve native Wave dimensions.")
+    ro_os, nlin, npar, coils, maps = source_shape[:5]
+    mask = np.asarray(target_mask)
+    if maps != 1 or mask.dtype != np.bool_ or mask.shape != (nlin, npar):
+        raise ValueError("Same-grid target mask or Wave map geometry is invalid.")
+    source = open_cfl(source_base).reshape(
+        (ro_os, nlin, npar, coils, -1), order="F"
+    )
+    target = open_cfl(target_base).reshape(
+        (ro_os, nlin, npar, coils, -1), order="F"
+    )
+    acquired_mismatch = 0
+    unacquired_nonzero = 0
+    nonfinite = 0
+    for start in range(0, ro_os, readout_chunk):
+        stop = min(start + readout_chunk, ro_os)
+        source_block = np.asarray(source[start:stop, ..., 0])
+        target_block = np.asarray(target[start:stop, ..., 0])
+        acquired_mismatch += int(
+            np.count_nonzero(target_block[:, mask, :] != source_block[:, mask, :])
+        )
+        unacquired_nonzero += int(np.count_nonzero(target_block[:, ~mask, :]))
+        nonfinite += int(np.count_nonzero(~np.isfinite(target_block)))
+    if acquired_mismatch or unacquired_nonzero or nonfinite:
+        raise ValueError(
+            "Same-grid masked Wave data failed acquired-equality, "
+            "zero-exterior, or finite-value validation."
+        )
+    return {
+        "acquired_mismatch_count": acquired_mismatch,
+        "unacquired_nonzero_count": unacquired_nonzero,
+        "nonfinite_count": nonfinite,
+        "acquired_samples_equal_source_bitwise": True,
+        "unacquired_samples_are_exact_zero": True,
+    }
 
 
 def _measured_target_mask(

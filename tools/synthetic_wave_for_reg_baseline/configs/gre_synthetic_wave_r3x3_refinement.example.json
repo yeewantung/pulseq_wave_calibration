@@ -1,0 +1,19 @@
+{
+  "format_version": 2,
+  "groups": {
+    "native_r3x3": {
+      "echo-01": [
+        {"method": "wavelet", "block_size": null, "lambdas": [0.005, 0.0075, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05]},
+        {"method": "llr", "block_size": 4, "lambdas": [0.001, 0.002, 0.003, 0.005, 0.0075, 0.01]},
+        {"method": "llr", "block_size": 8, "lambdas": [0.001, 0.002, 0.003, 0.005, 0.0075, 0.01]},
+        {"method": "llr", "block_size": 16, "lambdas": [0.001, 0.002, 0.003, 0.005, 0.0075, 0.01]}
+      ],
+      "echo-02": [
+        {"method": "wavelet", "block_size": null, "lambdas": [0.005, 0.0075, 0.01, 0.015, 0.02, 0.03, 0.04, 0.05]},
+        {"method": "llr", "block_size": 4, "lambdas": [0.001, 0.002, 0.003, 0.005, 0.0075, 0.01]},
+        {"method": "llr", "block_size": 8, "lambdas": [0.001, 0.002, 0.003, 0.005, 0.0075, 0.01]},
+        {"method": "llr", "block_size": 16, "lambdas": [0.001, 0.002, 0.003, 0.005, 0.0075, 0.01]}
+      ]
+    }
+  }
+}

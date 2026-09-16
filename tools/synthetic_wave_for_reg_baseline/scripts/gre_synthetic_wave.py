@@ -30,6 +30,7 @@ from wave_retro_lr.sampling import (  # noqa: E402
 
 WORKFLOW_NAME = "synthetic_wave_gre_regularization_sweep"
 CASE_IDS = ("native_r3x1", "native_r3x2", "lin_low_resolution_r3x2")
+NATIVE_R3X3_CASE_ID = "native_r3x3"
 ECHO_IDS = ("echo-01", "echo-02")
 NATIVE_MATRIX = (250, 250, 72)
 NATIVE_FOV_MM = (220.0, 220.0, 180.0)
@@ -43,6 +44,21 @@ VIRTUAL_COILS = 12
 ECHO_TIMES_S = (0.010, 0.020)
 COARSE_LAMBDAS = (1e-6, 1e-5, 1e-4, 1e-3, 1e-2)
 LLR_BLOCK_SIZES = (4, 8, 16)
+
+
+def _is_sha256(value: Any) -> bool:
+    """Return whether a value is a lowercase hexadecimal SHA-256 digest.
+
+    Args:
+        value: Candidate digest value.
+
+    Returns:
+        True only for exactly 64 lowercase hexadecimal characters.
+    """
+
+    return isinstance(value, str) and len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 @dataclass(frozen=True)
@@ -75,8 +91,11 @@ class GreCase:
         }
 
 
-def case_definitions() -> dict[str, GreCase]:
-    """Return the three immutable GRE geometry and sampling definitions.
+def case_definitions(*, include_native_r3x3: bool = False) -> dict[str, GreCase]:
+    """Return immutable GRE geometry and sampling definitions.
+
+    Args:
+        include_native_r3x3: Include the manifest-defined native R3x3 extension.
 
     Returns:
         Mapping from stable case identifiers to validated case definitions.
@@ -84,7 +103,7 @@ def case_definitions() -> dict[str, GreCase]:
 
     native_crop = ((0, 250), (0, 250), (0, 72))
     low_crop = ((0, 250), LOW_RESOLUTION_LIN_BOUNDS, (0, 72))
-    return {
+    cases = {
         "native_r3x1": GreCase(
             "native_r3x1",
             NATIVE_MATRIX,
@@ -117,6 +136,27 @@ def case_definitions() -> dict[str, GreCase]:
             (2, 0),
         ),
     }
+    if include_native_r3x3:
+        cases[NATIVE_R3X3_CASE_ID] = GreCase(
+            NATIVE_R3X3_CASE_ID,
+            NATIVE_MATRIX,
+            NATIVE_FOV_MM,
+            NATIVE_VOXEL_MM,
+            native_crop,
+            (3, 3),
+            (2, 0),
+        )
+    return cases
+
+
+def native_r3x3_case() -> GreCase:
+    """Return the GRE-specific native R3x3 sampling contract.
+
+    Returns:
+        Native 250x250x72 R3x3 case with residue derived from the GRE center.
+    """
+
+    return case_definitions(include_native_r3x3=True)[NATIVE_R3X3_CASE_ID]
 
 
 def validate_geometry_contract() -> dict[str, Any]:
@@ -725,7 +765,8 @@ def validate_config_document(config: Mapping[str, Any]) -> dict[str, Any]:
         Resolved output identity, geometry, masks, and exact coarse job count.
     """
 
-    if config.get("format_version") != 1 or config.get("workflow") != WORKFLOW_NAME:
+    format_version = config.get("format_version")
+    if format_version not in {1, 2} or config.get("workflow") != WORKFLOW_NAME:
         raise ValueError("Unsupported GRE sweep configuration schema.")
     geometry = config.get("geometry")
     if not isinstance(geometry, Mapping):
@@ -796,12 +837,37 @@ def validate_config_document(config: Mapping[str, Any]) -> dict[str, Any]:
         or Path(run_name).name != run_name
     ):
         raise ValueError("The approved output parent and simple run name are required.")
+    active_cases = case_definitions()
+    if format_version == 2:
+        extension = config.get("native_r3x3_extension")
+        if not isinstance(extension, Mapping):
+            raise ValueError("format_version 2 requires native_r3x3_extension.")
+        if extension.get("case_ids") != [NATIVE_R3X3_CASE_ID]:
+            raise ValueError("The extension is restricted to native_r3x3 only.")
+        if extension.get("base_case_id") != "native_r3x1":
+            raise ValueError("native_r3x3 must be an exact subset of native_r3x1.")
+        if extension.get("shared_lambda_across_echoes") is not True:
+            raise ValueError("The R3x3 extension requires one shared lambda across echoes.")
+        reuse = extension.get("reuse_manifests")
+        required_reuse = {"source", "theoretical_operator", "csm", "references", "brain_mask", "cases"}
+        if not isinstance(reuse, Mapping) or set(reuse) != required_reuse:
+            raise ValueError(f"reuse_manifests must contain exactly {sorted(required_reuse)}.")
+        for label, record in reuse.items():
+            if (
+                not isinstance(record, Mapping)
+                or not Path(str(record.get("path", ""))).expanduser().is_absolute()
+                or not _is_sha256(record.get("sha256"))
+            ):
+                raise ValueError(f"reuse_manifests.{label} requires an absolute path and SHA-256.")
+        active_cases = {NATIVE_R3X3_CASE_ID: native_r3x3_case()}
     return {
         "output_parent": str(output_parent),
         "run_name": run_name,
         "run_root": str(output_parent / run_name),
         "geometry": validate_geometry_contract(),
-        "masks": expected_mask_records(),
+        "case_ids": list(active_cases),
+        "case_definitions": {key: value.to_json() for key, value in active_cases.items()},
+        "masks": {key: build_case_mask(value)[1] for key, value in active_cases.items()},
         "coarse_jobs_per_group": len(coarse_candidate_settings()),
-        "coarse_job_count": len(CASE_IDS) * len(ECHO_IDS) * len(coarse_candidate_settings()),
+        "coarse_job_count": len(active_cases) * len(ECHO_IDS) * len(coarse_candidate_settings()),
     }

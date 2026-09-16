@@ -33,7 +33,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--require-retro",
         action="store_true",
-        help="Require native-R3x2 and LIN-low-resolution-R3x2 outputs.",
+        help=(
+            "Require both established R3x2 outputs and, when its case directory "
+            "exists, complete native-R3x3 outputs."
+        ),
     )
     return parser
 

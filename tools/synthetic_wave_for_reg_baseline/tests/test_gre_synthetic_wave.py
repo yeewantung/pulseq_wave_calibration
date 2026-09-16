@@ -34,6 +34,7 @@ from gre_synthetic_wave import (  # noqa: E402
     fit_shared_echo1_scale,
     inter_echo_metrics,
     json_sha256,
+    native_r3x3_case,
     refinement_points,
     restore_bart_normalization,
     theoretical_psf,
@@ -127,6 +128,20 @@ class GreGeometryAndSamplingTests(unittest.TestCase):
             self.assertEqual(records[case_id]["acquired_coordinate_count"], count)
             self.assertEqual(records[case_id]["logical_sha256"], digest)
             self.assertFalse(records[case_id]["acs_coordinates_included"])
+
+    def test_native_r3x3_is_exact_gre_r3x1_subset(self) -> None:
+        """Bind native R3x3 to the GRE-derived residue, count, hash, and subset."""
+
+        source_mask, _ = build_case_mask(case_definitions()["native_r3x1"])
+        target_mask, metadata = build_case_mask(native_r3x3_case())
+        self.assertEqual(native_r3x3_case().residue_lin_par, (2, 0))
+        self.assertEqual(metadata["acquired_coordinate_count"], 1992)
+        self.assertEqual(
+            metadata["logical_sha256"],
+            "e57069cd4f3cc9af4a78e70cb10f66b79ad1ceb35efac966c871df3822febefa",
+        )
+        self.assertTrue(np.all(~target_mask | source_mask))
+        self.assertFalse(metadata["acs_coordinates_included"])
 
     def test_acs_union_metadata_is_rejected(self) -> None:
         """Reject historical reconstruction masks containing calibration coordinates."""
@@ -535,11 +550,29 @@ class GreScalingPhaseAndManifestTests(unittest.TestCase):
         examples = [
             SCRIPT_ROOT.parent / "configs" / "gre_synthetic_wave_sweep.example.json",
             SCRIPT_ROOT / "run_gre_synthetic_wave_sweep.example.sh",
+            SCRIPT_ROOT.parent / "configs" / "gre_synthetic_wave_r3x3.example.json",
+            SCRIPT_ROOT.parent / "configs" / "gre_synthetic_wave_r3x3_refinement.example.json",
+            SCRIPT_ROOT / "run_gre_synthetic_wave_r3x3.example.sh",
         ]
         forbidden = ("/homes/", "/autofs/", "yd918", "MID00", "FID")
         for path in examples:
             text = path.read_text(encoding="utf-8")
             self.assertFalse(any(token in text for token in forbidden), path)
+
+    def test_native_r3x3_config_is_single_case_and_42_coarse_jobs(self) -> None:
+        """Validate the manifest-defined single-case R3x3 extension contract."""
+
+        example = SCRIPT_ROOT.parent / "configs" / "gre_synthetic_wave_r3x3.example.json"
+        config = json.loads(example.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            config["output_parent"] = temporary
+            validated = validate_config_document(config)
+            self.assertEqual(validated["case_ids"], ["native_r3x3"])
+            self.assertEqual(validated["coarse_job_count"], 42)
+            self.assertEqual(validated["masks"]["native_r3x3"]["acquired_coordinate_count"], 1992)
+            config["native_r3x3_extension"]["case_ids"] = ["native_r3x3", "native_lr_r3x3"]
+            with self.assertRaisesRegex(ValueError, "restricted to native_r3x3 only"):
+                validate_config_document(config)
 
     def test_json_signature_is_order_independent(self) -> None:
         """Canonicalize manifest signature mappings before hashing."""

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare and reconstruct measured native and exact LIN-cropped R3x2 GRE.
+# Prepare and reconstruct measured R3x2/LR cases plus native R3x3 GRE.
 # One native ecalib map set is shared by all echoes and Fourier-resampled only for LR.
 
 usage() {
@@ -112,5 +112,19 @@ run_case() {
 
 run_case native_r3x2 "$NORMAL_OUTPUT/coil_sens" "$GRE_SHARED_WAVELET_LAMBDA"
 run_case lin_low_resolution_r3x2 "$RETRO_ROOT/lin_low_resolution_r3x2/bart_inputs/coil_sens" "$GRE_SHARED_WAVELET_LAMBDA"
+
+# Reuse the focused, resumable native-R3x3 implementation as the third case.
+R3X3_ARGS=(
+    "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE"
+    --ecalib-crop "$ECALIB_CROP"
+    --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING"
+)
+if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
+    R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
+fi
+if [[ "$USE_GPU" == true ]]; then
+    R3X3_ARGS+=(-g)
+fi
+bash "$SCRIPT_DIR/sample_gre_retro_r3x3_recon.sh" "${R3X3_ARGS[@]}"
 
 echo "Retrospective multi-echo GRE reconstructions complete: $RETRO_ROOT"
