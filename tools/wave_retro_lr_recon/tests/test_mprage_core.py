@@ -45,6 +45,7 @@ from wave_retro_lr.sampling import (  # noqa: E402
 )
 from wave_retro_lr.mprage import (  # noqa: E402
     AutomaticPsfFitRejected,
+    COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
     NORMAL_REUSE_ATTESTATION_NAME,
     _calibrated_psf_inputs,
     _embed_image_stream,
@@ -56,11 +57,35 @@ from wave_retro_lr.mprage import (  # noqa: E402
     _normalize_psf_coefficient_settings,
     _normalize_psf_spatial_settings,
     _recover_c_only_automatic_rejection,
+    _uses_alias_free_coil_calibration,
     _validate_same_grid_masked_wave,
     _write_automatic_psf_rejection_diagnostics,
 )
 from wave_retro_lr.mprage import prepare_normal_mprage, prepare_retro_mprage  # noqa: E402
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
+
+
+def _corrected_coil_compression(
+    logical_readout: int = 2, oversampling_factor: int = 2
+) -> dict[str, object]:
+    """Return the corrected coil-calibration manifest fixture.
+
+    Args:
+        logical_readout: Nominal-FOV readout matrix size.
+        oversampling_factor: Acquired readout oversampling factor.
+
+    Returns:
+        Coil-compression record with alias-free readout-crop provenance.
+    """
+
+    return {
+        "readout_oversampling_removal": {
+            **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+            "oversampling_factor": oversampling_factor,
+            "input_readout": logical_readout * oversampling_factor,
+            "output_readout": logical_readout,
+        }
+    }
 
 
 class SamplingTests(unittest.TestCase):
@@ -1534,7 +1559,10 @@ class ManifestReuseTests(unittest.TestCase):
                     "twix": _file_identity(twix),
                     "sequence": _file_identity(sequence, include_hash=True),
                 },
-                "geometry": {"logical_matrix_ro_lin_par": [2, 4, 4]},
+                "geometry": {
+                    "logical_matrix_ro_lin_par": [2, 4, 4],
+                    "readout_oversampling_factor": 2,
+                },
                 "sampling": {"name": "R3x1"},
                 "psf_calibration": {"coefficient_processing": "smooth"},
             }
@@ -1542,6 +1570,12 @@ class ManifestReuseTests(unittest.TestCase):
                 **_normalize_psf_coefficient_settings("sine-line", None, None),
                 **_normalize_psf_spatial_settings(None, None, None, None),
             }
+            self.assertFalse(
+                _native_manifest_matches_reusable_artifact(
+                    manifest, twix, sequence, automatic
+                )
+            )
+            manifest["coil_compression"] = _corrected_coil_compression()
             self.assertTrue(
                 _native_manifest_matches_reusable_artifact(
                     manifest, twix, sequence, automatic
@@ -1599,6 +1633,7 @@ class ManifestReuseTests(unittest.TestCase):
                     "readout_oversampling_factor": 2,
                 },
                 "sampling": {"name": "R3x1"},
+                "coil_compression": _corrected_coil_compression(),
                 "psf_calibration": {
                     "coefficient_processing": "smooth",
                     "processing_input_psf_coefficients": (
@@ -1642,7 +1677,7 @@ class ManifestReuseTests(unittest.TestCase):
             self.assertIn(
                 "payload_sha256", attestation["core_artifacts"]["psf"]
             )
-            with self.assertRaisesRegex(ValueError, "different sources or PSF"):
+            with self.assertRaisesRegex(ValueError, "different sources, coil-calibration"):
                 prepare_normal_mprage(twix, root / "output", sequence)
 
     def test_legacy_default_sine_line_manifest_is_reusable(self) -> None:
@@ -1672,6 +1707,11 @@ class ManifestReuseTests(unittest.TestCase):
                     "twix": _file_identity(twix),
                     "sequence": _file_identity(sequence, include_hash=True),
                 },
+                "geometry": {
+                    "logical_matrix_ro_lin_par": [2, 4, 4],
+                    "readout_oversampling_factor": 2,
+                },
+                "coil_compression": _corrected_coil_compression(),
                 "psf_calibration": {
                     "coefficient_processing": "sine-line",
                     "fit_range_selection": "automatic",
@@ -1752,7 +1792,12 @@ class ManifestReuseTests(unittest.TestCase):
                     "twix": _file_identity(twix),
                     "sequence": _file_identity(sequence, include_hash=True),
                 },
+                "geometry": {
+                    "logical_matrix_ro_lin_par": [2, 4, 4],
+                    "readout_oversampling_factor": 2,
+                },
                 "sampling": {"name": "R3x1"},
+                "coil_compression": _corrected_coil_compression(),
                 "psf_calibration": {
                     "coefficient_processing": "sine-line",
                     "fit_range_selection": "automatic",
@@ -1869,6 +1914,34 @@ class PreparationIntegrationTests(unittest.TestCase):
                 )
 
             @staticmethod
+            def remove_readout_oversampling_kspace(kspace, factor, axis=0):
+                """Remove mock readout oversampling by centered image cropping.
+
+                Args:
+                    kspace: Oversampled mock k-space tensor.
+                    factor: Expected readout oversampling factor.
+                    axis: Expected readout axis.
+
+                Returns:
+                    Logical-readout mock k-space tensor.
+                """
+                if factor != 2 or axis != 0:
+                    raise ValueError("unexpected mock readout crop request")
+                image = torch.fft.fftshift(
+                    torch.fft.ifft(
+                        torch.fft.ifftshift(kspace, dim=(0,)), dim=0, norm="ortho"
+                    ),
+                    dim=(0,),
+                )
+                image = image[2:6]
+                return torch.fft.fftshift(
+                    torch.fft.fft(
+                        torch.fft.ifftshift(image, dim=(0,)), dim=0, norm="ortho"
+                    ),
+                    dim=(0,),
+                )
+
+            @staticmethod
             def apply_cc_coillast_torch(kspace, basis, x_chunk=8):
                 """Apply the supplied mock coil-compression matrix.
 
@@ -1950,6 +2023,7 @@ class PreparationIntegrationTests(unittest.TestCase):
 
             normal = output / "normal" / "bart_inputs"
             self.assertEqual(manifest["sampling"]["name"], "R3x1")
+            self.assertTrue(_uses_alias_free_coil_calibration(manifest))
             self.assertEqual(
                 manifest["psf_calibration"]["coefficient_processing"], "sine-line"
             )

@@ -82,6 +82,14 @@ The complete dual-branch normal, retrospective, NIfTI-conversion, and shared
 head-mask collection workflow passed representative real measured-MPRAGE
 visual validation on 2026-09-01.
 
+Coil calibration removes readout oversampling from integrated set-4 ACS by a
+centered full-readout IFFT, central nominal-FOV image crop, and centered FFT.
+Direct readout k-space striding is forbidden because it aliases extended-FOV
+signal into the head. The Wave image k-space and PSF remain on the oversampled
+readout grid required by the forward model. Normal manifests record this
+versioned calibration contract; older stride-derived normal inputs are not
+eligible for exact or compatibility reuse.
+
 ### 1. Normal reconstruction
 
 Choose a new output root, then run:
@@ -389,7 +397,7 @@ differences are multi-echo validation, a LIN-only low-resolution case, the
 branch name `selected_wavelet`, and the absence of head masking.
 
 The adapter imports the reviewed upstream calibration implementation from the
-read-only `external/wave-gre-flow-comp` submodule at commit `d3772bd`. Logical
+pinned read-only `external/wave-gre-flow-comp` submodule. Logical
 `(RO, LIN, PAR)` corresponds to `(readout, phase, slice)`. Readout and slice
 remain fixed at `250 x 72`, with readout FOV `220 mm`, slice FOV `180 mm`, and
 fourfold Wave readout oversampling. The sequence defines the LIN matrix and
@@ -406,6 +414,13 @@ are estimated once and shared. Automatic `sine-line` is the default; the same
 manual kx-bound override and explicit `smooth` fallback described for MPRAGE
 are available.
 
+GRE coil calibration removes readout oversampling from integrated set-4 ACS
+with a centered IFFT, central nominal-FOV image crop, and centered FFT before
+PCA compression or BART `ecalib`. Direct readout k-space striding is forbidden
+because it aliases outside-FOV signal into the head. Wave image k-space and
+echo-specific PSFs retain the extended readout required by the forward model.
+Normal manifests record the versioned crop and exact readout geometry.
+
 Normal GRE preparation writes the same two shared-coefficient diagnostics as
 MPRAGE under `OUTPUT_ROOT/normal`: the fixed `[-2*pi, 2*pi]`
 `PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` and the independently autoscaled
@@ -413,8 +428,9 @@ MPRAGE under `OUTPUT_ROOT/normal`: the fixed `[-2*pi, 2*pi]`
 calibration and backfills both plots when compatible prepared inputs are
 reused; it does not generate redundant per-case copies.
 
-Retrospective entry points also support a narrow legacy-artifact compatibility
-path. It requires exact TWIX and sequence identities, validates the measured
+Retrospective entry points also support a narrow legacy-PSF-metadata
+compatibility path. It requires exact TWIX and sequence identities, corrected
+alias-free coil-calibration provenance, and validates the measured
 R3x1 mask, native geometry, calibration grid, and every echo k-space/PSF grid,
 and requires finite PSFs. It never refits coefficients or regenerates PSFs,
 never rewrites a legacy normal manifest, and records the decision in

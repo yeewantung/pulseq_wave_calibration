@@ -1,5 +1,16 @@
 # Wave reconstruction troubleshooting
 
+## Existing MPRAGE normal inputs are rejected after the readout-crop fix
+
+Integrated set-4 ACS must remove readout oversampling with a centered
+IFFT-crop-FFT operation before PCA compression and ESPIRiT. Historical normal
+inputs prepared by direct readout k-space striding can contain aliased
+outside-FOV anatomy and are intentionally not reusable, including through the
+legacy PSF-metadata compatibility path. Keep the historical output unchanged
+and prepare a new output root. The new manifest records
+`coil_compression.readout_oversampling_removal` with method
+`centered-image-domain-crop`.
+
 ## Frozen provenance identifiers
 
 These values are needed only for auditing historical selections and should not
@@ -85,7 +96,14 @@ there cause a hard failure instead of being overwritten.
 
 ## A legacy GRE normal manifest does not match current metadata
 
-Do not edit the historical manifest. Run the focused
+First inspect `coil_compression.readout_oversampling_removal`. Historical GRE
+normal inputs prepared by direct RO k-space striding, or lacking this
+versioned centered-image-domain crop record, are intentionally not reusable.
+Their calibration can contain aliased outside-FOV anatomy. Keep that output
+unchanged and use a new output root to prepare corrected normal inputs.
+
+For inputs that already record corrected coil calibration but only predate
+current PSF metadata, do not edit the historical manifest. Run the focused
 `sample_gre_retro_r3x3_recon.sh` entry point with the original TWIX, sequence,
 output root, and matching ecalib crop. Retrospective compatibility accepts only
 source-identical regular-R3x1 normal artifacts, validates their core grids and

@@ -79,6 +79,11 @@ SEQUENCE_MAXIMUM_RELATIVE_FREQUENCY_DIFFERENCE = 0.03
 C_FIXED_FREQUENCY_MAXIMUM_CONDITION_NUMBER = 1.0e8
 C_FIXED_FREQUENCY_MAXIMUM_RAW_RELATIVE_RMSE = 0.5
 C_FIXED_FREQUENCY_MAXIMUM_TRIMMED_RELATIVE_L2 = 2.0
+COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL = {
+    "method": "centered-image-domain-crop",
+    "version": 1,
+    "fft_normalization": "ortho",
+}
 
 
 class AutomaticPsfFitRejected(ValueError):
@@ -359,6 +364,9 @@ def load_wave_mprage_helpers() -> Any:
         load_ref=twix_import.load_ref,
         estimate_cc_matrix_coillast=coil_compression.estimate_cc_matrix_coillast,
         apply_cc_coillast_torch=coil_compression.apply_cc_coillast_torch,
+        remove_readout_oversampling_kspace=(
+            coil_compression.remove_readout_oversampling_kspace
+        ),
         fit_wave_psf_deviation_from_projection=(
             native.fit_wave_psf_deviation_from_projection
         ),
@@ -1815,7 +1823,7 @@ def _native_manifest_matches(
         psf_settings: Normalized coefficient-processing settings.
 
     Returns:
-        ``True`` when the status, source identities, and PSF settings match.
+        ``True`` when source, coil-calibration, and PSF settings match.
     """
     recorded_psf = manifest.get("psf_calibration", {})
     recorded_processing = recorded_psf.get("processing_diagnostics", {})
@@ -1902,6 +1910,7 @@ def _native_manifest_matches(
         and recorded_coefficient_settings == requested_coefficient_settings
         and spatial_settings_match
         and implementation_matches
+        and _uses_alias_free_coil_calibration(manifest)
     )
 
 
@@ -1937,6 +1946,7 @@ def _native_manifest_matches_reusable_artifact(
         != _file_identity(sequence_path, include_hash=True)
         or not isinstance(manifest.get("geometry"), Mapping)
         or not isinstance(manifest.get("sampling"), Mapping)
+        or not _uses_alias_free_coil_calibration(manifest)
     ):
         return False
     recorded_psf = manifest.get("psf_calibration", {})
@@ -1952,6 +1962,44 @@ def _native_manifest_matches_reusable_artifact(
     ):
         return False
     return True
+
+
+def _uses_alias_free_coil_calibration(manifest: Mapping[str, Any]) -> bool:
+    """Check that a manifest records corrected readout de-oversampling.
+
+    Args:
+        manifest: Prepared normal-input manifest to validate.
+
+    Returns:
+        ``True`` only when coil calibration used the versioned centered
+        image-domain readout crop and its geometry is internally consistent.
+    """
+
+    geometry = manifest.get("geometry")
+    compression = manifest.get("coil_compression")
+    if not isinstance(geometry, Mapping) or not isinstance(compression, Mapping):
+        return False
+    recorded = compression.get("readout_oversampling_removal")
+    if not isinstance(recorded, Mapping):
+        return False
+    try:
+        matrix = tuple(int(value) for value in geometry["logical_matrix_ro_lin_par"])
+        factor = int(geometry["readout_oversampling_factor"])
+        input_readout = int(recorded["input_readout"])
+        output_readout = int(recorded["output_readout"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if len(matrix) != 3 or min(matrix) < 1 or factor < 1:
+        return False
+    expected = {
+        **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+        "oversampling_factor": factor,
+        "input_readout": matrix[0] * factor,
+        "output_readout": matrix[0],
+    }
+    return dict(recorded) == expected and (
+        input_readout == matrix[0] * factor and output_readout == matrix[0]
+    )
 
 
 def _normal_core_artifact_records(
@@ -2191,8 +2239,8 @@ def prepare_normal_mprage(
         )
         if not exact_match and not artifact_match:
             raise ValueError(
-                "Existing normal BART inputs use different sources or PSF "
-                "coefficient-processing settings."
+                "Existing normal BART inputs use different sources, coil-calibration "
+                "processing, or PSF coefficient-processing settings."
             )
         for name in (
             "wave_kspace",
@@ -2333,19 +2381,29 @@ def prepare_normal_mprage(
         raise ValueError("MPRAGE BART preparation requires at least 12 physical receive coils.")
     # Compute one shared coil-compression basis from the integrated reference
     # scan, then apply it consistently to image and calibration data.
-    integrated_acs = reference[:, :nacs, :nacs, -1, :]
+    integrated_acs_oversampled = reference[:, :nacs, :nacs, -1, :]
     if nacs > nlin or nacs > npar:
         raise ValueError(f"Integrated ACS size {nacs} does not fit the PE grid {(nlin, npar)}.")
+    integrated_acs = native.remove_readout_oversampling_kspace(
+        integrated_acs_oversampled,
+        os_factor,
+        axis=0,
+    )
+    if tuple(integrated_acs.shape) != (nro, nacs, nacs, physical_coils):
+        raise ValueError(
+            "Unexpected logical ACS shape after readout oversampling removal: "
+            f"{tuple(integrated_acs.shape)}."
+        )
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
         integrated_acs,
         ncc=12,
         acs=nacs,
-        x_step=os_factor,
+        x_step=1,
     )
-    compressed_acs = native.apply_cc_coillast_torch(integrated_acs, basis, x_chunk=8)[
-        ::os_factor
-    ].contiguous()
-    del integrated_acs, reference
+    compressed_acs = native.apply_cc_coillast_torch(
+        integrated_acs, basis, x_chunk=8
+    ).contiguous()
+    del integrated_acs, integrated_acs_oversampled, reference
 
     image = native.load_img(str(twix_path))
     full_image = _embed_image_stream(
@@ -2498,7 +2556,7 @@ def prepare_normal_mprage(
         float(value) * 1000.0 for value in upstream_geometry["FOVxyz"]
     )
     manifest: dict[str, Any] = {
-        "format_version": 2,
+        "format_version": 3,
         "status": "measured_wave_mprage_bart_inputs_ready",
         "source": {
             "twix": _file_identity(twix_path),
@@ -2521,6 +2579,12 @@ def prepare_normal_mprage(
             "method": "integrated ACS covariance eigendecomposition",
             "retained_energy": float(retained_energy[11]),
             "leading_singular_values": [float(value) for value in singular_values[:12]],
+            "readout_oversampling_removal": {
+                **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+                "oversampling_factor": os_factor,
+                "input_readout": ro_os,
+                "output_readout": nro,
+            },
         },
         "psf_calibration": {
             "method": "sequence trajectory plus processed integrated projection a,b,c",

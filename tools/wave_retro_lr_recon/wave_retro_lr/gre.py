@@ -47,6 +47,11 @@ GRE_SHARED_WAVELET_LAMBDA = 0.015
 GRE_LOGICAL_AXIS_ROLES = ("readout", "phase", "slice")
 GRE_BART_ARRAY_AXIS_FLIPS = (False, True, False)
 GRE_BART_OUTPUT_CONVENTION_VERSION = 2
+COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL = {
+    "method": "centered-image-domain-crop",
+    "version": 1,
+    "fft_normalization": "ortho",
+}
 
 NORMAL_INPUT_RELATIVE = Path("normal") / "bart_inputs"
 NORMAL_OUTPUT_RELATIVE = Path("normal") / "bart_output"
@@ -1062,6 +1067,7 @@ def _source_matches(existing: Mapping[str, Any], twix: Path, sequence: Path, set
         and existing.get("psf_calibration", {}).get("request") == settings
         and existing.get("wavelet_selection")
         == gre_wavelet_selection_provenance("native_r3x1", echo_count)
+        and _uses_alias_free_coil_calibration(existing)
     )
 
 
@@ -1095,6 +1101,7 @@ def _normal_manifest_matches_reusable_artifact(
         or source.get("sequence") != _file_identity(sequence, include_hash=True)
         or not isinstance(manifest.get("geometry"), Mapping)
         or not isinstance(manifest.get("sampling"), Mapping)
+        or not _uses_alias_free_coil_calibration(manifest)
         or not isinstance(echoes, list)
         or not echoes
         or [item.get("echo") for item in echoes]
@@ -1112,6 +1119,40 @@ def _normal_manifest_matches_reusable_artifact(
         if recorded_mode not in {None, "smooth", "sine-line"}:
             return False
     return True
+
+
+def _uses_alias_free_coil_calibration(manifest: Mapping[str, Any]) -> bool:
+    """Check that a GRE manifest records corrected ACS readout cropping.
+
+    Args:
+        manifest: Prepared normal GRE manifest to validate.
+
+    Returns:
+        ``True`` only when the versioned centered image-domain crop and its
+        readout geometry are recorded exactly.
+    """
+
+    geometry = manifest.get("geometry")
+    compression = manifest.get("coil_compression")
+    if not isinstance(geometry, Mapping) or not isinstance(compression, Mapping):
+        return False
+    recorded = compression.get("readout_oversampling_removal")
+    if not isinstance(recorded, Mapping):
+        return False
+    try:
+        matrix = tuple(int(value) for value in geometry["matrix_ro_lin_par"])
+        factor = int(geometry["readout_oversampling_factor"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if len(matrix) != 3 or min(matrix) < 1 or factor < 1:
+        return False
+    expected = {
+        **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+        "oversampling_factor": factor,
+        "input_readout": matrix[0] * factor,
+        "output_readout": matrix[0],
+    }
+    return dict(recorded) == expected
 
 
 def _validated_normal_sampling(
@@ -1646,7 +1687,10 @@ def prepare_normal_gre(
             )
         )
         if not exact_match and not artifact_match:
-            raise ValueError("Existing normal GRE inputs use different sources or PSF settings.")
+            raise ValueError(
+                "Existing normal GRE inputs use different sources, coil-calibration "
+                "processing, or PSF settings."
+            )
         if artifact_match and not exact_match:
             artifact_records, missing_artifacts = _normal_core_artifact_records(
                 destination, existing
@@ -1790,9 +1834,26 @@ def prepare_normal_gre(
     os_factor = int(cfg["os_factor"])
     if nacs <= 0 or nacs > min(native_matrix[1:]):
         raise ValueError("GRE ACS matrix does not fit within the native LIN/PAR grid.")
-    integrated_acs = reference[:, :nacs, :nacs, int(cfg["ACSSetID"]), :]
+    integrated_acs_oversampled = reference[
+        :, :nacs, :nacs, int(cfg["ACSSetID"]), :
+    ]
+    integrated_acs = native.remove_readout_oversampling_kspace(
+        integrated_acs_oversampled,
+        os_factor,
+        axis=0,
+    )
+    if tuple(integrated_acs.shape) != (
+        native_matrix[0],
+        nacs,
+        nacs,
+        physical_coils,
+    ):
+        raise ValueError(
+            "Unexpected logical GRE ACS shape after readout oversampling removal: "
+            f"{tuple(integrated_acs.shape)}."
+        )
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
-        integrated_acs, ncc=VIRTUAL_COILS, acs=nacs, x_step=os_factor
+        integrated_acs, ncc=VIRTUAL_COILS, acs=nacs
     )
     image = native._normalize_gre_image_data(native.load_img(str(twix_path)), cfg)
     if int(image.shape[-1]) != physical_coils:
@@ -1813,7 +1874,10 @@ def prepare_normal_gre(
         matrix_ro_lin_par=native_matrix,
     )
     del compressed_compact
-    compressed_acs = native.apply_cc_coillast_torch(integrated_acs, basis, x_chunk=8)[::os_factor]
+    compressed_acs = native.apply_cc_coillast_torch(
+        integrated_acs, basis, x_chunk=8
+    ).contiguous()
+    del integrated_acs, integrated_acs_oversampled, reference
     if tuple(compressed_acs.shape) != (
         native_matrix[0],
         nacs,
@@ -1911,16 +1975,18 @@ def prepare_normal_gre(
             }
         )
 
+    native_geometry = cases["native_r3x1"].to_json()
+    native_geometry["readout_oversampling_factor"] = os_factor
     manifest = {
-        "format_version": 2,
+        "format_version": 3,
         "status": "measured_multi_echo_wave_gre_bart_inputs_ready",
         "echo_count": echo_count,
         "source": {
             "twix": _file_identity(twix_path),
             "sequence": _file_identity(sequence_path, include_hash=True),
-            "pinned_wave_gre_helper": "external/wave-gre-flow-comp@d3772bda7077da9af16e776fce148ba2cec8fdcf",
+            "pinned_wave_gre_helper": "external/wave-gre-flow-comp@0e1ec513237e86aaf8be9cfc743b55726b8693f8",
         },
-        "geometry": cases["native_r3x1"].to_json(),
+        "geometry": native_geometry,
         "twix_validation": twix_metadata,
         "sampling": {**twix_metadata["sampling"], "path": str(mask_path)},
         "coil_compression": {
@@ -1929,6 +1995,12 @@ def prepare_normal_gre(
             "basis_source": "one integrated set-4 ACS shared across all echoes",
             "retained_energy": float(retained_energy[VIRTUAL_COILS - 1]),
             "leading_singular_values": [float(value) for value in singular_values[:VIRTUAL_COILS]],
+            "readout_oversampling_removal": {
+                **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+                "oversampling_factor": os_factor,
+                "input_readout": int(cfg["Nx_os"]),
+                "output_readout": native_matrix[0],
+            },
         },
         "native_csm_policy": "estimate once from kspace_calib and share unchanged across echoes",
         "kspace_calib": "kspace_calib",
