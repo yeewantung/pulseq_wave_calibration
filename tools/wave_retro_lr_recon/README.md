@@ -29,6 +29,39 @@ shared-lambda decision, presentation contract, and measured-reconstruction
 handoff boundary are documented in
 [`synthetic_gre_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_gre_regularization_pipeline.md).
 
+The higher-channel standard-PCA control has a separate path-agnostic launcher:
+
+```bash
+scripts/sample_mprage_pca_control.sh prepare \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/matching_wave_mprage.seq \
+    /path/to/accepted_normal_root \
+    /path/to/physical_calibration_feasibility_root \
+    /path/to/new_pca_control_root \
+    --virtual-coils 24 --ecalib-crop 0.1
+
+scripts/sample_mprage_pca_control.sh reconstruct \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/matching_wave_mprage.seq \
+    /path/to/accepted_normal_root \
+    /path/to/physical_calibration_feasibility_root \
+    /path/to/new_pca_control_root \
+    --virtual-coils 24 --ecalib-crop 0.1 -g
+
+scripts/sample_mprage_pca_control.sh qc \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/matching_wave_mprage.seq \
+    /path/to/accepted_normal_root \
+    /path/to/physical_calibration_feasibility_root \
+    /path/to/new_pca_control_root \
+    --virtual-coils 24 --ecalib-crop 0.1
+```
+
+It changes only standard PCA truncation and the necessarily matched CSM: the
+accepted PSF is hash-validated and copied without recalibration, while
+`ecalib` and FISTA-r0 retain the explicitly requested matched settings. The
+ignored local launcher keeps all subject-specific paths out of tracked source.
+
 ## MPRAGE workflow
 
 For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical
