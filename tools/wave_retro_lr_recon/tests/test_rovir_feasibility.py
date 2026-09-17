@@ -391,7 +391,31 @@ class RovirFeasibilityTests(unittest.TestCase):
             )
             reference[:, :2, :2, 4, :] = packed.to(torch.complex64) + 1j
             output = base / "feasibility"
-            helper = SimpleNamespace(load_ref=lambda _: reference.clone())
+            calls: list[tuple[tuple[int, ...], int, int]] = []
+
+            def remove_readout_oversampling_kspace(
+                values: object, factor: int, axis: int = 0
+            ) -> object:
+                """Return a distinguishable logical-grid fixture.
+
+                Args:
+                    values: Oversampled physical-coil ACS tensor.
+                    factor: Required readout oversampling factor.
+                    axis: Required readout axis.
+
+                Returns:
+                    Logical-grid tensor used to verify exact center embedding.
+                """
+                tensor = values
+                calls.append((tuple(tensor.shape), factor, axis))
+                return tensor[1::factor].contiguous()
+
+            helper = SimpleNamespace(
+                load_ref=lambda _: reference.clone(),
+                remove_readout_oversampling_kspace=(
+                    remove_readout_oversampling_kspace
+                ),
+            )
             with patch(
                 "wave_retro_lr.mprage.load_wave_mprage_helpers",
                 return_value=helper,
@@ -407,14 +431,46 @@ class RovirFeasibilityTests(unittest.TestCase):
                     / "physical_set4_kspace"
                 )
             )
-            expected = reference[::2, :2, :2, 4, :].numpy()
+            expected = reference[1::2, :2, :2, 4, :].numpy()
             np.testing.assert_array_equal(exported[:, 1:3, 1:3, :], expected)
             outside = exported.copy()
             outside[:, 1:3, 1:3, :] = 0
             self.assertEqual(np.count_nonzero(outside), 0)
             contract = manifest["refscan_contract"]
+            self.assertEqual(calls, [((8, 2, 2, 2), 2, 0)])
+            self.assertEqual(manifest["format_version"], 2)
+            self.assertEqual(
+                contract["readout_oversampling_removal"],
+                {
+                    "method": "centered-image-domain-crop",
+                    "version": 1,
+                    "fft_normalization": "ortho",
+                    "oversampling_factor": 2,
+                    "input_readout": 8,
+                    "output_readout": 4,
+                },
+            )
+            self.assertNotIn("readout_oversampling_removed_by_stride", contract)
             self.assertTrue(contract["acquired_sample_equality"])
             self.assertTrue(contract["zero_outside_centered_acs"])
+
+            legacy = dict(manifest)
+            legacy["format_version"] = 1
+            legacy_contract = dict(contract)
+            legacy_contract.pop("readout_oversampling_removal")
+            legacy_contract["readout_oversampling_removed_by_stride"] = 2
+            legacy["refscan_contract"] = legacy_contract
+            (output / "manifests" / "physical_calibration.json").write_text(
+                json.dumps(legacy), encoding="utf-8"
+            )
+            with patch(
+                "wave_retro_lr.mprage.load_wave_mprage_helpers",
+                return_value=helper,
+            ):
+                with self.assertRaisesRegex(ValueError, "legacy or unversioned"):
+                    export_mprage_physical_calibration(
+                        twix, sequence, normal, output
+                    )
 
     @staticmethod
     def _write_calibration_inputs(root: Path) -> None:

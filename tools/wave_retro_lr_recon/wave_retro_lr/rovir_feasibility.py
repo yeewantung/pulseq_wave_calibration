@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .bart_io import cfl_record, create_cfl, open_cfl, read_shape, sha256_file
+from .mprage import COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL
 from .rovir import (
     region_correlation_diagnostics,
     region_energy_curve,
@@ -169,12 +170,30 @@ def export_mprage_physical_calibration(
                 "ROVir feasibility requires zero-based integrated refscan set 4; "
                 f"found {reference.shape[3]} sets and requested {acs_set_index}."
             )
-        packed_acs = reference[
-            ::readout_oversampling, :nacs, :nacs, acs_set_index, :
+        packed_acs_oversampled = reference[
+            :, :nacs, :nacs, acs_set_index, :
         ].contiguous()
         del reference
         expected_shape = (logical_readout, ncalib, ncalib, physical_coils)
+        expected_oversampled_shape = (
+            ro_oversampled,
+            nacs,
+            nacs,
+            physical_coils,
+        )
         expected_packed_shape = (logical_readout, nacs, nacs, physical_coils)
+        if tuple(packed_acs_oversampled.shape) != expected_oversampled_shape:
+            raise ValueError(
+                "Oversampled physical ACS shape "
+                f"{tuple(packed_acs_oversampled.shape)} is not the required "
+                f"{expected_oversampled_shape}."
+            )
+        packed_acs = native.remove_readout_oversampling_kspace(
+            packed_acs_oversampled,
+            readout_oversampling,
+            axis=0,
+        )
+        del packed_acs_oversampled
         if tuple(packed_acs.shape) != expected_packed_shape:
             raise ValueError(
                 f"Packed physical ACS shape {tuple(packed_acs.shape)} is not "
@@ -210,16 +229,24 @@ def export_mprage_physical_calibration(
         staging.replace(destination)
 
         manifest = {
-            "format_version": 1,
+            "format_version": 2,
             "status": "mprage_rovir_physical_calibration_ready",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "source": source,
             "refscan_contract": {
                 "set_index_zero_based": acs_set_index,
                 "set_name": "integrated refscan set 4",
-                "readout_oversampling_removed_by_stride": readout_oversampling,
+                "readout_oversampling_removal": {
+                    **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+                    "oversampling_factor": readout_oversampling,
+                    "input_readout": ro_oversampled,
+                    "output_readout": logical_readout,
+                },
                 "calibration_matrix_ro_lin_par": [logical_readout, ncalib, ncalib],
                 "central_acs_width": nacs,
+                "packed_acs_oversampled_shape_ro_lin_par_coil": list(
+                    expected_oversampled_shape
+                ),
                 "packed_acs_shape_ro_lin_par_coil": list(expected_packed_shape),
                 "center_embedding_start_lin_par": [lin_start, par_start],
                 "acquired_nonzero_samples_before_embedding": acquired_nonzero,
@@ -1228,6 +1255,26 @@ def _validate_export_reuse(
     """
     if manifest.get("source") != source:
         raise ValueError("Existing physical calibration uses different sources.")
+    geometry = source["geometry"]
+    matrix = tuple(int(value) for value in geometry["logical_matrix_ro_lin_par"])
+    factor = int(geometry["readout_oversampling_factor"])
+    expected_removal = {
+        **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+        "oversampling_factor": factor,
+        "input_readout": matrix[0] * factor,
+        "output_readout": matrix[0],
+    }
+    contract = manifest.get("refscan_contract")
+    if (
+        manifest.get("format_version") != 2
+        or not isinstance(contract, Mapping)
+        or contract.get("readout_oversampling_removal") != expected_removal
+        or "readout_oversampling_removed_by_stride" in contract
+    ):
+        raise ValueError(
+            "Existing physical calibration used legacy or unversioned readout "
+            "oversampling removal; corrected centered image-domain crop is required."
+        )
     current = cfl_record(
         root / "inputs" / "physical_calibration" / "physical_set4_kspace"
     )

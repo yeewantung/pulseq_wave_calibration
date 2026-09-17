@@ -332,10 +332,13 @@ tools/wave_retro_lr_recon/scripts/run_mprage_rovir_feasibility.local.sh validate
 
 The `prepare` stage may appear quiet while it hashes the large TWIX payload and
 loads the integrated refscan. It exports only zero-based set 4, removes readout
-oversampling by the same stride as the accepted normal workflow, and embeds the
-packed ACS at the center of the 72-by-72 calibration grid. The manifest records
-exact acquired-sample equality before and after embedding and requires zeros
-outside the centered ACS.
+oversampling by a full-readout centered IFFT, central nominal-FOV image crop,
+and centered FFT, then embeds the packed ACS at the center of the 72-by-72
+calibration grid. Direct `::4` k-space striding is forbidden because it aliases
+outside-FOV body signal into the head. The manifest records the versioned crop,
+exact acquired-sample equality before and after embedding, and zeros outside
+the centered ACS. Legacy stride-derived ROVir calibration exports are rejected
+rather than silently reused.
 
 The `images` stage contains the explicit commands:
 
