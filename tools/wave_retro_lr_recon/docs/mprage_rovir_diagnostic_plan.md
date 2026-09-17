@@ -93,9 +93,9 @@ complex conjugate of that stored matrix. A complex-unitary interoperability
 test guards this convention; a real-valued transform would not expose a
 conjugation error.
 
-The Python module must not launch BART. A future reviewed shell entry point
-will show every BART command explicitly, consistent with the existing measured
-reconstruction workflow.
+The Python modules must not launch BART. Reviewed shell entry points show every
+BART command explicitly, consistent with the existing measured reconstruction
+workflow.
 
 The frame deliberately excludes subject-specific masks, TWIX loading,
 production output creation, ecalib, Wave reconstruction, and automatic method
@@ -379,3 +379,73 @@ all-channel CSV/PNG curves for clean-positive retention, whole-head mixed
 energy, contaminated-holdout mixed energy, and pure-shoulder energy remaining.
 It does not select a virtual-coil count, run ecalib, or launch Wave
 reconstruction.
+
+## Planned user-facing box-ROI workflow
+
+The feasibility implementation will ultimately become a dataset-independent,
+staged command-line workflow in `wave_retro_lr_recon`. A user should be able to
+start from compatible prepared MPRAGE inputs without editing Python or copying
+a subject-specific launcher. The intended interaction is:
+
+1. generate a geometry-bound, indexed physical-coil ACS RSS image from the
+   corrected alias-free set-4 calibration;
+2. inspect that image and specify an inclusive rectangular box, including a
+   square box when appropriate, in native `RO, LIN, PAR` array coordinates;
+3. generate mask CFLs and review overlays for that exact box without running
+   ROVir;
+4. explicitly approve the candidate ID after visual assessment;
+5. run native `bart rovir`, inspect its conditioning and all-channel retention
+   curves, and explicitly choose the retained coil count; and
+6. project image k-space and ACS with the same transform, run matched ecalib
+   and reconstruction, and produce fixed-window NIfTI QC.
+
+The command interface should expose separate resumable stages rather than hide
+review gates in one opaque command. A future dataset-independent interface may
+take this form; exact names remain subject to code review:
+
+```bash
+sample_mprage_rovir_recon.sh render-acs \
+  TWIX SEQUENCE ACCEPTED_NORMAL_ROOT FEASIBILITY_ROOT
+sample_mprage_rovir_recon.sh propose-box \
+  TWIX SEQUENCE ACCEPTED_NORMAL_ROOT FEASIBILITY_ROOT \
+  --ro 0:20 --lin 0:71 --par 0:71
+sample_mprage_rovir_recon.sh approve-box \
+  FEASIBILITY_ROOT negative_ro000_020
+sample_mprage_rovir_recon.sh estimate-transform FEASIBILITY_ROOT
+sample_mprage_rovir_recon.sh reconstruct \
+  TWIX SEQUENCE ACCEPTED_NORMAL_ROOT FEASIBILITY_ROOT OUTPUT_ROOT \
+  --virtual-coils 24 --ecalib-crop 0.1 -g
+```
+
+All public bounds are human-readable and inclusive; manifests also record the
+corresponding half-open Python slices. Every stage must validate source hashes,
+geometry, finite values, transform orthogonality, and exact artifact reuse.
+Existing outputs are reused only after those checks. The interface must never
+infer or automatically approve an ROI, choose a coil count, rerun PSF
+calibration, merge ACS into image k-space, or overwrite another reviewed ROI
+experiment. Real paths remain confined to ignored local configuration or
+launcher files.
+
+The box is an estimation region, not an anatomical preservation mask. Its
+review overlay must therefore make clear which side of the box is treated as
+negative interference and which exact complement is treated as positive
+signal. Because a box can suppress desired inferior-head or neck signal, the
+final QC must reverse any display-only NIfTI normalization and compare
+candidate reconstructions with one shared absolute window before a setting is
+adopted.
+
+## FMP220 feasibility conclusion
+
+After fixed-window review of ROVir-24 reconstructions using inclusive negative
+RO slabs 0--30, 0--20, and 0--10, the user selected RO 0--20 for FMP220. The
+selected reconstruction uses 24 retained ROVir coils, ecalib crop 0.1, and the
+FISTA lambda-zero control. RO 0--30 and RO 0--10 remain comparison-only
+artifacts and must not be deleted or presented as selected results.
+
+This is a dataset-specific feasibility conclusion, not a default ROI or an
+assumption for another subject. The immutable selection manifest in the
+reviewed output tree binds the decision to the approved mask, BART transform,
+prepared inputs, exact reconstruction commands, magnitude and phase NIfTIs,
+and comparison QC. The generic
+`scripts/record_mprage_rovir_selection.py` command validates those bindings and
+requires explicit user confirmation; it does not run BART or select a winner.

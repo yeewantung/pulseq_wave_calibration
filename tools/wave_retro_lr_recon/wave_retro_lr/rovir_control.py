@@ -504,28 +504,84 @@ def write_mprage_rovir_mask_comparison_qc(
     Side Effects:
         Writes a two-row, three-orientation PNG and JSON manifest.
     """
+    manifest = write_mprage_rovir_mask_series_qc(
+        (
+            ("ROVir-24, negative RO 0--30", ro000_030_nifti),
+            ("ROVir-24, negative RO 0--20", ro000_020_nifti),
+        ),
+        output_directory,
+        figure_filename="rovir24_ro000_030_vs_ro000_020_fixed_window.png",
+    )
+    manifest["status"] = "mprage_rovir_negative_roi_comparison_qc_ready"
+    manifest["ro000_030"] = manifest["candidates"][0]["nifti"]
+    manifest["ro000_020"] = manifest["candidates"][1]["nifti"]
+    _write_json(Path(output_directory).resolve() / "manifest.json", manifest)
+    return manifest
+
+
+def write_mprage_rovir_mask_series_qc(
+    candidates: Sequence[tuple[str, str | Path]],
+    output_directory: str | Path,
+    *,
+    figure_filename: str = "rovir24_negative_roi_series_fixed_window.png",
+) -> dict[str, Any]:
+    """Compare two or more ROVir reconstructions with one restored window.
+
+    Args:
+        candidates: Ordered display-label and magnitude-NIfTI pairs.
+        output_directory: User-approved QC output directory.
+        figure_filename: Plain PNG filename written under the output directory.
+
+    Returns:
+        Manifest describing candidate provenance, scale restoration, shared
+        display window, and the comparison figure.
+
+    Raises:
+        ValueError: If fewer than two candidates are supplied, labels repeat,
+            the filename is unsafe, or NIfTI geometry and values are invalid.
+
+    Side Effects:
+        Writes one multi-row, three-orientation PNG and a JSON manifest.
+    """
     import matplotlib.pyplot as plt
 
-    paths = [Path(ro000_030_nifti).resolve(), Path(ro000_020_nifti).resolve()]
-    images, arrays, normalization = _load_restored_magnitudes(paths)
-    if arrays[0].ndim != 3 or arrays[0].shape != arrays[1].shape or not np.allclose(
-        images[0].affine, images[1].affine, atol=1e-5
+    entries = tuple((str(label), Path(path).resolve()) for label, path in candidates)
+    labels = [label for label, _ in entries]
+    if len(entries) < 2:
+        raise ValueError("ROVir mask-series QC requires at least two candidates.")
+    if any(not label.strip() for label in labels) or len(set(labels)) != len(labels):
+        raise ValueError("ROVir mask-series labels must be nonempty and unique.")
+    if (
+        Path(figure_filename).name != figure_filename
+        or Path(figure_filename).suffix.lower() != ".png"
     ):
-        raise ValueError("ROVir mask-comparison NIfTIs have different geometry.")
+        raise ValueError("ROVir mask-series figure filename must be a plain PNG name.")
+
+    paths = [path for _, path in entries]
+    images, arrays, normalization = _load_restored_magnitudes(paths)
+    reference_shape = arrays[0].shape
+    reference_affine = images[0].affine
+    if arrays[0].ndim != 3 or any(
+        values.shape != reference_shape
+        or not np.allclose(image.affine, reference_affine, atol=1e-5)
+        for image, values in zip(images[1:], arrays[1:], strict=True)
+    ):
+        raise ValueError("ROVir mask-series NIfTIs have different geometry.")
     percentiles = [float(np.percentile(values[values > 0], 99.5)) for values in arrays]
     vmax = max(percentiles)
     if not np.isfinite(vmax) or vmax <= 0:
-        raise ValueError("Shared ROVir mask-comparison window is invalid.")
+        raise ValueError("Shared ROVir mask-series window is invalid.")
 
     output = Path(output_directory).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    figure_path = output / "rovir24_ro000_030_vs_ro000_020_fixed_window.png"
-    indices = tuple(size // 2 for size in arrays[0].shape)
+    figure_path = output / figure_filename
+    indices = tuple(size // 2 for size in reference_shape)
     orientations = ("sagittal", "coronal", "axial")
-    figure, axes = plt.subplots(2, 3, figsize=(12, 8), constrained_layout=True)
-    for row, (name, values) in enumerate(
-        (("ROVir-24, negative RO 0--30", arrays[0]), ("ROVir-24, negative RO 0--20", arrays[1]))
-    ):
+    figure, axes = plt.subplots(
+        len(entries), 3, figsize=(12, 4 * len(entries)), constrained_layout=True,
+        squeeze=False,
+    )
+    for row, ((label, _), values) in enumerate(zip(entries, arrays, strict=True)):
         planes = (
             np.rot90(values[indices[0], :, :]),
             np.rot90(values[:, indices[1], :]),
@@ -533,26 +589,27 @@ def write_mprage_rovir_mask_comparison_qc(
         )
         for column, (orientation, plane) in enumerate(zip(orientations, planes, strict=True)):
             axes[row, column].imshow(plane, cmap="gray", vmin=0, vmax=vmax)
-            axes[row, column].set_title(f"{name}\n{orientation} center")
+            axes[row, column].set_title(f"{label}\n{orientation} center")
             axes[row, column].axis("off")
     figure.suptitle("ROVir negative-ROI comparison; restored magnitude and shared window")
     figure.savefig(figure_path, dpi=180)
     plt.close(figure)
     manifest = {
         "format_version": 1,
-        "status": "mprage_rovir_negative_roi_comparison_qc_ready",
+        "status": "mprage_rovir_negative_roi_series_qc_ready",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "ro000_030": _file_record(paths[0]),
-        "ro000_020": _file_record(paths[1]),
+        "candidates": [
+            {"label": label, "nifti": _file_record(path)} for label, path in entries
+        ],
         "magnitude_normalization_restoration": normalization,
-        "shape": list(arrays[0].shape),
-        "affine": np.asarray(images[0].affine).tolist(),
+        "shape": list(reference_shape),
+        "affine": np.asarray(reference_affine).tolist(),
         "center_indices": list(indices),
         "display_window": {
             "vmin": 0.0,
             "vmax": vmax,
             "per_branch_restored_positive_p99_5": percentiles,
-            "anchor": "maximum of both restored positive-voxel p99.5 values",
+            "anchor": "maximum restored positive-voxel p99.5 across all branches",
             "shared_between_rows": True,
         },
         "figure": _file_record(figure_path),

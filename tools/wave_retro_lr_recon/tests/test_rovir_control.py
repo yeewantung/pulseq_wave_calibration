@@ -23,6 +23,7 @@ from wave_retro_lr.rovir_control import (  # noqa: E402
     prepare_mprage_rovir_comparison,
     write_mprage_rovir_comparison_qc,
     write_mprage_rovir_mask_comparison_qc,
+    write_mprage_rovir_mask_series_qc,
 )
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
 
@@ -223,7 +224,31 @@ class RovirControlTests(unittest.TestCase):
             self.assertTrue(
                 (root / "mask_qc" / "rovir24_ro000_030_vs_ro000_020_fixed_window.png").is_file()
             )
+            self.assertIn("ro000_030", mask_manifest)
+            self.assertIn("ro000_020", mask_manifest)
             self.assertFalse(mask_manifest["automatic_winner_selected"])
+
+            series_manifest = write_mprage_rovir_mask_series_qc(
+                (
+                    ("negative RO 0--30", first_path),
+                    ("negative RO 0--20", second_path),
+                    ("negative RO 0--10", first_path),
+                ),
+                root / "series_qc",
+                figure_filename="three_masks.png",
+            )
+            self.assertTrue((root / "series_qc" / "three_masks.png").is_file())
+            self.assertEqual(len(series_manifest["candidates"]), 3)
+            percentiles = series_manifest["display_window"][
+                "per_branch_restored_positive_p99_5"
+            ]
+            self.assertAlmostEqual(percentiles[2], percentiles[0])
+            self.assertGreater(percentiles[1], percentiles[0])
+            self.assertEqual(
+                [entry["label"] for entry in series_manifest["candidates"]],
+                ["negative RO 0--30", "negative RO 0--20", "negative RO 0--10"],
+            )
+            self.assertFalse(series_manifest["automatic_winner_selected"])
 
     def test_sample_script_keeps_bart_commands_explicit(self) -> None:
         """Keep ecalib and CPU/GPU FISTA-r0 commands visible in Bash.
