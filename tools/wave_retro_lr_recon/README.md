@@ -77,6 +77,14 @@ The complete dual-branch normal, retrospective, NIfTI-conversion, and shared
 head-mask collection workflow passed representative real measured-MPRAGE
 visual validation on 2026-09-01.
 
+Coil calibration removes readout oversampling from integrated set-4 ACS by a
+centered full-readout IFFT, central nominal-FOV image crop, and centered FFT.
+Direct readout k-space striding is forbidden because it aliases extended-FOV
+signal into the head. The Wave image k-space and PSF remain on the oversampled
+readout grid required by the forward model. Normal manifests record this
+versioned calibration contract; older stride-derived normal inputs are not
+eligible for exact or compatibility reuse.
+
 ### 1. Normal reconstruction
 
 Choose a new output root, then run:

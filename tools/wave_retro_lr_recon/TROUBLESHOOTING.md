@@ -1,5 +1,16 @@
 # Wave reconstruction troubleshooting
 
+## Existing MPRAGE normal inputs are rejected after the readout-crop fix
+
+Integrated set-4 ACS must remove readout oversampling with a centered
+IFFT-crop-FFT operation before PCA compression and ESPIRiT. Historical normal
+inputs prepared by direct readout k-space striding can contain aliased
+outside-FOV anatomy and are intentionally not reusable, including through the
+legacy PSF-metadata compatibility path. Keep the historical output unchanged
+and prepare a new output root. The new manifest records
+`coil_compression.readout_oversampling_removal` with method
+`centered-image-domain-crop`.
+
 ## Frozen provenance identifiers
 
 These values are needed only for auditing historical selections and should not
