@@ -20,6 +20,7 @@ from wave_retro_lr.rovir_feasibility import (  # noqa: E402
     _validate_four_region_masks,
     approve_region_mask_candidate,
     derive_region_mask_candidates,
+    derive_ro_partition_mask_candidate,
     export_manual_roi_annotation_nifti,
     export_mprage_physical_calibration,
     prepare_masked_rovir_inputs,
@@ -182,6 +183,62 @@ class RovirFeasibilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "holdout must be disjoint"):
             _validate_four_region_masks(
                 preservation, invalid_positive, negative, holdout
+            )
+
+    def test_exact_ro_partition_supports_empty_holdout_and_two_region_qc(self) -> None:
+        """Bind an inclusive RO slab to complementary solver regions.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_calibration_inputs(root)
+            version = root / "logs" / "bart_version.txt"
+            version.parent.mkdir()
+            version.write_text("v1.0.00-test\n", encoding="utf-8")
+            record_calibration_images(root, version)
+            candidates = derive_ro_partition_mask_candidate(root, 2)
+            self.assertEqual(candidates["format_version"], 2)
+            self.assertEqual(len(candidates["candidates"]), 1)
+            candidate = candidates["candidates"][0]
+            self.assertEqual(candidate["candidate_id"], "negative_ro000_002")
+            candidate_root = root / "masks" / "candidates" / candidate["candidate_id"]
+            negative = np.asarray(
+                open_cfl(candidate_root / "negative_estimation_mask")
+            ).real
+            positive = np.asarray(
+                open_cfl(candidate_root / "positive_estimation_mask")
+            ).real
+            holdout = np.asarray(
+                open_cfl(candidate_root / "contaminated_holdout_mask")
+            ).real
+            self.assertTrue(np.all(negative[:3] == 1))
+            self.assertTrue(np.all(negative[3:] == 0))
+            np.testing.assert_array_equal(positive, 1 - negative)
+            self.assertEqual(np.count_nonzero(holdout), 0)
+            self.assertEqual(candidate["validation"]["contaminated_holdout_voxels"], 0)
+
+            approve_region_mask_candidate(root, candidate["candidate_id"])
+            prepare_masked_rovir_inputs(root, readout_chunk=2)
+            transform_directory = root / "transforms" / "rovir_full"
+            transform_directory.mkdir(parents=True)
+            transform = create_cfl(
+                transform_directory / "transform", (1, 1, 1, 2, 2)
+            )
+            transform[...] = 0
+            transform[0, 0, 0, :, :] = np.eye(2, dtype=np.complex64)
+            transform.flush()
+            del transform
+            qc = write_rovir_transform_qc(root, version)
+            self.assertIsNone(
+                qc["region_curves"]["contaminated_holdout_vs_pure_negative"]
+            )
+            self.assertTrue(
+                (root / "diagnostics" / "region_curves" / "rovir_two_region_curves.csv").is_file()
+            )
+            self.assertTrue(
+                (root / "diagnostics" / "region_curves" / "rovir_two_region_curves.png").is_file()
             )
 
     def test_reviewed_masks_inputs_and_transform_qc(self) -> None:

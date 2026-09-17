@@ -15,6 +15,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 from wave_retro_lr.rovir_feasibility import (  # noqa: E402
     approve_region_mask_candidate,
     derive_region_mask_candidates,
+    derive_ro_partition_mask_candidate,
     export_manual_roi_annotation_nifti,
     export_mprage_physical_calibration,
     preflight_mprage_rovir_sources,
@@ -57,6 +58,10 @@ def _parser() -> argparse.ArgumentParser:
     masks = commands.add_parser("derive-masks")
     masks.add_argument("feasibility_output_root", type=Path)
     masks.add_argument("candidate_config", type=Path)
+
+    ro_partition = commands.add_parser("derive-ro-partition")
+    ro_partition.add_argument("feasibility_output_root", type=Path)
+    ro_partition.add_argument("negative_ro_stop_inclusive", type=int)
 
     approve = commands.add_parser("approve-mask")
     approve.add_argument("feasibility_output_root", type=Path)
@@ -114,6 +119,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.stage == "derive-masks":
         result = derive_region_mask_candidates(
             args.feasibility_output_root, args.candidate_config
+        )
+    elif args.stage == "derive-ro-partition":
+        result = derive_ro_partition_mask_candidate(
+            args.feasibility_output_root,
+            args.negative_ro_stop_inclusive,
         )
     elif args.stage == "approve-mask":
         result = approve_region_mask_candidate(

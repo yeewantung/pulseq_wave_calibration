@@ -855,6 +855,157 @@ def derive_region_mask_candidates(
     return manifest
 
 
+def derive_ro_partition_mask_candidate(
+    feasibility_output_root: str | Path,
+    negative_ro_stop_inclusive: int,
+) -> dict[str, Any]:
+    """Create one exact RO-slab nuisance mask and its complementary signal mask.
+
+    Args:
+        feasibility_output_root: Approved diagnostic root containing RSS data.
+        negative_ro_stop_inclusive: Final zero-based RO index included in the
+            nuisance slab. LIN and PAR use their complete array ranges.
+
+    Returns:
+        One-candidate manifest ready for explicit user approval.
+
+    Raises:
+        FileExistsError: If mask candidates already exist.
+        ValueError: If the bound or calibration geometry is invalid.
+
+    Side Effects:
+        Atomically writes exact BART masks and indexed review figures. It does
+        not approve the candidate or launch BART.
+    """
+    root = Path(feasibility_output_root).expanduser().resolve()
+    images_manifest_path = root / CALIBRATION_IMAGES_MANIFEST
+    _read_json(images_manifest_path)
+    rss_path = root / "inputs" / "physical_calibration" / "physical_set4_rss"
+    rss = np.asarray(_spatial_cfl_view(rss_path).real, dtype=np.float64)
+    if isinstance(negative_ro_stop_inclusive, (bool, np.bool_)):
+        raise ValueError("Negative RO stop must be an integer array index.")
+    stop = int(negative_ro_stop_inclusive)
+    if stop < 0 or stop >= rss.shape[0] - 1:
+        raise ValueError(
+            f"Negative RO stop must lie in [0, {rss.shape[0] - 2}]; found {stop}."
+        )
+
+    candidate_id = f"negative_ro000_{stop:03d}"
+    negative = np.zeros(rss.shape, dtype=np.float32)
+    negative[: stop + 1, :, :] = 1.0
+    positive = 1.0 - negative
+    preservation = positive.copy()
+    holdout = np.zeros(rss.shape, dtype=np.float32)
+    validation = _validate_four_region_masks(
+        preservation, positive, negative, holdout
+    )
+    measured_gap = _minimum_mask_distance(positive, negative)
+    destination = root / "masks" / "candidates"
+    if destination.exists():
+        raise FileExistsError(f"ROVir mask candidates already exist: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".candidates-", dir=destination.parent))
+    try:
+        candidate_directory = staging / candidate_id
+        candidate_directory.mkdir()
+        masks = {
+            "preservation_mask": preservation,
+            "positive_estimation_mask": positive,
+            "negative_estimation_mask": negative,
+            "contaminated_holdout_mask": holdout,
+        }
+        for name, mask in masks.items():
+            _write_real_cfl(candidate_directory / name, mask)
+        overlay_path = candidate_directory / "review_overlay.png"
+        _write_region_overlay(
+            rss,
+            preservation,
+            positive,
+            negative,
+            holdout,
+            overlay_path,
+            candidate_id,
+        )
+        overlay_montages = _write_region_slice_montages(
+            rss,
+            preservation,
+            positive,
+            negative,
+            holdout,
+            candidate_directory,
+            candidate_id,
+        )
+        parameters = {
+            "construction": "exact complementary RO partition",
+            "axis_order": ["RO", "LIN", "PAR"],
+            "negative_human_inclusive_bounds": {
+                "RO": [0, stop],
+                "LIN": [0, rss.shape[1] - 1],
+                "PAR": [0, rss.shape[2] - 1],
+            },
+            "negative_python_slices": {
+                "RO": [0, stop + 1],
+                "LIN": [0, rss.shape[1]],
+                "PAR": [0, rss.shape[2]],
+            },
+            "positive_is_exact_complement": True,
+            "contaminated_holdout_used": False,
+        }
+        candidate_record: dict[str, Any] = {
+            "candidate_id": candidate_id,
+            "status": "ready_for_visual_review",
+            "parameters": parameters,
+            "validation": validation,
+            "minimum_positive_to_negative_distance_voxels": measured_gap,
+            "review_overlay": _relocate_file_record(
+                _file_record(overlay_path),
+                candidate_directory,
+                destination / candidate_id,
+            ),
+            "review_slice_montages": [
+                _relocate_file_record(
+                    _file_record(path),
+                    candidate_directory,
+                    destination / candidate_id,
+                )
+                for path in overlay_montages
+            ],
+        }
+        for name in REGION_MASK_NAMES:
+            candidate_record[name] = _relocate_cfl_record(
+                cfl_record(candidate_directory / name),
+                candidate_directory,
+                destination / candidate_id,
+            )
+        manifest = {
+            "format_version": 2,
+            "status": "mprage_rovir_mask_candidates_ready",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "calibration_images_manifest_sha256": sha256_file(images_manifest_path),
+            "rss": cfl_record(rss_path),
+            "construction": "exact complementary RO partition",
+            "automatic_ranking": False,
+            "automatic_selection": False,
+            "selection_status": "not_selected",
+            "candidates": [candidate_record],
+        }
+        _write_json(staging / "manifest.json", manifest)
+        (staging / "REVIEW_INSTRUCTIONS.txt").write_text(
+            "Review review_overlay.png and all indexed review_slices_*.png.\n"
+            "Red is the exact nuisance slab; yellow and blue are its exact "
+            "complement used for desired-signal preservation and estimation.\n"
+            "The empty magenta holdout is intentional for this two-region "
+            "partition. No candidate is selected automatically.\n",
+            encoding="utf-8",
+        )
+        staging.replace(destination)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+    return manifest
+
+
 def approve_region_mask_candidate(
     feasibility_output_root: str | Path,
     candidate_id: str,
@@ -1095,31 +1246,38 @@ def write_rovir_transform_qc(
         coil_axis=3,
         voxel_chunk=65536,
     )
-    holdout_curve = region_energy_curve(
-        images,
-        transform,
-        holdout,
-        negative,
-        counts,
-        coil_axis=3,
-        voxel_chunk=65536,
-    )
     diagnostics = root / "diagnostics" / "region_curves"
     diagnostics.mkdir(parents=True, exist_ok=True)
-    csv_path = diagnostics / "rovir_four_region_curves.csv"
-    _write_four_region_curve_csv(
-        csv_path,
-        solver_curve["channel_counts"],
-        preservation_curve["channel_counts"],
-        holdout_curve["channel_counts"],
-    )
-    plot_path = diagnostics / "rovir_four_region_curves.png"
-    _write_four_region_curve_plot(
-        plot_path,
-        solver_curve["channel_counts"],
-        preservation_curve["channel_counts"],
-        holdout_curve["channel_counts"],
-    )
+    if np.any(holdout > 0):
+        holdout_curve = region_energy_curve(
+            images,
+            transform,
+            holdout,
+            negative,
+            counts,
+            coil_axis=3,
+            voxel_chunk=65536,
+        )
+        csv_path = diagnostics / "rovir_four_region_curves.csv"
+        _write_four_region_curve_csv(
+            csv_path,
+            solver_curve["channel_counts"],
+            preservation_curve["channel_counts"],
+            holdout_curve["channel_counts"],
+        )
+        plot_path = diagnostics / "rovir_four_region_curves.png"
+        _write_four_region_curve_plot(
+            plot_path,
+            solver_curve["channel_counts"],
+            preservation_curve["channel_counts"],
+            holdout_curve["channel_counts"],
+        )
+    else:
+        holdout_curve = None
+        csv_path = diagnostics / "rovir_two_region_curves.csv"
+        _write_two_region_curve_csv(csv_path, solver_curve["channel_counts"])
+        plot_path = diagnostics / "rovir_two_region_curves.png"
+        _write_two_region_curve_plot(plot_path, solver_curve["channel_counts"])
     manifest = {
         "format_version": 1,
         "status": "mprage_bart_rovir_transform_qc_ready",
@@ -1134,7 +1292,9 @@ def write_rovir_transform_qc(
             "solver_clean_positive_vs_pure_negative": solver_curve,
             "whole_head_preservation_vs_pure_negative": preservation_curve,
             "contaminated_holdout_vs_pure_negative": holdout_curve,
-            "holdout_energy_is_not_anatomy_specific": True,
+            "holdout_energy_is_not_anatomy_specific": (
+                True if holdout_curve is not None else None
+            ),
         },
         "region_curve_csv": _file_record(csv_path),
         "region_curve_plot": _file_record(plot_path),
@@ -1395,8 +1555,8 @@ def _validate_four_region_masks(
         JSON-compatible support and overlap diagnostics.
 
     Raises:
-        ValueError: If masks are nonbinary, geometrically incompatible, empty,
-            or violate subset and disjointness requirements.
+        ValueError: If masks are nonbinary, geometrically incompatible, required
+            estimation regions are empty, or subset/disjointness rules fail.
     """
     masks = {
         "preservation": np.asarray(preservation),
@@ -1414,7 +1574,7 @@ def _validate_four_region_masks(
         if not np.isfinite(values).all() or np.any((values != 0) & (values != 1)):
             raise ValueError(f"ROVir {name} mask must be finite and binary.")
         support = values > 0
-        if not np.any(support):
+        if name != "contaminated_holdout" and not np.any(support):
             raise ValueError(f"ROVir {name} mask is empty.")
         supports[name] = support
     if np.any(supports["positive_estimation"] & ~supports["preservation"]):
@@ -1707,6 +1867,95 @@ def _draw_mask_panel(
     axis.imshow(magenta, cmap="RdPu", alpha=0.40, vmin=0, vmax=1)
     axis.set_title(title)
     axis.axis("off")
+
+
+def _write_two_region_curve_csv(
+    path: Path,
+    solver_entries: Sequence[Mapping[str, Any]],
+) -> None:
+    """Write desired-signal retention and nuisance-energy curves.
+
+    Args:
+        path: Destination CSV path.
+        solver_entries: Per-channel two-region energy metrics.
+
+    Side Effects:
+        Writes one UTF-8 CSV without selecting a virtual-coil count.
+    """
+    fields = (
+        "virtual_coils",
+        "positive_retention_fraction",
+        "negative_remaining_fraction",
+        "relative_positive_to_negative",
+    )
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for entry in solver_entries:
+            writer.writerow(
+                {
+                    "virtual_coils": int(entry["virtual_coils"]),
+                    "positive_retention_fraction": entry[
+                        "signal_retention_fraction"
+                    ],
+                    "negative_remaining_fraction": entry[
+                        "interference_remaining_fraction"
+                    ],
+                    "relative_positive_to_negative": entry[
+                        "relative_signal_to_interference"
+                    ],
+                }
+            )
+
+
+def _write_two_region_curve_plot(
+    path: Path,
+    solver_entries: Sequence[Mapping[str, Any]],
+) -> None:
+    """Plot complementary positive and negative cumulative energy curves.
+
+    Args:
+        path: Destination PNG path.
+        solver_entries: Per-channel two-region energy metrics.
+
+    Side Effects:
+        Writes one fixed-axis PNG without selecting a virtual-coil count.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    counts = [int(entry["virtual_coils"]) for entry in solver_entries]
+    positive = [
+        float(entry["signal_retention_fraction"]) for entry in solver_entries
+    ]
+    negative = [
+        float(entry["interference_remaining_fraction"])
+        for entry in solver_entries
+    ]
+    figure = Figure(figsize=(8, 5), constrained_layout=True)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    axis.plot(
+        counts,
+        positive,
+        marker="o",
+        markersize=3,
+        label="positive complement retained",
+    )
+    axis.plot(
+        counts,
+        negative,
+        marker="o",
+        markersize=3,
+        label="negative RO slab remaining",
+    )
+    axis.set_xlabel("Leading ordered ROVir virtual coils")
+    axis.set_ylabel("Fraction of physical-coil region energy")
+    axis.set_ylim(0, 1.05)
+    axis.grid(True, alpha=0.25)
+    axis.legend()
+    axis.set_title("ROVir complementary two-region tradeoff; no automatic selection")
+    figure.savefig(path, dpi=180)
 
 
 def _write_four_region_curve_csv(
