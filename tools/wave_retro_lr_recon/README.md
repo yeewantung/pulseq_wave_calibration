@@ -62,6 +62,11 @@ accepted PSF is hash-validated and copied without recalibration, while
 `ecalib` and FISTA-r0 retain the explicitly requested matched settings. The
 ignored local launcher keeps all subject-specific paths out of tracked source.
 
+A staged diagnostic for coherent shoulder-wrap artifacts, including ROVir
+backend selection, manual sparse-ROI annotation, mask and transform contracts,
+and review gates before reconstruction, is documented in
+[`mprage_rovir_diagnostic_plan.md`](docs/mprage_rovir_diagnostic_plan.md).
+
 ## MPRAGE workflow
 
 For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical

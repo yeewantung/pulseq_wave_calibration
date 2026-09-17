@@ -1,0 +1,50 @@
+{
+  "scientific_status": "template_only_do_not_run",
+  "coordinate_contract": {
+    "axis_order": ["RO", "LIN", "PAR"],
+    "normalized_range": [-1.0, 1.0],
+    "instructions": "Replace every illustrative ellipsoid after reviewing all indexed slice montages. The whole-head preservation and contaminated holdout are evaluation-only; bart rovir receives only positive_estimation and negative_estimation."
+  },
+  "candidates": [
+    {
+      "candidate_id": "replace_after_review",
+      "minimum_safety_gap_voxels": 2,
+      "preservation": {
+        "minimum_relative_rss": 0.0,
+        "ellipsoids": [
+          {
+            "center_normalized": [0.0, 0.0, 0.0],
+            "radii_normalized": [0.6, 0.6, 0.6]
+          }
+        ]
+      },
+      "positive_estimation": {
+        "minimum_relative_rss": 0.02,
+        "ellipsoids": [
+          {
+            "center_normalized": [-0.2, 0.0, 0.0],
+            "radii_normalized": [0.3, 0.3, 0.3]
+          }
+        ]
+      },
+      "negative_estimation": {
+        "minimum_relative_rss": 0.02,
+        "ellipsoids": [
+          {
+            "center_normalized": [0.8, 0.8, 0.8],
+            "radii_normalized": [0.1, 0.1, 0.1]
+          }
+        ]
+      },
+      "contaminated_holdout": {
+        "minimum_relative_rss": 0.0,
+        "ellipsoids": [
+          {
+            "center_normalized": [0.2, 0.0, 0.0],
+            "radii_normalized": [0.1, 0.1, 0.1]
+          }
+        ]
+      }
+    }
+  ]
+}

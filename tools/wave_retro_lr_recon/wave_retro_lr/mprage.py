@@ -351,6 +351,7 @@ def load_wave_mprage_helpers() -> Any:
         sys.path.insert(0, str(recon_root))
     twix_import = importlib.import_module("utils.twix_import")
     coil_compression = importlib.import_module("utils.coil_compression_kspace")
+    nifti_export = importlib.import_module("utils.nifti_export_twix")
     native = importlib.import_module("recon_wave_mprage_from_twix_integrated_nifti")
     return SimpleNamespace(
         supports_spatial_projection_selection=True,
@@ -380,6 +381,9 @@ def load_wave_mprage_helpers() -> Any:
         _assert_sag_geometry=native._assert_sag_geometry,
         save_mprage_output_to_nifti=native.save_mprage_output_to_nifti,
         _sanitize_filename_component=native._sanitize_filename_component,
+        apply_array_axis_flips=nifti_export.apply_array_axis_flips,
+        canonicalize_arrays_to_ras=nifti_export.canonicalize_arrays_to_ras,
+        make_nifti_affine_from_twix=nifti_export.make_nifti_affine_from_twix,
     )
 
 
