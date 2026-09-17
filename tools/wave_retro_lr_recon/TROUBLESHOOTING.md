@@ -96,7 +96,14 @@ there cause a hard failure instead of being overwritten.
 
 ## A legacy GRE normal manifest does not match current metadata
 
-Do not edit the historical manifest. Run the focused
+First inspect `coil_compression.readout_oversampling_removal`. Historical GRE
+normal inputs prepared by direct RO k-space striding, or lacking this
+versioned centered-image-domain crop record, are intentionally not reusable.
+Their calibration can contain aliased outside-FOV anatomy. Keep that output
+unchanged and use a new output root to prepare corrected normal inputs.
+
+For inputs that already record corrected coil calibration but only predate
+current PSF metadata, do not edit the historical manifest. Run the focused
 `sample_gre_retro_r3x3_recon.sh` entry point with the original TWIX, sequence,
 output root, and matching ecalib crop. Retrospective compatibility accepts only
 source-identical regular-R3x1 normal artifacts, validates their core grids and

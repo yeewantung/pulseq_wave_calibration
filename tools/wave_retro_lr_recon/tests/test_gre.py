@@ -21,6 +21,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.bart_io import create_cfl, open_cfl, read_shape  # noqa: E402
 from wave_retro_lr.gre import (  # noqa: E402
+    COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
     GRE_BART_ARRAY_AXIS_FLIPS,
     GRE_GEOMETRY_IDS,
     GRE_LOGICAL_AXIS_ROLES,
@@ -33,6 +34,7 @@ from wave_retro_lr.gre import (  # noqa: E402
     _file_identity,
     _normalize_psf_settings,
     _normal_manifest_matches_reusable_artifact,
+    _uses_alias_free_coil_calibration,
     _native_r3x3_residue,
     _case_mask,
     _read_shared_psf_coefficients,
@@ -65,6 +67,29 @@ from scripts.convert_gre_bart_to_nifti import _canonicalize_saved_nifti  # noqa:
 from scripts.prepare_gre_normal import _parser as normal_parser  # noqa: E402
 from scripts.prepare_gre_retro import _parser as retro_parser  # noqa: E402
 from scripts.prepare_gre_retro_r3x3 import _parser as r3x3_parser  # noqa: E402
+
+
+def _corrected_gre_coil_compression(
+    logical_readout: int = 250, oversampling_factor: int = 4
+) -> dict[str, object]:
+    """Return corrected GRE coil-calibration manifest fields.
+
+    Args:
+        logical_readout: Nominal-FOV readout matrix size.
+        oversampling_factor: Acquired readout oversampling factor.
+
+    Returns:
+        Coil-compression record with alias-free readout-crop provenance.
+    """
+
+    return {
+        "readout_oversampling_removal": {
+            **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
+            "oversampling_factor": oversampling_factor,
+            "input_readout": logical_readout * oversampling_factor,
+            "output_readout": logical_readout,
+        }
+    }
 
 
 class GreGeometryAndEchoTests(unittest.TestCase):
@@ -228,12 +253,21 @@ class GreGeometryAndEchoTests(unittest.TestCase):
                     "twix": _file_identity(twix),
                     "sequence": _file_identity(sequence, include_hash=True),
                 },
-                "geometry": {},
+                "geometry": {
+                    "matrix_ro_lin_par": [250, 250, 72],
+                    "readout_oversampling_factor": 4,
+                },
                 "sampling": {},
                 "psf_calibration": {"request": {"coefficient_processing": "smooth"}},
                 "echoes": [{"echo": 1}, {"echo": 2}],
             }
             automatic = _normalize_psf_settings("sine-line", None, None)
+            self.assertFalse(
+                _normal_manifest_matches_reusable_artifact(
+                    manifest, twix, sequence, automatic
+                )
+            )
+            manifest["coil_compression"] = _corrected_gre_coil_compression()
             self.assertTrue(
                 _normal_manifest_matches_reusable_artifact(
                     manifest, twix, sequence, automatic
@@ -252,6 +286,29 @@ class GreGeometryAndEchoTests(unittest.TestCase):
                     manifest, other, sequence, automatic
                 )
             )
+
+    def test_gre_calibration_requires_alias_free_readout_provenance(self) -> None:
+        """Reject stride-derived manifests and forbid stride in preparation."""
+
+        manifest = {
+            "geometry": {
+                "matrix_ro_lin_par": [250, 250, 72],
+                "readout_oversampling_factor": 4,
+            },
+            "coil_compression": _corrected_gre_coil_compression(),
+        }
+        self.assertTrue(_uses_alias_free_coil_calibration(manifest))
+        manifest["coil_compression"]["readout_oversampling_removal"][
+            "method"
+        ] = "direct-kspace-stride"
+        self.assertFalse(_uses_alias_free_coil_calibration(manifest))
+
+        source = (TOOL_ROOT / "wave_retro_lr" / "gre.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("native.remove_readout_oversampling_kspace(", source)
+        self.assertNotIn("[::os_factor]", source)
+        self.assertNotIn("x_step=os_factor", source)
 
     def test_sequence_and_twix_echo_count_and_te_must_match(self) -> None:
         """Reject count or TE disagreement before reconstruction preparation."""
@@ -537,7 +594,9 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
                     "case_id": "native_r3x1",
                     "matrix_ro_lin_par": [250, 12, 72],
                     "fov_mm_ro_lin_par": [220.0, 10.8, 180.0],
+                    "readout_oversampling_factor": 4,
                 },
+                "coil_compression": _corrected_gre_coil_compression(),
                 "sampling": {**source_sampling, "path": str(inputs / "sampling_mask.npy")},
                 "psf_calibration": {
                     "request": {"coefficient_processing": "smooth"},
