@@ -106,8 +106,17 @@ def _recorded_commands(inputs: Path, image: Path, manifest: dict[str, Any]) -> d
         NIfTI metadata fields containing both shell-escaped commands.
     """
     wave_record = image.parent / "wave_command.txt"
-    dataset_root = inputs.parents[2] if "case" in manifest else inputs.parents[1]
-    ecalib_record = dataset_root / "normal" / "bart_output" / "ecalib_command.txt"
+    layout = manifest.get("reconstruction_layout")
+    if isinstance(layout, dict) and isinstance(
+        layout.get("bart_output_relative_to_inputs"), str
+    ):
+        bart_output = (inputs / layout["bart_output_relative_to_inputs"]).resolve()
+        if inputs.parent not in bart_output.parents:
+            raise ValueError("Manifest BART-output layout escapes its reconstruction branch.")
+        ecalib_record = bart_output / "ecalib_command.txt"
+    else:
+        dataset_root = inputs.parents[2] if "case" in manifest else inputs.parents[1]
+        ecalib_record = dataset_root / "normal" / "bart_output" / "ecalib_command.txt"
     for label, path in (("wave", wave_record), ("ecalib", ecalib_record)):
         if not path.is_file():
             raise FileNotFoundError(f"Missing recorded {label} command: {path}")
