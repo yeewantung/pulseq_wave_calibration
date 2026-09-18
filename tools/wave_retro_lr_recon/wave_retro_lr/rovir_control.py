@@ -44,6 +44,7 @@ def prepare_mprage_rovir_comparison(
     *,
     channel_counts: Sequence[int] = (24, 48),
     partition_progress_interval: int = 12,
+    canonical_single_branch: bool = False,
 ) -> dict[str, Any]:
     """Prepare matched ROVir-projected inputs for several retained coil counts.
 
@@ -58,6 +59,8 @@ def prepare_mprage_rovir_comparison(
         channel_counts: Unique retained ROVir coil counts to prepare.
         partition_progress_interval: Number of acquired partition planes
             between preparation progress messages.
+        canonical_single_branch: Write one selected count directly below
+            ``output_root/bart_inputs`` instead of comparison subdirectories.
 
     Returns:
         Shared manifest binding every prepared branch to one source and ROVir
@@ -79,6 +82,8 @@ def prepare_mprage_rovir_comparison(
     if not counts or len(set(counts)) != len(counts) or any(value < 1 for value in counts):
         raise ValueError("ROVir channel counts must be a nonempty unique sequence.")
     counts = tuple(sorted(counts))
+    if canonical_single_branch and len(counts) != 1:
+        raise ValueError("Canonical ROVir preparation requires exactly one coil count.")
     if partition_progress_interval < 1:
         raise ValueError("Partition progress interval must be positive.")
 
@@ -128,7 +133,12 @@ def prepare_mprage_rovir_comparison(
         raise ValueError(f"ROVir channel counts exceed {physical_coils}: {counts}.")
 
     destinations = {
-        count: root / f"rovir_ncc{count}" / "bart_inputs" for count in counts
+        count: (
+            root / "bart_inputs"
+            if canonical_single_branch
+            else root / f"rovir_ncc{count}" / "bart_inputs"
+        )
+        for count in counts
     }
     existing: dict[int, dict[str, Any]] = {}
     for count, destination in destinations.items():
@@ -143,7 +153,13 @@ def prepare_mprage_rovir_comparison(
             raise FileExistsError(f"ROVir BART input directory is not empty: {destination}")
     if len(existing) == len(counts):
         return _write_shared_manifest(
-            root, source, feasibility, transform_record, transform_validation, existing
+            root,
+            source,
+            feasibility,
+            transform_record,
+            transform_validation,
+            existing,
+            canonical_single_branch=canonical_single_branch,
         )
 
     geometry = source["geometry"]
@@ -382,7 +398,13 @@ def prepare_mprage_rovir_comparison(
             staging.replace(destination)
             branches[count] = branch_manifest
         return _write_shared_manifest(
-            root, source, feasibility, transform_record, transform_validation, branches
+            root,
+            source,
+            feasibility,
+            transform_record,
+            transform_validation,
+            branches,
+            canonical_single_branch=canonical_single_branch,
         )
     except Exception:
         for output in wave_outputs.values():
@@ -678,6 +700,8 @@ def _write_shared_manifest(
     transform_record: Mapping[str, Any],
     transform_validation: Mapping[str, Any],
     branches: Mapping[int, Mapping[str, Any]],
+    *,
+    canonical_single_branch: bool = False,
 ) -> dict[str, Any]:
     """Write the shared manifest after validating all requested branches.
 
@@ -688,6 +712,8 @@ def _write_shared_manifest(
         transform_record: Exact full-transform CFL record.
         transform_validation: Orthonormality validation report.
         branches: Prepared branch manifests keyed by retained coil count.
+        canonical_single_branch: Whether one branch occupies the canonical
+            direct ``bart_inputs`` layout.
 
     Returns:
         Shared JSON-compatible manifest.
@@ -697,7 +723,11 @@ def _write_shared_manifest(
     """
     records = {}
     for count in sorted(branches):
-        path = root / f"rovir_ncc{count}" / "bart_inputs" / "manifest.json"
+        path = (
+            root / "bart_inputs" / "manifest.json"
+            if canonical_single_branch
+            else root / f"rovir_ncc{count}" / "bart_inputs" / "manifest.json"
+        )
         records[f"rovir_ncc{count}"] = _file_record(path)
     manifest = {
         "format_version": 1,
@@ -711,8 +741,14 @@ def _write_shared_manifest(
         "branches": records,
         "same_transform_image_source_acs_psf_and_sampling": True,
         "automatic_winner_selected": False,
+        "canonical_single_branch": canonical_single_branch,
     }
-    _write_json(root / "shared" / "manifest.json", manifest)
+    manifest_path = (
+        root / "preparation_manifest.json"
+        if canonical_single_branch
+        else root / "shared" / "manifest.json"
+    )
+    _write_json(manifest_path, manifest)
     return manifest
 
 

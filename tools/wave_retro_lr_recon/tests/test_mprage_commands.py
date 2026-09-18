@@ -173,6 +173,37 @@ class SampleCommandTests(unittest.TestCase):
         self.assertEqual(defaults.closing_radius_mm, 1.5)
         self.assertEqual(defaults.dilation_radius_mm, 0.0)
 
+    def test_public_rovir_cli_has_one_review_gate_and_no_config(self) -> None:
+        """Keep the optional ROVir recovery interface compact and explicit.
+
+        Returns:
+            None.
+        """
+        public = SCRIPTS / "sample_mprage_rovir_recon.sh"
+        retro = SCRIPTS / "sample_mprage_rovir_retro_recon.sh"
+        for script in (public, retro):
+            subprocess.run(["bash", "-n", str(script)], check=True)
+        completed = subprocess.run(
+            ["bash", str(public), "--help"], check=False, capture_output=True, text=True
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("inspect [RECONSTRUCTION_ROOT]", completed.stdout)
+        self.assertIn("run [RECONSTRUCTION_ROOT]", completed.stdout)
+        self.assertIn("--null-box", completed.stdout)
+        self.assertNotIn("--config", completed.stdout)
+        source = public.read_text(encoding="utf-8")
+        self.assertEqual(source.count("read -r -p"), 1)
+        self.assertIn("bart fft -iu 7", source)
+        self.assertIn("bart rss 8", source)
+        self.assertIn("bart rovir", source)
+        self.assertIn("bart ecalib -m 1 -c", source)
+        self.assertIn('WAVE_ARGS=(-w -f -r 0 -i 100 -t 1e-6)', source)
+        retro_source = (SCRIPTS / "sample_mprage_retro_lr_recon.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("--rovir", retro_source)
+        self.assertIn("sample_mprage_rovir_retro_recon.sh", retro_source)
+
     def test_mprage_preparation_defaults_to_automatic_sine_line(self) -> None:
         """Keep the sample, preparation CLI, and Python API defaults aligned.
 
@@ -211,6 +242,10 @@ class SampleCommandTests(unittest.TestCase):
             SCRIPTS / "convert_mprage_bart_to_nifti.py",
             SCRIPTS / "build_mprage_nifti_collection.py",
             TOOL_ROOT / "wave_retro_lr" / "nifti_collection.py",
+            TOOL_ROOT / "wave_retro_lr" / "rovir_workflow.py",
+            TOOL_ROOT / "wave_retro_lr" / "rovir_retro.py",
+            SCRIPTS / "mprage_rovir_workflow.py",
+            SCRIPTS / "prepare_mprage_rovir_retro.py",
         ]
         for path in measured_sources:
             source = path.read_text(encoding="utf-8")

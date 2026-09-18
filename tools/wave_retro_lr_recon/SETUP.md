@@ -241,8 +241,16 @@ scripts/sample_gre_retro_r3x3_recon.sh --help
 scripts/sample_gre_nifti_collection.sh --help
 scripts/sample_mprage_normal_recon.sh --help
 scripts/sample_mprage_retro_lr_recon.sh --help
+scripts/sample_mprage_rovir_recon.sh --help
 scripts/sample_mprage_nifti_collection.sh --help
 ```
+
+`sample_mprage_rovir_recon.sh` requires a completed normal FISTA-r0 NIfTI and
+its recorded ecalib command. Run `inspect` first. It writes only inside the
+already approved reconstruction root at `normal/rovir/`, derives TWIX and
+sequence paths from the normal manifest, and never accepts a separate public
+configuration file. BART is CPU-default; only its Wave reconstruction honors
+the optional `-g` flag.
 
 ## Macha environment
 

@@ -9,6 +9,7 @@ usage() {
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
+    echo "       [--rovir]"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -19,7 +20,9 @@ SEQUENCE_FILE="$3"
 shift 3
 
 ECALIB_CROP="0.6"
+ECALIB_CROP_EXPLICIT=false
 USE_GPU=false
+USE_ROVIR=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
@@ -29,7 +32,7 @@ PSF_FIT_Z_MIN=""
 PSF_FIT_Z_MAX=""
 while (($#)); do
     case "$1" in
-        --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
+        --ecalib-crop) ECALIB_CROP="$2"; ECALIB_CROP_EXPLICIT=true; shift 2 ;;
         --psf-coefficient-processing) PSF_COEFFICIENT_PROCESSING="$2"; shift 2 ;;
         --psf-fit-kx-min) PSF_FIT_KX_MIN="$2"; shift 2 ;;
         --psf-fit-kx-max) PSF_FIT_KX_MAX="$2"; shift 2 ;;
@@ -37,6 +40,7 @@ while (($#)); do
         --psf-fit-y-max) PSF_FIT_Y_MAX="$2"; shift 2 ;;
         --psf-fit-z-min) PSF_FIT_Z_MIN="$2"; shift 2 ;;
         --psf-fit-z-max) PSF_FIT_Z_MAX="$2"; shift 2 ;;
+        --rovir) USE_ROVIR=true; shift ;;
         -g) USE_GPU=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
@@ -44,13 +48,16 @@ while (($#)); do
 done
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
+command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
+if [[ "$USE_ROVIR" == true && "$ECALIB_CROP_EXPLICIT" == false ]]; then
+    ECALIB_CROP="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$OUTPUT_ROOT" --field ecalib_crop)"
+    echo "Inherited standard-normal ecalib crop for --rovir: $ECALIB_CROP"
+fi
 NORMAL_INPUTS="$OUTPUT_ROOT/normal/bart_inputs"
 NORMAL_OUTPUT="$OUTPUT_ROOT/normal/bart_output"
 RETRO_ROOT="$OUTPUT_ROOT/retro"
 ECALIB_RECORD="$NORMAL_OUTPUT/ecalib_command.txt"
-
-command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
-command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
 SPATIAL_ARGS=()
 if [[ -n "$PSF_FIT_Y_MIN" && -n "$PSF_FIT_Y_MAX" ]]; then
@@ -204,6 +211,16 @@ if [[ "$USE_GPU" == true ]]; then
     R3X3_ARGS+=(-g)
 fi
 bash "$SCRIPT_DIR/sample_mprage_retro_r3x3_recon.sh" "${R3X3_ARGS[@]}"
+
+# Opt-in ROVir branches consume only the completed canonical normal contract.
+# Standard outputs above remain unchanged and available as controls.
+if [[ "$USE_ROVIR" == true ]]; then
+    ROVIR_ARGS=("$OUTPUT_ROOT")
+    if [[ "$USE_GPU" == true ]]; then
+        ROVIR_ARGS+=(-g)
+    fi
+    bash "$SCRIPT_DIR/sample_mprage_rovir_retro_recon.sh" "${ROVIR_ARGS[@]}"
+fi
 
 echo "Retrospective MPRAGE reconstructions complete: $RETRO_ROOT"
 if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then

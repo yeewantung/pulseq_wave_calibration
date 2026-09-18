@@ -380,59 +380,192 @@ energy, contaminated-holdout mixed energy, and pure-shoulder energy remaining.
 It does not select a virtual-coil count, run ecalib, or launch Wave
 reconstruction.
 
-## Planned user-facing box-ROI workflow
+## Implemented user-facing ROVir workflow
 
-The feasibility implementation will ultimately become a dataset-independent,
-staged command-line workflow in `wave_retro_lr_recon`. A user should be able to
-start from compatible prepared MPRAGE inputs without editing Python or copying
-a subject-specific launcher. The intended interaction is:
+ROVir is an optional recovery path after a user has completed a normal Wave
+reconstruction and identified shoulder wrapping. It is a coil-processing
+branch of that normal dataset, not a replacement for the standard branch and
+not an independent source configuration. The public interface must therefore
+derive its TWIX, sequence, geometry, coil ordering, accepted PSF, ecalib crop,
+and source hashes from the completed `normal/bart_inputs/manifest.json`.
+`--config` is not part of the public interface.
 
-1. generate a geometry-bound, indexed physical-coil ACS RSS image from the
-   corrected alias-free set-4 calibration;
-2. inspect that image and specify an inclusive rectangular box, including a
-   square box when appropriate, in native `RO, LIN, PAR` array coordinates;
-3. generate mask CFLs and review overlays for that exact box without running
-   ROVir;
-4. explicitly approve the candidate ID after visual assessment;
-5. run native `bart rovir`, inspect its conditioning and all-channel retention
-   curves, and explicitly choose the retained coil count; and
-6. project image k-space and ACS with the same transform, run matched ecalib
-   and reconstruction, and produce fixed-window NIfTI QC.
+The default reconstruction root is the current directory. A user may instead
+provide one positional reconstruction root. The command must resolve and print
+that root before writing, require its exact normal manifest, and never scan
+other directories or guess a source. ROVir outputs live under `normal/rovir/`
+inside the already approved reconstruction root.
 
-The command interface should expose separate resumable stages rather than hide
-review gates in one opaque command. A future dataset-independent interface may
-take this form; exact names remain subject to code review:
+### Public commands and the single review gate
+
+Only two public commands are exposed:
 
 ```bash
-sample_mprage_rovir_recon.sh render-acs \
-  TWIX SEQUENCE ACCEPTED_NORMAL_ROOT FEASIBILITY_ROOT
-sample_mprage_rovir_recon.sh propose-box \
-  TWIX SEQUENCE ACCEPTED_NORMAL_ROOT FEASIBILITY_ROOT \
-  --ro 0:20 --lin 0:71 --par 0:71
-sample_mprage_rovir_recon.sh approve-box \
-  FEASIBILITY_ROOT negative_ro000_020
-sample_mprage_rovir_recon.sh estimate-transform FEASIBILITY_ROOT
-sample_mprage_rovir_recon.sh reconstruct \
-  TWIX SEQUENCE ACCEPTED_NORMAL_ROOT FEASIBILITY_ROOT OUTPUT_ROOT \
-  --virtual-coils 24 --ecalib-crop 0.1 -g
+cd RECONSTRUCTION_ROOT
+scripts/sample_mprage_rovir_recon.sh inspect
+
+scripts/sample_mprage_rovir_recon.sh run \
+  --null-box "ro=0:20,lin=0:25,par=all" \
+  --null-box "ro=0:20,lin=48:71,par=all" \
+  --virtual-coils 24 -g
 ```
 
-All public bounds are human-readable and inclusive; manifests also record the
-corresponding half-open Python slices. Every stage must validate source hashes,
-geometry, finite values, transform orthogonality, and exact artifact reuse.
-Existing outputs are reused only after those checks. The interface must never
-infer or automatically approve an ROI, choose a coil count, rerun PSF
-calibration, merge ACS into image k-space, or overwrite another reviewed ROI
-experiment. Real paths remain confined to ignored local configuration or
-launcher files.
+`inspect` validates the completed normal source, exports or strictly reuses the
+corrected alias-free physical-coil set-4 ACS, and creates geometry-bound RSS
+figures with explicit `RO, LIN, PAR` indices. It also emits a conservative null
+ROI recommendation when the data support one. It does not approve the
+recommendation or launch ROVir, ecalib, or reconstruction.
 
-The box is an estimation region, not an anatomical preservation mask. Its
-review overlay must therefore make clear which side of the box is treated as
-negative interference and which exact complement is treated as positive
-signal. Because a box can suppress desired inferior-head or neck signal, the
-final QC must reverse any display-only NIfTI normalization and compare
-candidate reconstructions with one shared absolute window before a setting is
-adopted.
+`run` constructs the submitted ROI union, writes a final red-outline review
+figure, prints its candidate ID and path, and pauses once. The user must type
+the exact candidate ID to approve the ROI. A noninteractive resumed invocation
+may supply that exact ID with `--confirm-roi-id`; a generic yes flag is not
+sufficient. After ROI approval, conditioning curves, transform QC, ecalib,
+reconstruction, NIfTI export, and final QC are automatic troubleshooting
+outputs rather than further manual gates. Strict hash, geometry, conditioning,
+finite-value, or provenance failures still stop the workflow.
+
+The retained coil count is an explicit `--virtual-coils` input and is never
+selected from a curve automatically. The normal ecalib crop is inherited from
+the accepted normal reconstruction; an explicit override is allowed only when
+recorded as a deliberate difference. Version 1 reconstructs the FISTA
+lambda-zero control so that ROVir is assessed without adding a regularization
+change.
+
+### ROI recommendation and override
+
+The recommendation is an auditable heuristic, not an anatomical detector. Its
+version-1 scope is the known readout-boundary shoulder-wrap failure mode. It
+uses the corrected ACS RSS, smoothed boundary energy profiles, connected
+support, and conservative protected-center constraints to propose one or more
+axis-aligned boxes. It may return `no safe automatic recommendation` when the
+separation is uncertain. FMP220's reviewed RO 0--20 result is not a default for
+another dataset.
+
+The inspect output includes:
+
+- indexed ACS RSS center slices and montages;
+- `roi_recommendation.json` with method version, confidence, and bounds;
+- RO energy CSV and PNG diagnostics;
+- a recommended-union red-outline overlay; and
+- rejected alternatives and machine-readable reasons.
+
+The user may accept the recommendation or replace it with any number of
+repeatable `--null-box` arguments. There is no arbitrary box-count limit. For
+large sets, `--null-box-file ROI_BOXES.json` supplies the same coordinate
+records; inline boxes and a box file are mutually exclusive. The ROI-only file
+contains no source paths and is not a replacement configuration.
+
+Every box has inclusive native `RO, LIN, PAR` bounds; `all` expands to the full
+axis. Boxes may overlap so that their union can approximate an irregular
+shoulder region. The implementation sorts and deduplicates exact repeats,
+records overlap counts, and forms one binary negative mask from the union. The
+positive mask is its exact complement. Both masks must be finite, nonempty,
+disjoint, exhaustive, and geometry matched. Manifests also record half-open
+Python slices, individual and union voxel counts, the submitted box list, the
+canonical list, and exact mask hashes. The candidate ID is based on the final
+union-mask hash, so argument order does not change its identity.
+
+For many boxes, the review figure shows the union as one uncluttered red
+contour and places the numbered box coordinates in an adjacent table. The box
+union is an interference-estimation region, not an anatomical segmentation or
+hard reconstruction mask. The review must make clear that desired anatomy
+inside the union may be suppressed by the learned coil subspace.
+
+### Automatic work after ROI approval
+
+One resumable `run` invocation performs the following internal operations:
+
+1. strictly reuse the approved corrected physical-coil ACS and mask union;
+2. write positive- and negative-masked physical-coil images;
+3. run native `bart rovir` and validate the full square transform;
+4. retain the explicitly requested leading ROVir columns without a second PCA;
+5. apply the identical transform to measured image k-space and ACS;
+6. preserve ACS separately and verify zero outside the image sampling mask;
+7. reuse the accepted PSF without recalibration;
+8. run matched ecalib and BART Wave FISTA lambda zero;
+9. export magnitude and phase NIfTIs; and
+10. create scale-restored, shared-window standard-versus-ROVir QC and a
+    complete canonical `normal/rovir/manifest.json`.
+
+Internal operations remain manifest-backed and independently resumable, but
+they are implementation details rather than public stage names. Exact existing
+artifacts are reused; partial or incompatible artifacts fail closed. No
+destructive force option overwrites a previous ROI experiment.
+
+The implemented layout is:
+
+```text
+normal/
+  bart_inputs/                       # existing standard reconstruction
+  bart_output/
+  nifti/
+  rovir/
+    manifest.json                    # canonical completed ROVir contract
+    feasibility/
+      inputs/physical_calibration/
+      diagnostics/calibration_views/
+      diagnostics/region_curves/
+      masks/candidates/
+      masks/approved/
+      inputs/rovir/
+      transforms/
+      manifests/
+      logs/
+    bart_inputs/
+    bart_output/
+    nifti/
+    qc/
+```
+
+### Retrospective reconstruction integration
+
+After the normal ROVir branch is complete, the existing public retrospective
+entry point gains one opt-in tag:
+
+```bash
+scripts/sample_mprage_retro_lr_recon.sh ... --rovir
+```
+
+`--rovir` consumes only the canonical `normal/rovir/manifest.json`; it never
+estimates another ROI or transform and never searches for an experiment. It
+strictly validates the normal source manifest, TWIX hash, physical-coil order,
+approved mask, transform, selected Ncc, corrected ACS, accepted PSF, and ecalib
+settings. A missing, incomplete, ambiguous, or incompatible contract is an
+error rather than a fallback to ordinary coil compression.
+
+The retro input builder rereads the matching physical-coil image stream,
+applies the same selected ROVir basis, and only then performs the requested
+retrospective sampling or spatial low-resolution crop. Each standard retro
+result remains untouched; ROVir outputs occupy a sibling `rovir/` branch. Retro
+manifests and NIfTI sidecars record the ROVir contract path and hash, ROI
+candidate ID, transform hash, Ncc, coil-processing label, and normal-source
+manifest hash. NIfTI collection discovery must idempotently add available
+standard and ROVir normal/retro branches.
+
+Regularization is orthogonal to the coil-processing tag. Existing retro
+methods may run with `--rovir`, but any lambda transferred from a standard-coil
+experiment must be labeled as reused rather than ROVir-optimized. FISTA zero
+remains available as the mandatory control.
+
+### Implementation and verification record
+
+1. The RO-slab code is generalized to canonical unions of arbitrarily many 3D
+   boxes, with conservative recommendation diagnostics and explicit refusal.
+2. Mask/hash tests cover more than ten boxes, overlaps, duplicates, reordered
+   arguments, revision before approval, frozen provenance after approval, and
+   recommendation refusal.
+3. The two-command shell orchestration writes the canonical normal ROVir
+   contract while keeping every BART command explicit in shell.
+4. `--rovir` consumes that contract for all five normal-compatible retro cases
+   without changing standard behavior or external submodules.
+5. NIfTI collection discovery adds available standard and ROVir branches
+   idempotently. Documentation, privacy checks, tool tests, and upstream
+   Wave-MPRAGE tests remain release gates.
+
+Implementation stops for source review before any new production run. A new
+production directory or a new branch inside an existing reconstruction root
+still requires the user to confirm the exact output layout and location.
 
 ## FMP220 feasibility conclusion
 

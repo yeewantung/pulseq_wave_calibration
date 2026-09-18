@@ -366,13 +366,21 @@ def _discover_case_sources(
             pairs = _discover_nifti_pairs(branch_directory)
             if pairs:
                 sources.setdefault(branch_directory.name, {})["normal"] = pairs
-    normal_branches = {
+    standard_normal_branches = {
         branch for branch, cases in sources.items() if "normal" in cases
     }
-    if not normal_branches:
+    if not standard_normal_branches:
         raise FileNotFoundError(
             f"No normal canonical NIfTI files found below: {normal_root}"
         )
+    normal_rovir_root = output_root / "normal" / "rovir" / "nifti"
+    if normal_rovir_root.is_dir():
+        for branch_directory in sorted(normal_rovir_root.iterdir(), key=lambda path: path.name):
+            if not branch_directory.is_dir():
+                continue
+            pairs = _discover_nifti_pairs(branch_directory)
+            if pairs:
+                sources.setdefault(f"rovir_{branch_directory.name}", {})["normal"] = pairs
 
     retro_root = output_root / "retro"
     if retro_root.exists() and not retro_root.is_dir():
@@ -382,18 +390,31 @@ def _discover_case_sources(
             retro_root.iterdir(), key=lambda path: path.name
         ):
             nifti_root = case_directory / "nifti"
-            if not case_directory.is_dir() or not nifti_root.is_dir():
+            if not case_directory.is_dir():
                 continue
-            for branch_directory in sorted(
-                nifti_root.iterdir(), key=lambda path: path.name
-            ):
-                if not branch_directory.is_dir():
-                    continue
-                pairs = _discover_nifti_pairs(branch_directory)
-                if pairs:
-                    sources.setdefault(branch_directory.name, {})[
-                        case_directory.name
-                    ] = pairs
+            if nifti_root.is_dir():
+                for branch_directory in sorted(
+                    nifti_root.iterdir(), key=lambda path: path.name
+                ):
+                    if not branch_directory.is_dir():
+                        continue
+                    pairs = _discover_nifti_pairs(branch_directory)
+                    if pairs:
+                        sources.setdefault(branch_directory.name, {})[
+                            case_directory.name
+                        ] = pairs
+            rovir_nifti_root = case_directory / "rovir" / "nifti"
+            if rovir_nifti_root.is_dir():
+                for branch_directory in sorted(
+                    rovir_nifti_root.iterdir(), key=lambda path: path.name
+                ):
+                    if not branch_directory.is_dir():
+                        continue
+                    pairs = _discover_nifti_pairs(branch_directory)
+                    if pairs:
+                        sources.setdefault(f"rovir_{branch_directory.name}", {})[
+                            case_directory.name
+                        ] = pairs
 
     if require_retro:
         required_cases = list(REQUIRED_RETRO_CASES)
@@ -402,7 +423,7 @@ def _discover_case_sources(
             for case in OPTIONAL_RETRO_CASES
             if (retro_root / case).exists()
         )
-        for branch in sorted(normal_branches):
+        for branch in sorted(standard_normal_branches):
             for case in required_cases:
                 if case not in sources[branch]:
                     directory = output_root / "retro" / case / "nifti" / branch

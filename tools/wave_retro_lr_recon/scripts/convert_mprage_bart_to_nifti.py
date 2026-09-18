@@ -106,8 +106,11 @@ def _recorded_commands(inputs: Path, image: Path, manifest: dict[str, Any]) -> d
         NIfTI metadata fields containing both shell-escaped commands.
     """
     wave_record = image.parent / "wave_command.txt"
+    explicit_ecalib = manifest.get("ecalib_command_record")
     layout = manifest.get("reconstruction_layout")
-    if isinstance(layout, dict) and isinstance(
+    if isinstance(explicit_ecalib, str):
+        ecalib_record = Path(explicit_ecalib).expanduser().resolve()
+    elif isinstance(layout, dict) and isinstance(
         layout.get("bart_output_relative_to_inputs"), str
     ):
         bart_output = (inputs / layout["bart_output_relative_to_inputs"]).resolve()
@@ -178,6 +181,46 @@ def convert(
         "PreparedInputManifest": str(inputs / "manifest.json"),
         **_recorded_commands(inputs, image_path, manifest),
     }
+    coil_processing = manifest.get("coil_processing")
+    contract = manifest.get("source_normal_rovir_contract")
+    if isinstance(coil_processing, dict):
+        selected_regularization = manifest.get("selected_regularization")
+        if image_path.parent.name == "fista_r0":
+            regularization_method = "fista"
+            regularization_lambda = 0.0
+            reused_regularization = False
+        elif isinstance(selected_regularization, dict):
+            regularization_method = selected_regularization.get("method")
+            regularization_lambda = selected_regularization.get("lambda")
+            reused_regularization = bool(
+                selected_regularization.get("reused_from_standard_coil_experiment")
+            )
+        else:
+            regularization_method = None
+            regularization_lambda = None
+            reused_regularization = False
+        metadata.update(
+            {
+                "CoilProcessing": coil_processing.get("label"),
+                "ROVirCandidateID": coil_processing.get("candidate_id"),
+                "ROVirVirtualCoils": coil_processing.get("virtual_coils"),
+                "ROVirTransformSHA256": coil_processing.get("transform_sha256"),
+                "ROVirNormalSourceManifestSHA256": coil_processing.get(
+                    "normal_source_manifest_sha256"
+                ),
+                "RegularizationOptimizedForROVir": False,
+                "RegularizationMethod": regularization_method,
+                "RegularizationLambda": regularization_lambda,
+                "RegularizationReusedFromStandardCoils": reused_regularization,
+            }
+        )
+    if isinstance(contract, dict):
+        metadata.update(
+            {
+                "ROVirContract": contract.get("path"),
+                "ROVirContractSHA256": contract.get("sha256"),
+            }
+        )
     # The native exporter expects logical RO/LIN/PAR voxel sizes, whereas the
     # case manifest records physical X/Y/Z.
     voxel_size_logical = (

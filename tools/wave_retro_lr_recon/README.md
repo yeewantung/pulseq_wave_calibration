@@ -29,44 +29,6 @@ shared-lambda decision, presentation contract, and measured-reconstruction
 handoff boundary are documented in
 [`synthetic_gre_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_gre_regularization_pipeline.md).
 
-The higher-channel standard-PCA control has a separate path-agnostic launcher:
-
-```bash
-scripts/sample_mprage_pca_control.sh prepare \
-    /path/to/measured_wave_mprage.dat \
-    /path/to/matching_wave_mprage.seq \
-    /path/to/accepted_normal_root \
-    /path/to/physical_calibration_feasibility_root \
-    /path/to/new_pca_control_root \
-    --virtual-coils 24 --ecalib-crop 0.1
-
-scripts/sample_mprage_pca_control.sh reconstruct \
-    /path/to/measured_wave_mprage.dat \
-    /path/to/matching_wave_mprage.seq \
-    /path/to/accepted_normal_root \
-    /path/to/physical_calibration_feasibility_root \
-    /path/to/new_pca_control_root \
-    --virtual-coils 24 --ecalib-crop 0.1 -g
-
-scripts/sample_mprage_pca_control.sh qc \
-    /path/to/measured_wave_mprage.dat \
-    /path/to/matching_wave_mprage.seq \
-    /path/to/accepted_normal_root \
-    /path/to/physical_calibration_feasibility_root \
-    /path/to/new_pca_control_root \
-    --virtual-coils 24 --ecalib-crop 0.1
-```
-
-It changes only standard PCA truncation and the necessarily matched CSM: the
-accepted PSF is hash-validated and copied without recalibration, while
-`ecalib` and FISTA-r0 retain the explicitly requested matched settings. The
-ignored local launcher keeps all subject-specific paths out of tracked source.
-
-A staged diagnostic for coherent shoulder-wrap artifacts, including ROVir
-backend selection, manual sparse-ROI annotation, mask and transform contracts,
-and review gates before reconstruction, is documented in
-[`mprage_rovir_diagnostic_plan.md`](docs/mprage_rovir_diagnostic_plan.md).
-
 ## MPRAGE workflow
 
 For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical
@@ -389,6 +351,19 @@ OUTPUT_ROOT/
 Here `<branch>` and `<case>` are discovered from the populated source tree;
 standard examples include `fista_r0`, `optimal_wavelet`, the four R3x2 cases,
 and `native_r3x3`.
+
+### Optional MPRAGE troubleshooting features
+
+Higher-channel PCA controls and ROVir shoulder-wrap suppression are optional
+diagnostic/recovery tools, not stages of the standard workflow. See
+[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for PCA controls and failure
+diagnosis, and
+[`mprage_rovir_reconstruction.md`](docs/mprage_rovir_reconstruction.md) for
+the user-facing ROVir pipeline.
+
+ROVir is currently implemented only for MPRAGE. It is not exposed for GRE;
+the GRE acquisition FOV normally avoids the extended-body shoulder-wrap
+failure mode that motivated this feature.
 
 ## GRE workflow
 

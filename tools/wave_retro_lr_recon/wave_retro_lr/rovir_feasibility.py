@@ -9,8 +9,10 @@ the native ``bart rovir`` command.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -42,6 +44,10 @@ REGION_MASK_NAMES = (
     "positive_estimation_mask",
     "negative_estimation_mask",
     "contaminated_holdout_mask",
+)
+NULL_BOX_PATTERN = re.compile(
+    r"^\s*ro\s*=\s*([^,]+)\s*,\s*lin\s*=\s*([^,]+)\s*,\s*par\s*=\s*([^,]+)\s*$",
+    re.IGNORECASE,
 )
 MPRAGE_NIFTI_ARRAY_AXIS_FLIPS = (False, False, True)
 MPRAGE_NIFTI_AFFINE_AXIS_FLIPS = (True, False, True)
@@ -300,6 +306,24 @@ def record_calibration_images(
     physical = root / "inputs" / "physical_calibration" / "physical_set4_kspace"
     images = root / "inputs" / "physical_calibration" / "physical_set4_coil_images"
     rss = root / "inputs" / "physical_calibration" / "physical_set4_rss"
+    existing_manifest_path = root / CALIBRATION_IMAGES_MANIFEST
+    if existing_manifest_path.is_file():
+        existing = _read_json(existing_manifest_path)
+        if existing.get("physical_calibration_manifest_sha256") != sha256_file(
+            root / PHYSICAL_CALIBRATION_MANIFEST
+        ):
+            raise ValueError("Existing calibration images use another physical ACS export.")
+        for key, path in (
+            ("physical_set4_kspace", physical),
+            ("physical_set4_coil_images", images),
+            ("physical_set4_rss", rss),
+        ):
+            _validate_cfl_against_record(path, existing.get(key))
+        _validate_file_record(existing.get("physical_set4_rss_review_figure"))
+        for record in existing.get("physical_set4_rss_slice_montages", []):
+            _validate_file_record(record)
+        _validate_file_record(existing.get("bart"))
+        return existing
     physical_shape = _active_coil_shape(physical)
     image_shape = _active_coil_shape(images)
     if image_shape != physical_shape:
@@ -341,6 +365,172 @@ def record_calibration_images(
         "source_status": source_manifest["status"],
     }
     _write_json(root / CALIBRATION_IMAGES_MANIFEST, manifest)
+    return manifest
+
+
+def recommend_null_boxes(
+    feasibility_output_root: str | Path,
+    *,
+    boundary_fraction: float = 0.25,
+    minimum_edge_to_center_ratio: float = 1.5,
+) -> dict[str, Any]:
+    """Recommend conservative RO-boundary nuisance boxes from ACS RSS.
+
+    Args:
+        feasibility_output_root: Diagnostic root with validated ACS RSS.
+        boundary_fraction: Maximum fraction of the RO axis eligible on either
+            boundary; the protected center is never recommended.
+        minimum_edge_to_center_ratio: Minimum boundary-to-center energy ratio
+            required before a recommendation is considered safe.
+
+    Returns:
+        Auditable recommendation manifest. Its status explicitly reports when
+        no safe automatic recommendation is available.
+
+    Raises:
+        ValueError: If parameters or RSS data are invalid.
+
+    Side Effects:
+        Writes JSON, CSV, an RO-profile plot, and an optional outline overlay.
+        It never creates or approves solver masks.
+    """
+    from scipy.ndimage import gaussian_filter1d
+
+    if not 0.05 <= boundary_fraction <= 0.4:
+        raise ValueError("Boundary fraction must lie in [0.05, 0.4].")
+    if not np.isfinite(minimum_edge_to_center_ratio) or minimum_edge_to_center_ratio <= 1:
+        raise ValueError("Minimum edge-to-center ratio must exceed one.")
+    root = Path(feasibility_output_root).expanduser().resolve()
+    _read_json(root / CALIBRATION_IMAGES_MANIFEST)
+    rss_path = root / "inputs" / "physical_calibration" / "physical_set4_rss"
+    rss = np.asarray(_spatial_cfl_view(rss_path).real, dtype=np.float64)
+    if rss.ndim != 3 or not np.isfinite(rss).all() or not np.any(rss > 0):
+        raise ValueError("Calibration RSS is not a finite nonempty 3D image.")
+    profile = np.sum(np.square(rss), axis=(1, 2), dtype=np.float64)
+    smoothed = gaussian_filter1d(profile, sigma=1.0, mode="nearest")
+    scale = float(np.max(smoothed))
+    normalized = smoothed / scale
+    nro = rss.shape[0]
+    edge_width = max(2, int(np.floor(nro * boundary_fraction)))
+    center_start = edge_width
+    center_stop = nro - edge_width
+    center_reference = float(np.median(smoothed[center_start:center_stop]))
+    if center_reference <= 0:
+        center_reference = float(np.mean(smoothed[center_start:center_stop]))
+    threshold = max(0.08 * scale, 1.15 * center_reference)
+
+    boxes: list[dict[str, list[int]]] = []
+    rejected: list[dict[str, Any]] = []
+    for side, indices in (
+        ("low_ro", np.arange(edge_width)),
+        ("high_ro", np.arange(nro - edge_width, nro)),
+    ):
+        edge_peak = float(np.max(smoothed[indices]))
+        ratio = edge_peak / max(center_reference, np.finfo(float).tiny)
+        active = indices[smoothed[indices] >= threshold]
+        reason = None
+        if ratio < minimum_edge_to_center_ratio:
+            reason = "boundary energy is not sufficiently above protected-center energy"
+        elif active.size == 0:
+            reason = "no contiguous boundary support passes the conservative threshold"
+        elif side == "low_ro" and active[0] != 0:
+            reason = "elevated support is not connected to the low-RO boundary"
+        elif side == "high_ro" and active[-1] != nro - 1:
+            reason = "elevated support is not connected to the high-RO boundary"
+        if reason is not None:
+            rejected.append({"side": side, "edge_to_center_ratio": ratio, "reason": reason})
+            continue
+        if side == "low_ro":
+            contiguous = 0
+            while contiguous + 1 < edge_width and smoothed[contiguous + 1] >= threshold:
+                contiguous += 1
+            bounds = [0, contiguous]
+        else:
+            contiguous = nro - 1
+            while contiguous - 1 >= nro - edge_width and smoothed[contiguous - 1] >= threshold:
+                contiguous -= 1
+            bounds = [contiguous, nro - 1]
+        if bounds[1] - bounds[0] + 1 < 2:
+            rejected.append({
+                "side": side,
+                "edge_to_center_ratio": ratio,
+                "reason": "support is only one RO plane and is too fragile to recommend",
+            })
+            continue
+        boxes.append(
+            {
+                "ro": bounds,
+                "lin": [0, rss.shape[1] - 1],
+                "par": [0, rss.shape[2] - 1],
+            }
+        )
+
+    status = (
+        "safe_conservative_recommendation_available"
+        if boxes
+        else "no_safe_automatic_recommendation"
+    )
+    confidence = (
+        min(1.0, max(
+            float(np.max(smoothed[np.r_[0:edge_width, nro-edge_width:nro]]))
+            / max(center_reference, np.finfo(float).tiny)
+            / (2 * minimum_edge_to_center_ratio),
+            0.0,
+        ))
+        if boxes
+        else 0.0
+    )
+    diagnostics = root / "diagnostics" / "roi_recommendation"
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    csv_path = diagnostics / "ro_energy_profile.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(("ro_index", "energy", "smoothed_energy", "normalized_smoothed_energy"))
+        for index, values in enumerate(zip(profile, smoothed, normalized, strict=True)):
+            writer.writerow((index, *values))
+    plot_path = diagnostics / "ro_energy_profile.png"
+    _write_ro_recommendation_plot(
+        normalized, edge_width, threshold / scale, boxes, plot_path
+    )
+    overlay_record = None
+    if boxes:
+        union = np.zeros(rss.shape, dtype=bool)
+        for box in boxes:
+            union[
+                box["ro"][0] : box["ro"][1] + 1,
+                box["lin"][0] : box["lin"][1] + 1,
+                box["par"][0] : box["par"][1] + 1,
+            ] = True
+        overlay_path = diagnostics / "recommended_union_outline.png"
+        _write_box_union_outline(rss, union, boxes, overlay_path, "recommendation_not_approved")
+        overlay_record = _file_record(overlay_path)
+    manifest = {
+        "format_version": 1,
+        "status": status,
+        "method": "ro_boundary_energy_v1",
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "rss": cfl_record(rss_path),
+        "geometry_ro_lin_par": list(rss.shape),
+        "parameters": {
+            "boundary_fraction": boundary_fraction,
+            "minimum_edge_to_center_ratio": minimum_edge_to_center_ratio,
+            "protected_center_ro_half_open": [center_start, center_stop],
+            "smoothed_profile_sigma_voxels": 1.0,
+        },
+        "confidence": confidence,
+        "recommended_boxes": boxes,
+        "recommended_box_specs": [
+            f"ro={box['ro'][0]}:{box['ro'][1]},lin={box['lin'][0]}:{box['lin'][1]},par={box['par'][0]}:{box['par'][1]}"
+            for box in boxes
+        ],
+        "rejected_alternatives": rejected,
+        "profile_csv": _file_record(csv_path),
+        "profile_plot": _file_record(plot_path),
+        "recommended_union_overlay": overlay_record,
+        "approved": False,
+        "bart_launched": False,
+    }
+    _write_json(diagnostics / "roi_recommendation.json", manifest)
     return manifest
 
 
@@ -999,6 +1189,264 @@ def derive_ro_partition_mask_candidate(
             encoding="utf-8",
         )
         staging.replace(destination)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+    return manifest
+
+
+def parse_null_box(specification: str, shape: Sequence[int]) -> dict[str, list[int]]:
+    """Parse one inclusive native-grid ROVir null-box specification.
+
+    Args:
+        specification: Text in ``ro=a:b,lin=c:d,par=e:f`` form. ``all`` is
+            accepted independently for each axis.
+        shape: Native ``(RO, LIN, PAR)`` calibration geometry.
+
+    Returns:
+        Canonical lower-case axis mapping with inclusive integer bounds.
+
+    Raises:
+        ValueError: If syntax, dimensionality, or bounds are invalid.
+    """
+    dimensions = tuple(int(value) for value in shape)
+    if len(dimensions) != 3 or min(dimensions) < 1:
+        raise ValueError("Null-box geometry must contain three positive dimensions.")
+    match = NULL_BOX_PATTERN.fullmatch(str(specification))
+    if match is None:
+        raise ValueError(
+            "Null box must use ro=a:b,lin=c:d,par=e:f with inclusive bounds or 'all'."
+        )
+    result: dict[str, list[int]] = {}
+    for axis, token, size in zip(("ro", "lin", "par"), match.groups(), dimensions, strict=True):
+        value = token.strip().lower()
+        if value == "all":
+            start, stop = 0, size - 1
+        else:
+            parts = value.split(":")
+            if len(parts) != 2 or any(not part.strip().isdigit() for part in parts):
+                raise ValueError(f"Invalid inclusive {axis.upper()} bounds: {token!r}.")
+            start, stop = (int(part.strip()) for part in parts)
+        if start < 0 or stop < start or stop >= size:
+            raise ValueError(
+                f"{axis.upper()} bounds [{start}, {stop}] lie outside [0, {size - 1}]."
+            )
+        result[axis] = [start, stop]
+    return result
+
+
+def derive_box_union_mask_candidate(
+    feasibility_output_root: str | Path,
+    null_boxes: Sequence[str | Mapping[str, Sequence[int]]],
+) -> dict[str, Any]:
+    """Create an order-independent candidate from any number of null boxes.
+
+    Args:
+        feasibility_output_root: Approved diagnostic root containing ACS RSS.
+        null_boxes: Nonempty sequence of text specifications or mappings with
+            inclusive native ``ro``, ``lin``, and ``par`` bounds.
+
+    Returns:
+        One-candidate manifest whose ID is derived from the exact union mask.
+
+    Raises:
+        FileExistsError: If a different candidate directory already exists.
+        ValueError: If bounds, geometry, union, or complement are invalid.
+
+    Side Effects:
+        Writes exact complementary BART masks and red-outline review figures.
+        It does not approve the candidate or launch BART.
+    """
+    root = Path(feasibility_output_root).expanduser().resolve()
+    images_manifest_path = root / CALIBRATION_IMAGES_MANIFEST
+    _read_json(images_manifest_path)
+    rss_path = root / "inputs" / "physical_calibration" / "physical_set4_rss"
+    rss = np.asarray(_spatial_cfl_view(rss_path).real, dtype=np.float64)
+    if not null_boxes:
+        raise ValueError("At least one null box is required.")
+
+    submitted: list[dict[str, list[int]]] = []
+    for raw in null_boxes:
+        if isinstance(raw, str):
+            submitted.append(parse_null_box(raw, rss.shape))
+            continue
+        if not isinstance(raw, Mapping) or set(raw) != {"ro", "lin", "par"}:
+            raise ValueError("Each null box must define exactly ro, lin, and par.")
+        tokens = []
+        for axis in ("ro", "lin", "par"):
+            bounds = raw[axis]
+            if isinstance(bounds, str) and bounds.lower() == "all":
+                tokens.append(f"{axis}=all")
+            elif (
+                isinstance(bounds, Sequence)
+                and not isinstance(bounds, (str, bytes))
+                and len(bounds) == 2
+            ):
+                tokens.append(f"{axis}={int(bounds[0])}:{int(bounds[1])}")
+            else:
+                raise ValueError(
+                    f"JSON null-box {axis} must be 'all' or two inclusive integers."
+                )
+        specification = ",".join(tokens)
+        submitted.append(parse_null_box(specification, rss.shape))
+
+    canonical_keys = sorted(
+        {
+            tuple(value for axis in ("ro", "lin", "par") for value in box[axis])
+            for box in submitted
+        }
+    )
+    canonical = [
+        {
+            "ro": [key[0], key[1]],
+            "lin": [key[2], key[3]],
+            "par": [key[4], key[5]],
+        }
+        for key in canonical_keys
+    ]
+    negative_bool = np.zeros(rss.shape, dtype=bool)
+    individual_counts: list[int] = []
+    for box in canonical:
+        slices = tuple(
+            slice(box[axis][0], box[axis][1] + 1) for axis in ("ro", "lin", "par")
+        )
+        individual_counts.append(int(np.prod([value.stop - value.start for value in slices])))
+        negative_bool[slices] = True
+    union_count = int(np.count_nonzero(negative_bool))
+    if union_count == 0 or union_count == negative_bool.size:
+        raise ValueError("Null-box union and its exact complement must both be nonempty.")
+
+    mask_hasher = hashlib.sha256()
+    mask_hasher.update(np.asarray(rss.shape, dtype="<i8").tobytes())
+    mask_hasher.update(np.ascontiguousarray(negative_bool, dtype=np.uint8).tobytes())
+    union_sha256 = mask_hasher.hexdigest()
+    candidate_id = f"negative_union_{union_sha256[:16]}"
+    negative = negative_bool.astype(np.float32)
+    positive = 1.0 - negative
+    preservation = positive.copy()
+    holdout = np.zeros(rss.shape, dtype=np.float32)
+    validation = _validate_four_region_masks(
+        preservation, positive, negative, holdout
+    )
+
+    destination = root / "masks" / "candidates"
+    manifest_path = destination / "manifest.json"
+    existing_manifest: dict[str, Any] | None = None
+    if manifest_path.is_file():
+        existing_manifest = _read_json(manifest_path)
+        candidates = existing_manifest.get("candidates", [])
+        approved_path = root / APPROVED_MASK_MANIFEST
+        if approved_path.is_file():
+            approved_id = _read_json(approved_path).get("candidate_id")
+            if approved_id != candidate_id:
+                raise ValueError(
+                    "A different ROVir ROI is already approved; refusing to alter candidate provenance."
+                )
+        if any(record.get("candidate_id") == candidate_id for record in candidates):
+            if (
+                existing_manifest.get("active_candidate_id") != candidate_id
+                and not approved_path.is_file()
+            ):
+                existing_manifest = {
+                    **existing_manifest,
+                    "active_candidate_id": candidate_id,
+                    "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                }
+                _write_json(manifest_path, existing_manifest)
+            return existing_manifest
+        if (destination / candidate_id).exists():
+            raise FileExistsError(f"Unmanifested ROVir candidate exists: {candidate_id}")
+    elif destination.exists() and any(destination.iterdir()):
+        raise FileExistsError(f"ROVir mask candidates already exist: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".candidates-", dir=destination.parent))
+    try:
+        candidate_directory = staging / candidate_id
+        candidate_directory.mkdir()
+        masks = {
+            "preservation_mask": preservation,
+            "positive_estimation_mask": positive,
+            "negative_estimation_mask": negative,
+            "contaminated_holdout_mask": holdout,
+        }
+        for name, mask in masks.items():
+            _write_real_cfl(candidate_directory / name, mask)
+        overlay_path = candidate_directory / "review_union_outline.png"
+        _write_box_union_outline(rss, negative_bool, canonical, overlay_path, candidate_id)
+        parameters = {
+            "construction": "exact union of inclusive native-grid boxes",
+            "axis_order": ["RO", "LIN", "PAR"],
+            "submitted_boxes": submitted,
+            "canonical_boxes": canonical,
+            "canonical_python_slices": [
+                {
+                    axis: [box[axis][0], box[axis][1] + 1]
+                    for axis in ("ro", "lin", "par")
+                }
+                for box in canonical
+            ],
+            "submitted_box_count": len(submitted),
+            "canonical_box_count": len(canonical),
+            "exact_duplicates_removed": len(submitted) - len(canonical),
+            "individual_box_voxel_counts": individual_counts,
+            "summed_individual_voxel_count": int(sum(individual_counts)),
+            "union_voxel_count": union_count,
+            "overlap_voxel_count": int(sum(individual_counts) - union_count),
+            "positive_is_exact_complement": True,
+            "negative_union_sha256": union_sha256,
+        }
+        candidate_record: dict[str, Any] = {
+            "candidate_id": candidate_id,
+            "status": "ready_for_visual_review",
+            "parameters": parameters,
+            "validation": validation,
+            "review_overlay": _relocate_file_record(
+                _file_record(overlay_path), candidate_directory, destination / candidate_id
+            ),
+        }
+        for name in REGION_MASK_NAMES:
+            candidate_record[name] = _relocate_cfl_record(
+                cfl_record(candidate_directory / name),
+                candidate_directory,
+                destination / candidate_id,
+            )
+        manifest = {
+            "format_version": 3,
+            "status": "mprage_rovir_mask_candidates_ready",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "calibration_images_manifest_sha256": sha256_file(images_manifest_path),
+            "rss": cfl_record(rss_path),
+            "construction": "exact union of inclusive native-grid boxes",
+            "automatic_ranking": False,
+            "automatic_selection": False,
+            "selection_status": "not_selected",
+            "active_candidate_id": candidate_id,
+            "candidates": [candidate_record],
+        }
+        _write_json(staging / "manifest.json", manifest)
+        (staging / "REVIEW_INSTRUCTIONS.txt").write_text(
+            "Review the red union outline against the indexed ACS RSS views.\n"
+            "The outlined union estimates nuisance signal; it is not a reconstruction mask.\n"
+            f"Approve only by supplying the exact candidate ID: {candidate_id}\n",
+            encoding="utf-8",
+        )
+        if existing_manifest is None:
+            staging.replace(destination)
+        else:
+            (staging / candidate_id).replace(destination / candidate_id)
+            shutil.rmtree(staging)
+            existing_candidates = existing_manifest.get("candidates")
+            if not isinstance(existing_candidates, list):
+                raise ValueError("Existing candidate manifest has invalid candidates.")
+            manifest = {
+                **existing_manifest,
+                "format_version": 3,
+                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                "active_candidate_id": candidate_id,
+                "candidates": [*existing_candidates, candidate_record],
+            }
+            _write_json(manifest_path, manifest)
     except Exception:
         if staging.exists():
             shutil.rmtree(staging)
@@ -1682,6 +2130,114 @@ def _write_region_overlay(
         f"ROVir {candidate_id}: yellow=preserve, blue=positive, "
         "red=shoulder, magenta=holdout"
     )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=160)
+
+
+def _write_box_union_outline(
+    rss: np.ndarray,
+    union: np.ndarray,
+    boxes: Sequence[Mapping[str, Sequence[int]]],
+    output: Path,
+    candidate_id: str,
+) -> None:
+    """Write an uncluttered red union contour plus canonical box table.
+
+    Args:
+        rss: Calibration RSS in native RO/LIN/PAR order.
+        union: Three-dimensional boolean null-region union.
+        boxes: Canonical inclusive box records.
+        output: Destination PNG path.
+        candidate_id: Stable candidate label shown in the title.
+
+    Side Effects:
+        Writes one indexed review PNG.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    union_bool = np.asarray(union, dtype=bool)
+    if union_bool.shape != rss.shape or not np.any(union_bool):
+        raise ValueError("Outline union must be nonempty and geometry matched.")
+    vmax = float(np.percentile(rss[rss > 0], 99.5))
+    figure = Figure(figsize=(15, 8), constrained_layout=True)
+    FigureCanvasAgg(figure)
+    grid = figure.add_gridspec(2, 4, width_ratios=(1, 1, 1, 1.25))
+    centers = tuple(size // 2 for size in rss.shape)
+    for axis_index, axis_name in enumerate(("RO", "LIN", "PAR")):
+        for row, (label, magnitude, mask) in enumerate(
+            (
+                (
+                    f"{axis_name} center {centers[axis_index]}",
+                    np.take(rss, centers[axis_index], axis=axis_index),
+                    np.take(union_bool, centers[axis_index], axis=axis_index),
+                ),
+                (
+                    f"{axis_name} maximum projection",
+                    np.max(rss, axis=axis_index),
+                    np.any(union_bool, axis=axis_index),
+                ),
+            )
+        ):
+            axis = figure.add_subplot(grid[row, axis_index])
+            axis.imshow(np.rot90(magnitude), cmap="gray", vmin=0, vmax=vmax)
+            rotated = np.rot90(mask.astype(np.uint8))
+            if np.any(rotated) and np.any(~rotated.astype(bool)):
+                axis.contour(rotated, levels=[0.5], colors=["red"], linewidths=1.2)
+            elif np.any(rotated):
+                axis.text(0.5, 0.5, "union fills panel", color="red", transform=axis.transAxes)
+            axis.set_title(label)
+            axis.axis("off")
+    table_axis = figure.add_subplot(grid[:, 3])
+    table_axis.axis("off")
+    lines = ["Canonical inclusive null boxes", ""]
+    lines.extend(
+        f"{index:02d}  RO {box['ro'][0]}:{box['ro'][1]}   "
+        f"LIN {box['lin'][0]}:{box['lin'][1]}   PAR {box['par'][0]}:{box['par'][1]}"
+        for index, box in enumerate(boxes, start=1)
+    )
+    table_axis.text(
+        0.0, 1.0, "\n".join(lines), va="top", family="monospace", fontsize=9
+    )
+    figure.suptitle(f"ROVir null ROI review: {candidate_id}; red=union outline")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=160)
+
+
+def _write_ro_recommendation_plot(
+    normalized_profile: np.ndarray,
+    boundary_width: int,
+    threshold: float,
+    boxes: Sequence[Mapping[str, Sequence[int]]],
+    output: Path,
+) -> None:
+    """Plot the normalized RO energy profile and proposed intervals.
+
+    Args:
+        normalized_profile: Smoothed profile normalized to unit maximum.
+        boundary_width: Eligible boundary width in RO voxels.
+        threshold: Normalized recommendation threshold.
+        boxes: Proposed inclusive null boxes.
+        output: Destination PNG path.
+
+    Side Effects:
+        Writes one diagnostic PNG.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    values = np.asarray(normalized_profile, dtype=np.float64)
+    figure = Figure(figsize=(9, 5), constrained_layout=True)
+    FigureCanvasAgg(figure)
+    axis = figure.add_subplot(1, 1, 1)
+    axis.plot(np.arange(values.size), values, color="black", label="smoothed RO energy")
+    axis.axhline(threshold, color="tab:orange", linestyle="--", label="threshold")
+    axis.axvspan(0, boundary_width - 1, color="0.8", alpha=0.35)
+    axis.axvspan(values.size - boundary_width, values.size - 1, color="0.8", alpha=0.35)
+    for index, box in enumerate(boxes, start=1):
+        axis.axvspan(box["ro"][0], box["ro"][1], color="red", alpha=0.18, label=("recommended" if index == 1 else None))
+    axis.set(xlabel="RO array index", ylabel="normalized smoothed energy", ylim=(0, 1.05))
+    axis.legend(loc="best")
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=160)
 

@@ -118,7 +118,80 @@ sampling mask, incomplete CFL pairs, non-finite PSFs, or a mismatched recorded
 ecalib command remains a hard failure. Use a new output root when a new PSF or
 CSM calibration is scientifically intended.
 
-## MPRAGE checks
+## Test whether standard PCA retained too few coils
+
+For an MPRAGE reconstruction with unexplained noise or coherent wrap, a
+higher-channel standard-PCA control separates ordinary coil-subspace
+truncation from a region-targeted ROVir effect. It is a diagnostic comparison,
+not a normal reconstruction stage.
+
+Use the path-agnostic launcher with a separately approved control output root:
+
+```bash
+scripts/sample_mprage_pca_control.sh prepare \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/matching_wave_mprage.seq \
+    /path/to/accepted_normal_root \
+    /path/to/physical_calibration_feasibility_root \
+    /path/to/new_pca_control_root \
+    --virtual-coils 24 --ecalib-crop 0.1
+
+scripts/sample_mprage_pca_control.sh reconstruct \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/matching_wave_mprage.seq \
+    /path/to/accepted_normal_root \
+    /path/to/physical_calibration_feasibility_root \
+    /path/to/new_pca_control_root \
+    --virtual-coils 24 --ecalib-crop 0.1 -g
+
+scripts/sample_mprage_pca_control.sh qc \
+    /path/to/measured_wave_mprage.dat \
+    /path/to/matching_wave_mprage.seq \
+    /path/to/accepted_normal_root \
+    /path/to/physical_calibration_feasibility_root \
+    /path/to/new_pca_control_root \
+    --virtual-coils 24 --ecalib-crop 0.1
+```
+
+This changes only standard PCA truncation and the necessarily matched CSM.
+The accepted PSF is hash-validated and copied without recalibration, while
+ecalib and FISTA-r0 retain the explicitly requested matched settings. Keep
+subject-specific paths only in an ignored local launcher.
+
+## ROVir inspect cannot recommend a null ROI
+
+`no_safe_automatic_recommendation` is a valid result, not a failed BART run.
+The version-1 heuristic recognizes only sufficiently separated RO-boundary
+energy and protects the center of the corrected ACS RSS. Review the indexed
+RO/LIN/PAR figures and supply one or more explicit inclusive boxes with
+`--null-box`, or a path-free JSON list with `--null-box-file`. BART `rovir`
+does not detect anatomy or regions; it receives the positive and negative coil
+images produced from the reviewed box union.
+
+The red contour is the exact binary union used for negative estimation. It is
+not a hard reconstruction mask. If desired head, scalp, face, or neck anatomy
+falls inside it, revise the boxes before typing the candidate ID. Argument
+order and duplicate boxes do not change the ID when the final union is
+identical. If the first outline is unsatisfactory, stop before approval and
+rerun with revised boxes. Each distinct candidate is retained by ID; none is
+overwritten. Once one candidate is approved, a different approval is rejected
+to keep downstream transform provenance immutable.
+
+## ROVir run or retro reuse is rejected
+
+The canonical gate is `normal/rovir/manifest.json`. Do not edit it or point
+retro reconstruction at an older feasibility experiment. A ROVir run fails
+closed for a partial CFL pair, changed command, different candidate ID,
+transform hash, selected Ncc, standard-normal manifest, PSF, ecalib record, or
+source. `--ecalib-crop` is a deliberate normal-ROVir override and is recorded;
+omit it to inherit the completed normal crop.
+
+`sample_mprage_retro_lr_recon.sh --rovir` never estimates another transform.
+It requires all five standard retro BART-input cases, applies the canonical
+normal ROVir coil basis before retrospective sampling/cropping, and writes only
+`retro/<case>/rovir/`. If only normal ROVir has completed, rerunning the NIfTI
+collector safely adds that available branch without requiring unfinished ROVir
+retro siblings.
 
 ## A legacy normal manifest does not match the current PSF implementation
 

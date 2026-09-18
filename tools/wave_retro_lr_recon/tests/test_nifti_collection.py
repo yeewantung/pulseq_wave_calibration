@@ -268,6 +268,36 @@ class NiftiCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "refusing to remove"):
                 build_mprage_nifti_collection(root)
 
+    def test_discovers_available_normal_and_retro_rovir_branches(self) -> None:
+        """Add ROVir siblings idempotently without making partial ROVir mandatory.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_complete_source_tree(root, include_r3x3=False)
+            self._write_case(
+                root / "normal" / "rovir" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            self._write_case(
+                root
+                / "retro"
+                / "native_r3x2"
+                / "rovir"
+                / "nifti"
+                / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            manifest = build_mprage_nifti_collection(root, require_retro=True)
+            groups = {(entry["branch"], entry["case"]) for entry in manifest["cases"]}
+            self.assertIn(("rovir_fista_r0", "normal"), groups)
+            self.assertIn(("rovir_fista_r0", "native_r3x2"), groups)
+            self.assertNotIn(("rovir_fista_r0", "lr_x_1p5mm_r3x2"), groups)
+
     def _write_complete_source_tree(
         self, root: Path, *, include_r3x3: bool = True
     ) -> list[Path]:

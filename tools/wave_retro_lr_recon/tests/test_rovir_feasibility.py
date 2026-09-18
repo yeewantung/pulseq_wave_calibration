@@ -19,11 +19,14 @@ from wave_retro_lr.bart_io import create_cfl, open_cfl, sha256_file  # noqa: E40
 from wave_retro_lr.rovir_feasibility import (  # noqa: E402
     _validate_four_region_masks,
     approve_region_mask_candidate,
+    derive_box_union_mask_candidate,
     derive_region_mask_candidates,
     derive_ro_partition_mask_candidate,
     export_manual_roi_annotation_nifti,
     export_mprage_physical_calibration,
+    parse_null_box,
     prepare_masked_rovir_inputs,
+    recommend_null_boxes,
     record_calibration_images,
     validate_manual_roi_annotation,
     write_rovir_transform_qc,
@@ -240,6 +243,121 @@ class RovirFeasibilityTests(unittest.TestCase):
             self.assertTrue(
                 (root / "diagnostics" / "region_curves" / "rovir_two_region_curves.png").is_file()
             )
+
+    def test_box_union_is_order_independent_and_has_no_ten_box_limit(self) -> None:
+        """Hash the exact union while retaining overlap and duplicate provenance.
+
+        Returns:
+            None.
+        """
+        boxes = [
+            f"ro={index}:{index},lin=0:0,par=0:0" for index in range(11)
+        ]
+        boxes.extend(
+            (
+                "ro=0:2,lin=0:0,par=0:0",
+                "ro=0:0,lin=0:0,par=0:0",
+            )
+        )
+        candidate_ids = []
+        for ordered in (boxes, list(reversed(boxes))):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._write_calibration_inputs(root)
+                version = root / "bart_version.txt"
+                version.write_text("v1.0-test\n", encoding="utf-8")
+                record_calibration_images(root, version)
+                manifest = derive_box_union_mask_candidate(root, ordered)
+                candidate = manifest["candidates"][0]
+                candidate_ids.append(candidate["candidate_id"])
+                parameters = candidate["parameters"]
+                self.assertEqual(parameters["submitted_box_count"], 13)
+                self.assertEqual(parameters["canonical_box_count"], 12)
+                self.assertGreater(parameters["overlap_voxel_count"], 0)
+                candidate_root = root / "masks" / "candidates" / candidate["candidate_id"]
+                negative = np.asarray(open_cfl(candidate_root / "negative_estimation_mask")).real
+                positive = np.asarray(open_cfl(candidate_root / "positive_estimation_mask")).real
+                np.testing.assert_array_equal(positive, 1 - negative)
+                self.assertTrue((candidate_root / "review_union_outline.png").is_file())
+        self.assertEqual(candidate_ids[0], candidate_ids[1])
+
+    def test_box_union_allows_revision_before_but_not_after_approval(self) -> None:
+        """Retain reviewed alternatives while freezing provenance after approval.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_calibration_inputs(root)
+            version = root / "bart_version.txt"
+            version.write_text("v1.0-test\n", encoding="utf-8")
+            record_calibration_images(root, version)
+            first = derive_box_union_mask_candidate(
+                root, ["ro=0:1,lin=all,par=all"]
+            )
+            first_id = first["candidates"][0]["candidate_id"]
+            revised = derive_box_union_mask_candidate(
+                root, ["ro=0:2,lin=all,par=all"]
+            )
+            self.assertEqual(len(revised["candidates"]), 2)
+            approve_region_mask_candidate(root, first_id)
+            with self.assertRaisesRegex(ValueError, "already approved"):
+                derive_box_union_mask_candidate(
+                    root, ["ro=0:3,lin=all,par=all"]
+                )
+
+    def test_null_box_rejects_bounds_and_empty_complement(self) -> None:
+        """Reject out-of-grid coordinates and a union that fills the volume.
+
+        Returns:
+            None.
+        """
+        with self.assertRaisesRegex(ValueError, "outside"):
+            parse_null_box("ro=0:12,lin=all,par=all", (12, 8, 8))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_calibration_inputs(root)
+            version = root / "bart_version.txt"
+            version.write_text("v1.0-test\n", encoding="utf-8")
+            record_calibration_images(root, version)
+            with self.assertRaisesRegex(ValueError, "complement"):
+                derive_box_union_mask_candidate(
+                    root, [{"ro": "all", "lin": "all", "par": "all"}]
+                )
+
+    def test_null_box_recommendation_can_recommend_or_refuse(self) -> None:
+        """Keep the heuristic conservative and explicitly auditable.
+
+        Returns:
+            None.
+        """
+        for strong_edge, expected in (
+            (True, "safe_conservative_recommendation_available"),
+            (False, "no_safe_automatic_recommendation"),
+        ):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._write_calibration_inputs(root)
+                rss = create_cfl(
+                    root / "inputs" / "physical_calibration" / "physical_set4_rss",
+                    (12, 8, 8),
+                )
+                rss[...] = 1
+                if strong_edge:
+                    rss[:3, ...] = 10
+                rss.flush()
+                del rss
+                version = root / "bart_version.txt"
+                version.write_text("v1.0-test\n", encoding="utf-8")
+                record_calibration_images(root, version)
+                recommendation = recommend_null_boxes(root)
+                self.assertEqual(recommendation["status"], expected)
+                self.assertFalse(recommendation["approved"])
+                if strong_edge:
+                    self.assertGreater(len(recommendation["recommended_boxes"]), 0)
+                else:
+                    self.assertEqual(recommendation["recommended_boxes"], [])
 
     def test_reviewed_masks_inputs_and_transform_qc(self) -> None:
         """Require explicit approval and retain BART-only solver provenance.

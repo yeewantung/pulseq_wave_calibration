@@ -14,12 +14,14 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.rovir_feasibility import (  # noqa: E402
     approve_region_mask_candidate,
+    derive_box_union_mask_candidate,
     derive_region_mask_candidates,
     derive_ro_partition_mask_candidate,
     export_manual_roi_annotation_nifti,
     export_mprage_physical_calibration,
     preflight_mprage_rovir_sources,
     prepare_masked_rovir_inputs,
+    recommend_null_boxes,
     record_calibration_images,
     validate_manual_roi_annotation,
     write_rovir_transform_qc,
@@ -62,6 +64,13 @@ def _parser() -> argparse.ArgumentParser:
     ro_partition = commands.add_parser("derive-ro-partition")
     ro_partition.add_argument("feasibility_output_root", type=Path)
     ro_partition.add_argument("negative_ro_stop_inclusive", type=int)
+
+    recommend = commands.add_parser("recommend-null-boxes")
+    recommend.add_argument("feasibility_output_root", type=Path)
+
+    box_union = commands.add_parser("derive-box-union")
+    box_union.add_argument("feasibility_output_root", type=Path)
+    box_union.add_argument("--null-box", action="append", required=True)
 
     approve = commands.add_parser("approve-mask")
     approve.add_argument("feasibility_output_root", type=Path)
@@ -124,6 +133,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = derive_ro_partition_mask_candidate(
             args.feasibility_output_root,
             args.negative_ro_stop_inclusive,
+        )
+    elif args.stage == "recommend-null-boxes":
+        result = recommend_null_boxes(args.feasibility_output_root)
+    elif args.stage == "derive-box-union":
+        result = derive_box_union_mask_candidate(
+            args.feasibility_output_root, args.null_box
         )
     elif args.stage == "approve-mask":
         result = approve_region_mask_candidate(
