@@ -10,9 +10,9 @@ Usage:
   sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [ROI options] [run options]
 
 ROI options (choose exactly one mode):
-  --use-recommended
-  --null-box "ro=A:B,lin=C:D,par=E:F"   repeat without a count limit
-  --null-box-file ROI_BOXES.json
+  --use-recommended                       requires a prior inspect
+  --null-box "ro=A:B,lin=C:D,par=E:F"   may run directly; repeat freely
+  --null-box-file ROI_BOXES.json          may run directly
 
 Run options:
   --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
@@ -55,8 +55,8 @@ python "$WORKFLOW" validate-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQ
 TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sequence)"
 
-if [[ "$STAGE" == "inspect" ]]; then
-    [[ $# -eq 0 ]] || { echo "Error: inspect accepts exactly TWIX.dat OUTPUT_ROOT SEQUENCE.seq." >&2; exit 2; }
+prepare_calibration_inspection() {
+    # Build the indexed ACS diagnostics and their source-bound manifest once.
     python "$WORKFLOW" inspect-prepare "$RECONSTRUCTION_ROOT" >/dev/null
     CALIBRATION="$FEASIBILITY_ROOT/inputs/physical_calibration"
     LOGS="$FEASIBILITY_ROOT/logs"
@@ -90,6 +90,11 @@ bart rss 8 $CALIBRATION/physical_set4_coil_images $CALIBRATION/physical_set4_rss
         [[ -f "$LOGS/bart_version_images.txt" ]] || { echo "Error: reused ACS images lack a BART version record." >&2; exit 2; }
     fi
     python "$WORKFLOW" inspect-finish "$RECONSTRUCTION_ROOT" "$LOGS/bart_version_images.txt" >/dev/null
+}
+
+if [[ "$STAGE" == "inspect" ]]; then
+    [[ $# -eq 0 ]] || { echo "Error: inspect accepts exactly TWIX.dat OUTPUT_ROOT SEQUENCE.seq." >&2; exit 2; }
+    prepare_calibration_inspection
     echo "Inspect figures: $FEASIBILITY_ROOT/diagnostics/calibration_views"
     echo "ROI recommendation: $FEASIBILITY_ROOT/diagnostics/roi_recommendation/roi_recommendation.json"
     exit 0
@@ -120,11 +125,16 @@ ROI_MODES=0
 [[ -n "$NULL_BOX_FILE" ]] && ROI_MODES=$((ROI_MODES + 1))
 [[ $ROI_MODES -eq 1 ]] || { echo "Error: choose exactly one ROI input mode." >&2; exit 2; }
 
-# Ensure inspect is complete before creating a reviewed candidate.
-[[ -f "$FEASIBILITY_ROOT/manifests/calibration_images.json" ]] || {
-    echo "Error: run 'inspect' and review its indexed ACS figures first." >&2
-    exit 2
-}
+# Explicit manual boxes authorize direct execution. Generate any missing ACS
+# diagnostics for provenance without introducing a separate review gate.
+if [[ ! -f "$FEASIBILITY_ROOT/manifests/calibration_images.json" ]]; then
+    if [[ "$USE_RECOMMENDED" == true ]]; then
+        echo "Error: run 'inspect' and review its recommended ROI first." >&2
+        exit 2
+    fi
+    echo "Preparing indexed ACS diagnostics for the supplied manual null ROI."
+    prepare_calibration_inspection
+fi
 CANDIDATE_ARGS=()
 if [[ ${#NULL_BOXES[@]} -gt 0 ]]; then
     for box in "${NULL_BOXES[@]}"; do CANDIDATE_ARGS+=(--null-box "$box"); done

@@ -41,7 +41,7 @@ configuration file.
 ROVir writes only below `normal/rovir/` and leaves the standard normal branch
 unchanged.
 
-## Step 1: inspect the corrected ACS
+## Optional step: inspect the corrected ACS
 
 Use the same positional argument order as the normal and retrospective MPRAGE
 launchers. The command validates the supplied TWIX and sequence against the
@@ -54,7 +54,8 @@ scripts/sample_mprage_rovir_recon.sh inspect \
     /path/to/matching_wave_mprage.seq
 ```
 
-`inspect`:
+Run `inspect` when the ROI location is not already known or when using
+`--use-recommended`. It:
 
 1. validates accepted prepared inputs and their source contract;
 2. exports or strictly reuses corrected, alias-free physical-coil set-4 ACS;
@@ -71,7 +72,7 @@ normal/rovir/feasibility/diagnostics/calibration_views/
 normal/rovir/feasibility/diagnostics/roi_recommendation/
 ```
 
-## Step 2: specify one null-region union and reconstruct
+## Specify one null-region union and reconstruct
 
 If the recommendation is appropriate:
 
@@ -95,6 +96,12 @@ scripts/sample_mprage_rovir_recon.sh run \
     --null-box "ro=0:20,lin=48:71,par=all" \
     --virtual-coils 24
 ```
+
+An explicit `--null-box` or `--null-box-file` may be run directly without a
+prior `inspect` command. When the indexed ACS diagnostics are absent, `run`
+creates them automatically for provenance and troubleshooting, then continues
+without another review prompt. `--use-recommended` still requires a completed
+`inspect`, because the generated recommendation must be reviewed before use.
 
 The same records may be provided as a path-free JSON list with
 `--null-box-file`. Inline boxes and a box file are mutually exclusive. Boxes

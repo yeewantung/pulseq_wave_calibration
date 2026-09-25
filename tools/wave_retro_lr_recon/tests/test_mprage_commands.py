@@ -200,12 +200,21 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn("run TWIX.dat OUTPUT_ROOT SEQUENCE.seq", completed.stdout)
         self.assertNotIn("defaults to the current directory", completed.stdout)
         self.assertIn("--null-box", completed.stdout)
+        self.assertIn("requires a prior inspect", completed.stdout)
+        self.assertEqual(completed.stdout.count("may run directly"), 2)
         self.assertNotIn("--confirm-roi-id", completed.stdout)
         self.assertNotIn("--config", completed.stdout)
         source = public.read_text(encoding="utf-8")
         self.assertNotIn("read -r -p", source)
         self.assertNotIn("exact candidate ID mismatch", source)
         self.assertIn("choose exactly one ROI input mode", source)
+        self.assertIn("prepare_calibration_inspection()", source)
+        self.assertIn(
+            "Preparing indexed ACS diagnostics for the supplied manual null ROI.",
+            source,
+        )
+        self.assertIn("review its recommended ROI first", source)
+        self.assertNotIn("review its indexed ACS figures first", source)
         self.assertIn("bart fft -iu 7", source)
         self.assertIn("bart rss 8", source)
         self.assertIn("bart rovir", source)
