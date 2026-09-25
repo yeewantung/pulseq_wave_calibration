@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build ROVir-preferred canonical and masked MPRAGE NIfTI collections."""
+"""Build additive standard and ROVir MPRAGE NIfTI collections."""
 
 from __future__ import annotations
 

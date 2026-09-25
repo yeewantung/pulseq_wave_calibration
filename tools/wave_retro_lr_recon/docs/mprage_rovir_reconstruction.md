@@ -194,11 +194,10 @@ normal ROVir PSF. LR PSFs are resolution-matched evaluations of its validated
 phase-plane representation, so no PSF calibration or ecalib is rerun.
 
 The MPRAGE NIfTI collection synchronizes available standard and ROVir outputs
-idempotently. For one case and reconstruction method, a complete ROVir result
-replaces its standard counterpart in the collection; the standard result is a
-fallback when ROVir is absent. A partially populated ROVir set therefore
-replaces only its exact method-matched cases and does not become a global
-`--require-retro` requirement.
+idempotently. Standard and ROVir results remain separate branches even for the
+same case and reconstruction method, so the collection preserves direct
+standard-versus-ROVir comparisons. A partially populated ROVir set does not
+become a global `--require-retro` requirement.
 
 ## Failure handling
 

@@ -269,7 +269,7 @@ class NiftiCollectionTests(unittest.TestCase):
                 build_mprage_nifti_collection(root)
 
     def test_discovers_available_normal_and_retro_rovir_branches(self) -> None:
-        """Prefer method-matched ROVir cases and retain standard fallbacks.
+        """Retain standard and method-matched ROVir cases independently.
 
         Returns:
             None.
@@ -309,29 +309,24 @@ class NiftiCollectionTests(unittest.TestCase):
             self.assertIn(("rovir_fista_r0", "normal"), groups)
             self.assertIn(("rovir_fista_r0", "native_r3x2"), groups)
             self.assertNotIn(("rovir_fista_r0", "lr_x_1p5mm_r3x2"), groups)
-            self.assertNotIn(("fista_r0", "normal"), groups)
-            self.assertNotIn(("fista_r0", "native_r3x2"), groups)
+            self.assertIn(("fista_r0", "normal"), groups)
+            self.assertIn(("fista_r0", "native_r3x2"), groups)
             self.assertIn(("fista_r0", "lr_x_1p5mm_r3x2"), groups)
             self.assertIn(("optimal_wavelet", "normal"), groups)
-            self.assertNotIn(("optimal_wavelet", "native_r3x2"), groups)
+            self.assertIn(("optimal_wavelet", "native_r3x2"), groups)
             self.assertIn(("rovir_optimal_wavelet", "native_r3x2"), groups)
-            self.assertEqual(len(groups), 10)
+            self.assertEqual(len(groups), 13)
             self.assertEqual(manifest["head_mask"]["source_branch"], "rovir_fista_r0")
             self.assertEqual(
                 manifest["synchronization"]["rovir_replacements"],
+                [],
+            )
+            self.assertEqual(
+                manifest["synchronization"]["added_case_groups"],
                 [
-                    {
-                        "replaced_case_group": "fista_r0:native_r3x2",
-                        "preferred_case_group": "rovir_fista_r0:native_r3x2",
-                    },
-                    {
-                        "replaced_case_group": "fista_r0:normal",
-                        "preferred_case_group": "rovir_fista_r0:normal",
-                    },
-                    {
-                        "replaced_case_group": "optimal_wavelet:native_r3x2",
-                        "preferred_case_group": "rovir_optimal_wavelet:native_r3x2",
-                    },
+                    "rovir_fista_r0:native_r3x2",
+                    "rovir_fista_r0:normal",
+                    "rovir_optimal_wavelet:native_r3x2",
                 ],
             )
             self.assertEqual(
@@ -339,7 +334,7 @@ class NiftiCollectionTests(unittest.TestCase):
             )
 
             refreshed = build_mprage_nifti_collection(root, require_retro=True)
-            self.assertEqual(len(refreshed["cases"]), 10)
+            self.assertEqual(len(refreshed["cases"]), 13)
             self.assertEqual(refreshed["synchronization"]["added_case_groups"], [])
             self.assertEqual(refreshed["synchronization"]["rovir_replacements"], [])
 

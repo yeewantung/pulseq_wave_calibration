@@ -421,11 +421,6 @@ def _discover_case_sources(
                             case_directory.name
                         ] = pairs
 
-    # For one case and reconstruction method, a complete ROVir result is the
-    # preferred coil-processing realization. Keep the standard result only as
-    # a per-case fallback when its ROVir counterpart is absent.
-    sources = _prefer_rovir_case_sources(sources)
-
     if require_retro:
         required_cases = list(REQUIRED_RETRO_CASES)
         required_cases.extend(
@@ -459,36 +454,6 @@ def _discover_case_sources(
     return ordered
 
 
-def _prefer_rovir_case_sources(
-    sources: dict[str, dict[str, list[tuple[Path, Path]]]],
-) -> dict[str, dict[str, list[tuple[Path, Path]]]]:
-    """Prefer complete ROVir sources over method-matched standard sources.
-
-    Args:
-        sources: Discovered source pairs keyed by branch and stable case name.
-
-    Returns:
-        A new mapping in which ``rovir_<method>:<case>`` replaces
-        ``<method>:<case>`` while unrelated methods and cases are retained.
-    """
-    selected = {
-        branch: dict(cases)
-        for branch, cases in sources.items()
-    }
-    for rovir_branch, rovir_cases in tuple(selected.items()):
-        if not rovir_branch.startswith("rovir_"):
-            continue
-        standard_branch = rovir_branch.removeprefix("rovir_")
-        standard_cases = selected.get(standard_branch)
-        if standard_cases is None:
-            continue
-        for case in rovir_cases:
-            standard_cases.pop(case, None)
-        if not standard_cases:
-            selected.pop(standard_branch)
-    return selected
-
-
 def _collection_synchronization(
     previous_manifest: dict[str, Any] | None,
     branch_sources: dict[str, dict[str, list[tuple[Path, Path]]]],
@@ -514,26 +479,16 @@ def _collection_synchronization(
         for branch, cases in branch_sources.items()
         for case in cases
     }
-    replacements = []
-    replaced_previous: set[str] = set()
-    for group in sorted(previous - discovered):
-        branch, case = group.split(":", 1)
-        preferred = f"rovir_{branch}:{case}"
-        if preferred in discovered:
-            replacements.append(
-                {"replaced_case_group": group, "preferred_case_group": preferred}
-            )
-            replaced_previous.add(group)
     return {
         "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
         "previous_case_groups": sorted(previous),
         "discovered_case_groups": sorted(discovered),
         "retained_case_groups": sorted(previous & discovered),
         "added_case_groups": sorted(discovered - previous),
-        "rovir_replacements": replacements,
-        "no_longer_discovered_case_groups": sorted(
-            previous - discovered - replaced_previous
-        ),
+        # Retain the legacy field for manifest compatibility. The additive
+        # collection policy never replaces standard groups with ROVir groups.
+        "rovir_replacements": [],
+        "no_longer_discovered_case_groups": sorted(previous - discovered),
     }
 
 
@@ -845,8 +800,7 @@ def _materialize_collection(
             "masked_outputs_for_presentation_only": True,
             "masked_outputs_excluded_from_regularization_evaluation": True,
             "coil_processing_selection": (
-                "complete method-matched ROVir case replaces standard case; "
-                "standard case is retained as fallback when ROVir is absent"
+                "standard and ROVir case groups are retained independently"
             ),
         },
         "head_mask": mask_record,

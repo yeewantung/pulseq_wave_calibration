@@ -302,19 +302,18 @@ method-matched ROVir case satisfies that requirement. A legacy root without
 case must also be complete. This script never runs k-space preparation,
 ecalib, or Wave reconstruction.
 
-Discovery is directory-backed rather than case-list-backed. For the same case
-(therefore the same resolution and acceleration) and reconstruction method, a
-complete `rovir/nifti/<branch>` result replaces the corresponding standard
-`nifti/<branch>` result in the collection. When that ROVir result is absent,
-the standard result remains as the fallback. Other methods and resolutions are
-selected independently. Source reconstruction trees are never deleted or
-modified.
+Discovery is directory-backed rather than case-list-backed. Standard
+`nifti/<branch>` and ROVir `rovir/nifti/<branch>` results are retained as
+separate collection branches, including when they have the same case,
+resolution, acceleration, and reconstruction method. Source reconstruction
+trees are never deleted or modified.
 
 Rerunning the builder validates the existing tool-owned collection and its
 hashes, then atomically synchronizes it with the source tree. A newly available
-ROVir result may safely replace its standard collection entry; this substitution
-is recorded under `synchronization.rovir_replacements`. Any unrelated source
-disappearance remains a hard error rather than silently removing an entry.
+ROVir result is appended without removing its standard collection entry. Any
+source disappearance remains a hard error rather than silently removing an
+entry. The legacy `synchronization.rovir_replacements` field remains present
+but is always empty under this additive policy.
 
 MPRAGE reconstruction and presentation masking remain separate. The collection
 copies canonical NIfTIs byte-for-byte and creates whole-head-masked derivatives
@@ -342,9 +341,9 @@ collection script and recorded in its manifest. See
 ```text
 OUTPUT_ROOT/
 ├── normal/nifti/<branch>/                # canonical, unmasked source
-├── normal/rovir/nifti/<branch>/          # preferred when method-matched
+├── normal/rovir/nifti/<branch>/          # collected alongside standard output
 ├── retro/<case>/nifti/<branch>/          # canonical, unmasked source
-├── retro/<case>/rovir/nifti/<branch>/    # preferred when method-matched
+├── retro/<case>/rovir/nifti/<branch>/    # collected alongside standard output
 └── nifti_collection/
     ├── original_nifti/
     │   └── <branch>/
