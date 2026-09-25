@@ -13,13 +13,13 @@ import numpy as np
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
-from wave_retro_lr.bart_io import cfl_record, create_cfl, sha256_file  # noqa: E402
-from wave_retro_lr.core import ResolvedCase  # noqa: E402
+from wave_retro_lr.bart_io import cfl_record, create_cfl, open_cfl, sha256_file  # noqa: E402
 from wave_retro_lr.rovir_retro import (  # noqa: E402
     ROVIR_RETRO_CASES,
     prepare_mprage_rovir_retro,
 )
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
+from wave_retro_lr.sampling import validate_pure_cartesian_image_lattice  # noqa: E402
 
 
 class RovirRetroTests(unittest.TestCase):
@@ -39,11 +39,18 @@ class RovirRetroTests(unittest.TestCase):
             for entry in manifests:
                 case = entry["case_directory"]
                 self.assertEqual(entry["coil_processing"]["candidate_id"], "reviewed_union")
+                self.assertFalse(entry["standard_retro_inputs_required"])
                 self.assertTrue(entry["fista_lambda_zero_required"])
                 self.assertFalse(entry["selected_regularization"]["optimized_for_rovir"])
+                inputs = root / "retro" / case / "rovir" / "bart_inputs"
                 self.assertTrue(
-                    (root / "retro" / case / "rovir" / "bart_inputs" / "wave_kspace.cfl").is_file()
+                    (inputs / "wave_kspace.cfl").is_file()
                 )
+                mask = np.load(inputs / "sampling_mask.npy", allow_pickle=False)
+                validate_pure_cartesian_image_lattice(mask, entry["sampling"])
+                if case == "native_r3x3":
+                    self.assertEqual(entry["sampling"]["residue_lin_par"], [1, 2])
+                self.assertFalse((root / "retro" / case / "bart_inputs").exists())
             reused = prepare_mprage_rovir_retro(root)
             self.assertEqual(len(reused), 5)
 
@@ -55,7 +62,7 @@ class RovirRetroTests(unittest.TestCase):
                 prepare_mprage_rovir_retro(root)
 
     def _write_fixture(self, root: Path) -> Path:
-        """Write a compact normal ROVir contract and five standard cases.
+        """Write a compact normal ROVir contract without standard retro cases.
 
         Args:
             root: Temporary reconstruction root.
@@ -76,20 +83,35 @@ class RovirRetroTests(unittest.TestCase):
             name="R1",
             acceleration_lin_par=(1, 1),
             lin_residue=None,
-            matrix_lin_par=(8, 8),
-            acquired_lin=tuple(range(8)),
-            acquired_par=tuple(range(8)),
+            matrix_lin_par=(16, 16),
+            acquired_lin=tuple(range(16)),
+            acquired_par=tuple(range(16)),
             measurement_index=0,
             skip_lin_par=(0, 0),
         )
         normal_manifest = root / "normal" / "bart_inputs" / "manifest.json"
-        self._write_json(normal_manifest, {"source": source, "sampling": sampling.to_json()})
+        self._write_json(
+            normal_manifest,
+            {
+                "source": source,
+                "sampling": sampling.to_json(),
+                "geometry": {
+                    "physical_fov_mm_xyz": [16.0, 16.0, 8.0],
+                    "logical_matrix_ro_lin_par": [4, 16, 16],
+                    "readout_oversampling_factor": 2,
+                },
+            },
+        )
 
         rovir_inputs = root / "normal" / "rovir" / "bart_inputs"
-        wave = self._write_cfl(rovir_inputs / "wave_kspace", (8, 8, 8, 2, 1), seed=1)
-        psf = self._write_cfl(rovir_inputs / "psf", (8, 8, 8, 1, 1), seed=2)
+        wave = self._write_cfl(rovir_inputs / "wave_kspace", (8, 16, 16, 2, 1), seed=1)
+        psf = self._write_cfl(rovir_inputs / "psf", (8, 16, 16, 1, 1), seed=2)
+        psf_values = open_cfl(psf, mode="r+")
+        psf_values[...] = 1.0 + 0.0j
+        psf_values.flush()
+        del psf_values
         calibration = self._write_cfl(
-            rovir_inputs / "kspace_calib", (4, 8, 8, 2), seed=5
+            rovir_inputs / "kspace_calib", (4, 16, 16, 2), seed=5
         )
         basis = rovir_inputs / "rovir_projection_basis.npy"
         np.save(basis, np.eye(2, dtype=np.complex64), allow_pickle=False)
@@ -101,7 +123,7 @@ class RovirRetroTests(unittest.TestCase):
             / "inputs"
             / "physical_calibration"
             / "physical_set4_kspace",
-            (4, 8, 8, 2),
+            (4, 16, 16, 2),
             seed=6,
         )
         physical_manifest = (
@@ -132,7 +154,7 @@ class RovirRetroTests(unittest.TestCase):
             },
         )
         rovir_output = root / "normal" / "rovir" / "bart_output"
-        csm = self._write_cfl(rovir_output / "coil_sens", (4, 8, 8, 2, 1), seed=3)
+        csm = self._write_cfl(rovir_output / "coil_sens", (4, 16, 16, 2, 1), seed=3)
         ecalib = rovir_output / "ecalib_command.txt"
         ecalib.write_text("bart ecalib -m 1 -c 0.1 input output\n", encoding="utf-8")
         feasibility = root / "normal" / "rovir" / "feasibility"
@@ -143,36 +165,6 @@ class RovirRetroTests(unittest.TestCase):
         )
         approved = feasibility / "masks" / "approved" / "manifest.json"
         self._write_json(approved, {"candidate_id": "reviewed_union"})
-
-        case_shapes = {
-            "native_r3x2": (8, 8),
-            "lr_x_1p5mm_r3x2": (8, 4),
-            "lr_y_1p5mm_r3x2": (4, 8),
-            "lr_xy_1p25mm_r3x2": (4, 4),
-            "native_r3x3": (8, 8),
-        }
-        for index, (case_name, (lin, par)) in enumerate(case_shapes.items(), start=10):
-            standard = root / "retro" / case_name / "bart_inputs"
-            self._write_cfl(standard / "psf", (8, lin, par, 1, 1), seed=index)
-            case = ResolvedCase(
-                requested_resolution_mm_xyz=(8 / par, 8 / lin, 1.0),
-                achieved_resolution_mm_xyz=(8 / par, 8 / lin, 1.0),
-                source_logical_matrix_ro_lin_par=(4, 8, 8),
-                target_logical_matrix_ro_lin_par=(4, lin, par),
-                target_physical_matrix_xyz=(par, lin, 4),
-                crop_bounds_lin=((8 - lin) // 2, (8 - lin) // 2 + lin),
-                crop_bounds_par=((8 - par) // 2, (8 - par) // 2 + par),
-                acceleration_ry_rz=((3, 3) if case_name == "native_r3x3" else (3, 2)),
-                case_name=case_name,
-                label=case_name,
-            )
-            manifest = {"case": case.to_json()}
-            if case_name == "native_r3x3":
-                mask = np.zeros((8, 8), dtype=bool)
-                mask[1::3, 1::3] = True
-                np.save(standard / "sampling_mask.npy", mask)
-                manifest["selected_regularization"] = {"method": "wavelet", "lambda": 0.045}
-            self._write_json(standard / "manifest.json", manifest)
 
         contract = {
             "status": "mprage_normal_rovir_complete",

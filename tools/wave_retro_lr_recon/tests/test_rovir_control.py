@@ -98,14 +98,35 @@ class RovirControlTests(unittest.TestCase):
             transform[0, 0, 0, :, :] = stored_transform
             transform.flush()
             del transform
+            bart_record = feasibility / "logs" / "bart_version.txt"
+            curve_csv = feasibility / "diagnostics" / "curve.csv"
+            curve_plot = feasibility / "diagnostics" / "curve.png"
+            bart_record.parent.mkdir(parents=True)
+            curve_csv.parent.mkdir(parents=True)
+            bart_record.write_text("v1.0-test\n", encoding="utf-8")
+            curve_csv.write_text("virtual_coils,signal\n1,1\n", encoding="utf-8")
+            curve_plot.write_bytes(b"synthetic plot")
+
+            def file_record(path: Path) -> dict[str, object]:
+                """Return a strict identity record for one test artifact."""
+                return {
+                    "path": str(path.resolve()),
+                    "size_bytes": path.stat().st_size,
+                    "sha256": sha256_file(path),
+                }
+
             qc = {
                 "status": "mprage_bart_rovir_transform_qc_ready",
                 "rovir_input_manifest_sha256": sha256_file(rovir_inputs),
                 "selected_virtual_coils": None,
                 "transform": cfl_record(transform_base),
                 "transform_validation": {"orthogonality_tolerance": 1e-4},
+                "bart": file_record(bart_record),
+                "region_curve_csv": file_record(curve_csv),
+                "region_curve_plot": file_record(curve_plot),
             }
-            (feasibility / "manifests" / "rovir_transform_qc.json").write_text(
+            qc_path = feasibility / "manifests" / "rovir_transform_qc.json"
+            qc_path.write_text(
                 json.dumps(qc), encoding="utf-8"
             )
 
@@ -152,6 +173,40 @@ class RovirControlTests(unittest.TestCase):
                     channel_counts=(2, 3),
                     partition_progress_interval=2,
                 )
+                wave_before = sha256_file(
+                    output / "rovir_ncc2" / "bart_inputs" / "wave_kspace.cfl"
+                )
+                qc["created_at_utc"] = "regenerated-wrapper-metadata"
+                qc_path.write_text(json.dumps(qc), encoding="utf-8")
+                resumed = prepare_mprage_rovir_comparison(
+                    root / "source.dat",
+                    root / "source.seq",
+                    accepted,
+                    feasibility,
+                    output,
+                    channel_counts=(2, 3),
+                    partition_progress_interval=2,
+                )
+                self.assertEqual(
+                    sha256_file(
+                        output / "rovir_ncc2" / "bart_inputs" / "wave_kspace.cfl"
+                    ),
+                    wave_before,
+                )
+                refreshed = json.loads(
+                    (
+                        output
+                        / "rovir_ncc2"
+                        / "bart_inputs"
+                        / "manifest.json"
+                    ).read_text(encoding="utf-8")
+                )
+                self.assertTrue(
+                    refreshed["provenance_refresh"][
+                        "scientific_arrays_reused_without_modification"
+                    ]
+                )
+                self.assertEqual(resumed["channel_counts"], [2, 3])
 
             expected = image_values.reshape(-1, 3) @ stored_transform.conj()
             expected = expected.reshape(image_values.shape)
@@ -249,6 +304,19 @@ class RovirControlTests(unittest.TestCase):
                 ["negative RO 0--30", "negative RO 0--20", "negative RO 0--10"],
             )
             self.assertFalse(series_manifest["automatic_winner_selected"])
+
+            single_manifest = write_mprage_rovir_mask_series_qc(
+                (("ROVir-24 FISTA lambda=0", first_path),),
+                root / "single_qc",
+                figure_filename="rovir_only.png",
+            )
+            self.assertTrue((root / "single_qc" / "rovir_only.png").is_file())
+            self.assertEqual(
+                single_manifest["status"],
+                "mprage_rovir_single_reconstruction_qc_ready",
+            )
+            self.assertEqual(len(single_manifest["candidates"]), 1)
+            self.assertFalse(single_manifest["display_window"]["shared_between_rows"])
 
     def test_sample_script_keeps_bart_commands_explicit(self) -> None:
         """Keep ecalib and CPU/GPU FISTA-r0 commands visible in Bash.

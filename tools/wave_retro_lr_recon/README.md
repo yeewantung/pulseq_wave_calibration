@@ -296,28 +296,36 @@ scripts/sample_mprage_nifti_collection.sh \
 
 Omit `--require-retro` to collect every currently available normal and
 retrospective reconstruction. With `--require-retro`, the four historical
-R3x2/LR cases must be complete for every discovered normal branch. A legacy
-root without `native_r3x3` remains valid; once a `retro/native_r3x3` directory
-exists, that case must also be complete. This script never runs k-space
-preparation, ecalib, or Wave reconstruction.
+R3x2/LR cases must be complete for every discovered normal method; a complete
+method-matched ROVir case satisfies that requirement. A legacy root without
+`native_r3x3` remains valid; once a `retro/native_r3x3` directory exists, that
+case must also be complete. This script never runs k-space preparation,
+ecalib, or Wave reconstruction.
 
-Discovery is directory-backed rather than case-list-backed: every populated
-`normal/nifti/<branch>` and `retro/<case>/nifti/<branch>` directory is included,
-including `native_r3x3` and future case or branch names. Rerunning the builder
-validates the existing tool-owned collection and its hashes, then atomically
-synchronizes it with the source tree. Newly discovered case groups are added
-and recorded under `synchronization` in the manifest; previously collected
-groups are never silently removed when their source directory disappears.
+Discovery is directory-backed rather than case-list-backed. For the same case
+(therefore the same resolution and acceleration) and reconstruction method, a
+complete `rovir/nifti/<branch>` result replaces the corresponding standard
+`nifti/<branch>` result in the collection. When that ROVir result is absent,
+the standard result remains as the fallback. Other methods and resolutions are
+selected independently. Source reconstruction trees are never deleted or
+modified.
+
+Rerunning the builder validates the existing tool-owned collection and its
+hashes, then atomically synchronizes it with the source tree. A newly available
+ROVir result may safely replace its standard collection entry; this substitution
+is recorded under `synchronization.rovir_replacements`. Any unrelated source
+disappearance remains a hard error rather than silently removing an entry.
 
 MPRAGE reconstruction and presentation masking remain separate. The collection
 copies canonical NIfTIs byte-for-byte and creates whole-head-masked derivatives
 without modifying the scientific source files under `normal/nifti` and
 `retro/<case>/nifti`.
 
-The mask is estimated once from the normal `optimal_wavelet` magnitude when
-available, with normal `fista_r0` as the next preference and the first other
-normal branch as a general fallback. It is applied identically to every
-discovered reconstruction branch. The mask uses a high-confidence
+The mask is estimated once from a normal ROVir magnitude when available
+(`rovir_optimal_wavelet`, then `rovir_fista_r0`), followed by standard
+`optimal_wavelet`, standard `fista_r0`, and the first other normal branch as a
+general fallback. It is applied identically to every selected reconstruction
+branch. The mask uses a high-confidence
 head core with distance-limited low-threshold growth, optional physical
 opening, physical closing, the largest 26-connected 3D component, 3D hole
 filling, and optional physical dilation. BET is not used. The same normal mask
@@ -334,7 +342,9 @@ collection script and recorded in its manifest. See
 ```text
 OUTPUT_ROOT/
 ├── normal/nifti/<branch>/                # canonical, unmasked source
+├── normal/rovir/nifti/<branch>/          # preferred when method-matched
 ├── retro/<case>/nifti/<branch>/          # canonical, unmasked source
+├── retro/<case>/rovir/nifti/<branch>/    # preferred when method-matched
 └── nifti_collection/
     ├── original_nifti/
     │   └── <branch>/

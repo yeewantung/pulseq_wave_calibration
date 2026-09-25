@@ -145,7 +145,7 @@ def prepare_mprage_rovir_comparison(
         manifest_path = destination / "manifest.json"
         if manifest_path.is_file():
             manifest = _read_json(manifest_path)
-            _validate_rovir_branch_reuse(
+            manifest = _validate_rovir_branch_reuse(
                 manifest, source, feasibility, destination, transform_record, count
             )
             existing[count] = manifest
@@ -547,7 +547,7 @@ def write_mprage_rovir_mask_series_qc(
     *,
     figure_filename: str = "rovir24_negative_roi_series_fixed_window.png",
 ) -> dict[str, Any]:
-    """Compare two or more ROVir reconstructions with one restored window.
+    """Display one or compare several ROVir reconstructions with one window.
 
     Args:
         candidates: Ordered display-label and magnitude-NIfTI pairs.
@@ -559,7 +559,7 @@ def write_mprage_rovir_mask_series_qc(
         display window, and the comparison figure.
 
     Raises:
-        ValueError: If fewer than two candidates are supplied, labels repeat,
+        ValueError: If no candidates are supplied, labels repeat,
             the filename is unsafe, or NIfTI geometry and values are invalid.
 
     Side Effects:
@@ -569,8 +569,8 @@ def write_mprage_rovir_mask_series_qc(
 
     entries = tuple((str(label), Path(path).resolve()) for label, path in candidates)
     labels = [label for label, _ in entries]
-    if len(entries) < 2:
-        raise ValueError("ROVir mask-series QC requires at least two candidates.")
+    if not entries:
+        raise ValueError("ROVir reconstruction QC requires at least one candidate.")
     if any(not label.strip() for label in labels) or len(set(labels)) != len(labels):
         raise ValueError("ROVir mask-series labels must be nonempty and unique.")
     if (
@@ -613,12 +613,20 @@ def write_mprage_rovir_mask_series_qc(
             axes[row, column].imshow(plane, cmap="gray", vmin=0, vmax=vmax)
             axes[row, column].set_title(f"{label}\n{orientation} center")
             axes[row, column].axis("off")
-    figure.suptitle("ROVir negative-ROI comparison; restored magnitude and shared window")
+    figure.suptitle(
+        "ROVir reconstruction QC; restored magnitude"
+        if len(entries) == 1
+        else "ROVir negative-ROI comparison; restored magnitude and shared window"
+    )
     figure.savefig(figure_path, dpi=180)
     plt.close(figure)
     manifest = {
         "format_version": 1,
-        "status": "mprage_rovir_negative_roi_series_qc_ready",
+        "status": (
+            "mprage_rovir_single_reconstruction_qc_ready"
+            if len(entries) == 1
+            else "mprage_rovir_negative_roi_series_qc_ready"
+        ),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "candidates": [
             {"label": label, "nifti": _file_record(path)} for label, path in entries
@@ -632,7 +640,7 @@ def write_mprage_rovir_mask_series_qc(
             "vmax": vmax,
             "per_branch_restored_positive_p99_5": percentiles,
             "anchor": "maximum restored positive-voxel p99.5 across all branches",
-            "shared_between_rows": True,
+            "shared_between_rows": len(entries) > 1,
         },
         "figure": _file_record(figure_path),
         "automatic_winner_selected": False,
@@ -759,7 +767,7 @@ def _validate_rovir_branch_reuse(
     destination: Path,
     transform_record: Mapping[str, Any],
     count: int,
-) -> None:
+) -> dict[str, Any]:
     """Validate an existing prepared ROVir branch for exact reuse.
 
     Args:
@@ -770,19 +778,37 @@ def _validate_rovir_branch_reuse(
         transform_record: Current ROVir transform record.
         count: Requested retained virtual-coil count.
 
+    Returns:
+        Validated manifest, with a refreshed transform-QC file record when the
+        immutable scientific contract is unchanged.
+
     Raises:
         ValueError: If provenance or any prepared artifact differs.
     """
     rovir = manifest.get("rovir", {})
+    if manifest.get("status") != "measured_wave_mprage_rovir_control_ready":
+        raise ValueError(f"Existing ROVir-{count} inputs are not complete.")
+    if manifest.get("source") != source:
+        raise ValueError(f"Existing ROVir-{count} inputs use different sources.")
+    if rovir.get("virtual_coils") != count:
+        raise ValueError(f"Existing ROVir inputs retain a different coil count than {count}.")
+    if not _same_cfl_content(rovir.get("transform_source", {}), transform_record):
+        raise ValueError(f"Existing ROVir-{count} inputs use a different transform.")
+
+    qc_path = feasibility / ROVIR_QC_MANIFEST
+    qc = _read_json(qc_path)
+    solver_record = rovir.get("solver_input_manifest", {})
     if (
-        manifest.get("status") != "measured_wave_mprage_rovir_control_ready"
-        or manifest.get("source") != source
-        or rovir.get("virtual_coils") != count
-        or not _same_cfl_content(rovir.get("transform_source", {}), transform_record)
-        or rovir.get("transform_qc_manifest", {}).get("sha256")
-        != sha256_file(feasibility / ROVIR_QC_MANIFEST)
+        qc.get("status") != "mprage_bart_rovir_transform_qc_ready"
+        or qc.get("selected_virtual_coils") is not None
+        or qc.get("rovir_input_manifest_sha256") != solver_record.get("sha256")
+        or not _same_cfl_content(qc.get("transform", {}), transform_record)
     ):
-        raise ValueError(f"Existing ROVir-{count} inputs use a different contract.")
+        raise ValueError(f"Existing ROVir-{count} inputs use incompatible transform QC.")
+    _require_file_record(solver_record)
+    _require_file_record(qc.get("bart"))
+    _require_file_record(qc.get("region_curve_csv"))
+    _require_file_record(qc.get("region_curve_plot"))
     for name in ("wave_kspace", "kspace_calib"):
         if not _same_cfl_content(
             manifest.get("artifacts", {}).get(name, {}), cfl_record(destination / name)
@@ -796,3 +822,46 @@ def _validate_rovir_branch_reuse(
     basis = destination / "rovir_projection_basis.npy"
     if sha256_file(basis) != rovir.get("projection_basis_sha256"):
         raise ValueError(f"Existing ROVir-{count} projection basis failed hash reuse.")
+
+    current_qc_record = _file_record(qc_path)
+    if rovir.get("transform_qc_manifest") != current_qc_record:
+        refreshed = {
+            **dict(manifest),
+            "rovir": {
+                **dict(rovir),
+                "transform_qc_manifest": current_qc_record,
+            },
+            "provenance_refresh": {
+                "refreshed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "reason": "semantically identical transform QC manifest was regenerated",
+                "scientific_arrays_reused_without_modification": True,
+            },
+        }
+        _write_json(destination / "manifest.json", refreshed)
+        return refreshed
+    return dict(manifest)
+
+
+def _require_file_record(record: object) -> dict[str, Any]:
+    """Validate one ordinary-file provenance record.
+
+    Args:
+        record: Mapping with path, size, and SHA-256 fields.
+
+    Returns:
+        Fresh file record after successful validation.
+
+    Raises:
+        ValueError: If the record is missing or the file identity changed.
+    """
+    if not isinstance(record, Mapping) or not all(
+        key in record for key in ("path", "size_bytes", "sha256")
+    ):
+        raise ValueError("ROVir provenance file record is incomplete.")
+    current = _file_record(str(record["path"]))
+    if (
+        current["size_bytes"] != int(record["size_bytes"])
+        or current["sha256"] != str(record["sha256"])
+    ):
+        raise ValueError(f"ROVir provenance file changed: {current['path']}")
+    return current

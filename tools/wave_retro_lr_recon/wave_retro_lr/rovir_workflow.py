@@ -20,6 +20,7 @@ from .rovir_control import (
 from .rovir_feasibility import (
     APPROVED_MASK_MANIFEST,
     ROVIR_QC_MANIFEST,
+    _validated_source_contract,
     approve_region_mask_candidate,
     derive_box_union_mask_candidate,
     export_mprage_physical_calibration,
@@ -32,17 +33,45 @@ from .rovir_feasibility import (
 CANONICAL_ROVIR_MANIFEST = Path("normal") / "rovir" / "manifest.json"
 
 
+def validate_normal_rovir_invocation(
+    twix: str | Path, output_root: str | Path, sequence: str | Path
+) -> dict[str, Any]:
+    """Validate public CLI sources against accepted prepared MPRAGE inputs.
+
+    Args:
+        twix: Measured Wave-MPRAGE TWIX supplied on the command line.
+        output_root: Existing reconstruction root containing prepared inputs.
+        sequence: Matching Pulseq sequence supplied on the command line.
+
+    Returns:
+        Validated canonical workflow context.
+
+    Raises:
+        FileNotFoundError: If a source or required prepared artifact is absent.
+        ValueError: If either source differs from the normal manifest or the
+            recorded normal provenance is incomplete.
+    """
+    _validated_source_contract(
+        twix,
+        sequence,
+        output_root,
+        include_twix_hash=False,
+    )
+    return normal_rovir_context(output_root)
+
+
 def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
-    """Resolve sources and inherited settings from one completed normal branch.
+    """Resolve sources and optional comparison settings from prepared inputs.
 
     Args:
         output_root: Existing reconstruction root.
 
     Returns:
-        Validated source paths, ROVir paths, and inherited ecalib crop.
+        Source paths, ROVir paths, ecalib crop policy, and optional standard
+        reconstruction comparison.
 
     Raises:
-        FileNotFoundError: If required normal inputs or outputs are absent.
+        FileNotFoundError: If required prepared inputs or sources are absent.
         ValueError: If manifests, source paths, or command records are invalid.
     """
     root = Path(output_root).expanduser().resolve()
@@ -54,23 +83,24 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
     twix = _source_path(source.get("twix"), "TWIX")
     sequence = _source_path(source.get("sequence"), "sequence")
     normal_output = root / "normal" / "bart_output"
-    _require_cfl(normal_output / "coil_sens")
-    normal_nifti = _single_magnitude(
-        root / "normal" / "nifti" / "fista_r0", recursive=False
+    normal_magnitudes = _magnitude_candidates(
+        root / "normal" / "nifti" / "fista_r0", recursive=True
+    )
+    normal_nifti = normal_magnitudes[0] if len(normal_magnitudes) == 1 else None
+    comparison_status = (
+        "available"
+        if normal_nifti is not None
+        else "not_available"
+        if not normal_magnitudes
+        else "ambiguous_multiple_magnitude_niftis"
     )
     ecalib_record = normal_output / "ecalib_command.txt"
-    if not ecalib_record.is_file():
-        raise FileNotFoundError(f"Missing normal ecalib command record: {ecalib_record}")
-    command = ecalib_record.read_text(encoding="utf-8").strip()
-    match = re.search(r"(?:^|\s)-c\s+([^\s]+)", command)
-    if match is None:
-        raise ValueError("Normal ecalib command does not record a -c crop value.")
-    try:
-        crop = float(match.group(1))
-    except ValueError as exc:
-        raise ValueError("Normal ecalib crop is not numeric.") from exc
-    if not 0 < crop <= 1:
-        raise ValueError("Normal ecalib crop must lie in (0, 1].")
+    if ecalib_record.is_file():
+        crop = _ecalib_crop(ecalib_record, "Standard normal")
+        crop_source = "standard_normal_ecalib_command"
+    else:
+        crop = 0.6
+        crop_source = "mprage_launcher_default"
     rovir_root = root / "normal" / "rovir"
     return {
         "output_root": str(root),
@@ -78,15 +108,19 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
         "normal_manifest_sha256": sha256_file(manifest_path),
         "twix": str(twix),
         "sequence": str(sequence),
-        "normal_magnitude_nifti": str(normal_nifti),
+        "normal_reconstruction_required": False,
+        "normal_magnitude_nifti": None if normal_nifti is None else str(normal_nifti),
+        "normal_magnitude_candidate_count": len(normal_magnitudes),
+        "standard_comparison_status": comparison_status,
         "ecalib_crop": crop,
+        "ecalib_crop_source": crop_source,
         "rovir_root": str(rovir_root),
         "feasibility_root": str(rovir_root / "feasibility"),
     }
 
 
 def prepare_inspection(output_root: str | Path) -> dict[str, Any]:
-    """Validate normal reconstruction and export corrected physical ACS.
+    """Validate prepared inputs and export corrected physical ACS.
 
     Args:
         output_root: Existing reconstruction root.
@@ -245,15 +279,36 @@ def finalize_normal_rovir(output_root: str | Path, virtual_coils: int) -> dict[s
         raise ValueError("Prepared ROVir coil count differs from the requested count.")
     image_base = rovir_root / "bart_output" / "fista_r0" / "image_wave"
     _require_cfl(image_base)
-    rovir_magnitude = _single_magnitude(rovir_root / "nifti" / "fista_r0", recursive=False)
-    qc = write_mprage_rovir_mask_series_qc(
-        (
-            ("standard normal FISTA lambda=0", context["normal_magnitude_nifti"]),
-            (f"ROVir-{virtual_coils} FISTA lambda=0", rovir_magnitude),
-        ),
-        rovir_root / "qc",
-        figure_filename="standard_vs_rovir_fista_r0_fixed_window.png",
+    rovir_magnitude = _single_magnitude(
+        rovir_root / "nifti" / "fista_r0", recursive=True
     )
+    series: list[tuple[str, str | Path]] = []
+    figure_filename = "rovir_fista_r0_fixed_window.png"
+    comparison_status = context["standard_comparison_status"]
+    comparison_error: str | None = None
+    if context["normal_magnitude_nifti"] is not None:
+        series.append(
+            ("standard normal FISTA lambda=0", context["normal_magnitude_nifti"])
+        )
+        figure_filename = "standard_vs_rovir_fista_r0_fixed_window.png"
+    series.append((f"ROVir-{virtual_coils} FISTA lambda=0", rovir_magnitude))
+    try:
+        qc = write_mprage_rovir_mask_series_qc(
+            tuple(series),
+            rovir_root / "qc",
+            figure_filename=figure_filename,
+        )
+    except Exception as exc:
+        if context["normal_magnitude_nifti"] is None:
+            raise
+        # A stale optional standard NIfTI must not block the independent branch.
+        comparison_status = "skipped_invalid_standard_qc_source"
+        comparison_error = f"{type(exc).__name__}: {exc}"
+        qc = write_mprage_rovir_mask_series_qc(
+            ((f"ROVir-{virtual_coils} FISTA lambda=0", rovir_magnitude),),
+            rovir_root / "qc",
+            figure_filename="rovir_fista_r0_fixed_window.png",
+        )
     approved_path = feasibility / APPROVED_MASK_MANIFEST
     approved = _read_json(approved_path)
     transform_qc_path = feasibility / ROVIR_QC_MANIFEST
@@ -265,6 +320,11 @@ def finalize_normal_rovir(output_root: str | Path, virtual_coils: int) -> dict[s
     if crop_match is None:
         raise ValueError("ROVir ecalib command does not record a -c crop value.")
     rovir_crop = float(crop_match.group(1))
+    standard_magnitude_record = None
+    if context["normal_magnitude_nifti"] is not None:
+        standard_path = Path(context["normal_magnitude_nifti"])
+        if standard_path.is_file():
+            standard_magnitude_record = _file_record(standard_path)
     contract = {
         "format_version": 1,
         "status": "mprage_normal_rovir_complete",
@@ -286,8 +346,17 @@ def finalize_normal_rovir(output_root: str | Path, virtual_coils: int) -> dict[s
         },
         "ecalib": {
             "crop": rovir_crop,
-            "normal_crop": context["ecalib_crop"],
-            "inherited_from_normal": rovir_crop == context["ecalib_crop"],
+            "reference_crop": context["ecalib_crop"],
+            "reference_crop_source": context["ecalib_crop_source"],
+            "normal_crop": (
+                context["ecalib_crop"]
+                if context["ecalib_crop_source"] == "standard_normal_ecalib_command"
+                else None
+            ),
+            "inherited_from_normal": (
+                context["ecalib_crop_source"] == "standard_normal_ecalib_command"
+                and rovir_crop == context["ecalib_crop"]
+            ),
             "deliberate_override": rovir_crop != context["ecalib_crop"],
             "command_record": _file_record(rovir_ecalib_record),
             "coil_sens": cfl_record(rovir_root / "bart_output" / "coil_sens"),
@@ -303,7 +372,11 @@ def finalize_normal_rovir(output_root: str | Path, virtual_coils: int) -> dict[s
             "prepared_inputs_manifest": _file_record(inputs_manifest_path),
             "magnitude_nifti": _file_record(rovir_magnitude),
             "qc_manifest": _file_record(rovir_root / "qc" / "manifest.json"),
+            "standard_comparison_status": comparison_status,
+            "standard_comparison_error": comparison_error,
+            "standard_magnitude_nifti": standard_magnitude_record,
         },
+        "normal_reconstruction_required": False,
         "psf_recalibrated": False,
         "roi_automatically_approved": False,
         "retro_consumable": True,
@@ -311,6 +384,51 @@ def finalize_normal_rovir(output_root: str | Path, virtual_coils: int) -> dict[s
     }
     _write_json(rovir_root / "manifest.json", contract)
     return contract
+
+
+def finalize_existing_normal_rovir(output_root: str | Path) -> dict[str, Any]:
+    """Finalize or validate an already reconstructed normal ROVir branch.
+
+    Args:
+        output_root: Existing reconstruction root containing ROVir artifacts.
+
+    Returns:
+        Existing or newly written canonical completed ROVir contract.
+
+    Raises:
+        FileNotFoundError: If prepared or reconstructed ROVir artifacts are absent.
+        ValueError: If the existing contract or selected coil count is invalid.
+
+    Side Effects:
+        When the canonical contract is absent, writes normal ROVir QC and the
+        completion manifest after validating all already generated artifacts.
+        It does not run BART or modify scientific arrays.
+    """
+    context = normal_rovir_context(output_root)
+    canonical_path = Path(context["output_root"]) / CANONICAL_ROVIR_MANIFEST
+    if canonical_path.is_file():
+        existing = _read_json(canonical_path)
+        if (
+            existing.get("status") != "mprage_normal_rovir_complete"
+            or existing.get("retro_consumable") is not True
+            or existing.get("normal_source_manifest", {}).get("sha256")
+            != context["normal_manifest_sha256"]
+        ):
+            raise ValueError("Existing canonical normal ROVir contract is incompatible.")
+        return existing
+    inputs_manifest = _read_json(
+        Path(context["rovir_root"]) / "bart_inputs" / "manifest.json"
+    )
+    rovir = inputs_manifest.get("rovir")
+    if not isinstance(rovir, Mapping):
+        raise ValueError("Prepared normal ROVir inputs lack coil-processing metadata.")
+    try:
+        virtual_coils = int(rovir["virtual_coils"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Prepared normal ROVir virtual-coil count is invalid.") from exc
+    if virtual_coils < 1:
+        raise ValueError("Prepared normal ROVir virtual-coil count must be positive.")
+    return finalize_normal_rovir(output_root, virtual_coils)
 
 
 def load_recommended_boxes(output_root: str | Path) -> list[dict[str, list[int]]]:
@@ -369,6 +487,50 @@ def _single_magnitude(directory: Path, *, recursive: bool) -> Path:
             f"Expected exactly one magnitude NIfTI below {directory}; found {len(matches)}."
         )
     return matches[0].resolve()
+
+
+def _magnitude_candidates(directory: Path, *, recursive: bool) -> list[Path]:
+    """Return all candidate magnitude NIfTIs without making them a hard gate.
+
+    Args:
+        directory: Directory containing an optional standard reconstruction.
+        recursive: Whether to include nested BIDS subject directories.
+
+    Returns:
+        Sorted resolved candidate paths; the list may be empty or ambiguous.
+    """
+    pattern = "**/*_part-mag_*.nii.gz" if recursive else "*_part-mag_*.nii.gz"
+    return (
+        [path.resolve() for path in sorted(directory.glob(pattern))]
+        if directory.is_dir()
+        else []
+    )
+
+
+def _ecalib_crop(record: Path, label: str) -> float:
+    """Read and validate the crop value from one ecalib command record.
+
+    Args:
+        record: Existing ecalib command text file.
+        label: Human-readable reconstruction label for errors.
+
+    Returns:
+        Validated crop in ``(0, 1]``.
+
+    Raises:
+        ValueError: If the command does not contain a valid crop value.
+    """
+    command = record.read_text(encoding="utf-8").strip()
+    match = re.search(r"(?:^|\s)-c\s+([^\s]+)", command)
+    if match is None:
+        raise ValueError(f"{label} ecalib command does not record a -c crop value.")
+    try:
+        crop = float(match.group(1))
+    except ValueError as exc:
+        raise ValueError(f"{label} ecalib crop is not numeric.") from exc
+    if not 0 < crop <= 1:
+        raise ValueError(f"{label} ecalib crop must lie in (0, 1].")
+    return crop
 
 
 def _require_cfl(base: Path) -> None:

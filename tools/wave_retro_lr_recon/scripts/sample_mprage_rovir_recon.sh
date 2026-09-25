@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Recover one completed normal Wave-MPRAGE reconstruction with reviewed ROVir coils.
+# Reconstruct prepared Wave-MPRAGE data with reviewed ROVir coils.
 
 usage() {
     cat <<'EOF'
 Usage:
-  sample_mprage_rovir_recon.sh inspect [RECONSTRUCTION_ROOT]
-  sample_mprage_rovir_recon.sh run [RECONSTRUCTION_ROOT] --virtual-coils N [ROI options] [run options]
+  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq
+  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [ROI options] [run options]
 
-ROI options (choose one mode; recommendation is the default):
+ROI options (choose exactly one mode):
   --use-recommended
   --null-box "ro=A:B,lin=C:D,par=E:F"   repeat without a count limit
   --null-box-file ROI_BOXES.json
 
 Run options:
-  --confirm-roi-id ID    resume noninteractively after reviewing the exact overlay
-  --ecalib-crop VALUE    deliberate override; otherwise inherit normal reconstruction
+  --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
   -g                     use GPU for BART Wave only
 
-RECONSTRUCTION_ROOT defaults to the current directory. BART must already be on PATH.
+BART must already be on PATH. The three source arguments must exactly match the
+accepted prepared MPRAGE inputs recorded below OUTPUT_ROOT.
 EOF
 }
 
@@ -32,12 +32,15 @@ if [[ "$STAGE" == "-h" || "$STAGE" == "--help" ]]; then usage; exit 0; fi
     usage >&2
     exit 2
 }
-
-RECONSTRUCTION_ROOT="$PWD"
-if [[ $# -gt 0 && "$1" != -* ]]; then
-    RECONSTRUCTION_ROOT="$1"
-    shift
-fi
+[[ $# -ge 3 ]] || { usage >&2; exit 2; }
+TWIX_FILE="$1"
+RECONSTRUCTION_ROOT="${2%/}"
+SEQUENCE_FILE="$3"
+shift 3
+[[ -d "$RECONSTRUCTION_ROOT" ]] || {
+    echo "Error: completed reconstruction root does not exist: $RECONSTRUCTION_ROOT" >&2
+    exit 2
+}
 RECONSTRUCTION_ROOT="$(cd -- "$RECONSTRUCTION_ROOT" && pwd -P)"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WORKFLOW="$SCRIPT_DIR/mprage_rovir_workflow.py"
@@ -47,9 +50,13 @@ echo "ROVir reconstruction root: $RECONSTRUCTION_ROOT"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
+python "$WORKFLOW" validate-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE" >/dev/null
+# Use the validated canonical source paths recorded by the normal manifest.
+TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
+SEQUENCE_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sequence)"
 
 if [[ "$STAGE" == "inspect" ]]; then
-    [[ $# -eq 0 ]] || { echo "Error: inspect accepts only an optional reconstruction root." >&2; exit 2; }
+    [[ $# -eq 0 ]] || { echo "Error: inspect accepts exactly TWIX.dat OUTPUT_ROOT SEQUENCE.seq." >&2; exit 2; }
     python "$WORKFLOW" inspect-prepare "$RECONSTRUCTION_ROOT" >/dev/null
     CALIBRATION="$FEASIBILITY_ROOT/inputs/physical_calibration"
     LOGS="$FEASIBILITY_ROOT/logs"
@@ -89,7 +96,6 @@ bart rss 8 $CALIBRATION/physical_set4_coil_images $CALIBRATION/physical_set4_rss
 fi
 
 VIRTUAL_COILS=""
-CONFIRM_ROI_ID=""
 ECALIB_CROP=""
 USE_GPU=false
 USE_RECOMMENDED=false
@@ -98,7 +104,6 @@ NULL_BOXES=()
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
-        --confirm-roi-id) CONFIRM_ROI_ID="$2"; shift 2 ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --use-recommended) USE_RECOMMENDED=true; shift ;;
         --null-box) NULL_BOXES+=("$2"); shift 2 ;;
@@ -113,7 +118,7 @@ ROI_MODES=0
 [[ "$USE_RECOMMENDED" == true ]] && ROI_MODES=$((ROI_MODES + 1))
 [[ ${#NULL_BOXES[@]} -gt 0 ]] && ROI_MODES=$((ROI_MODES + 1))
 [[ -n "$NULL_BOX_FILE" ]] && ROI_MODES=$((ROI_MODES + 1))
-[[ $ROI_MODES -le 1 ]] || { echo "Error: choose only one ROI input mode." >&2; exit 2; }
+[[ $ROI_MODES -eq 1 ]] || { echo "Error: choose exactly one ROI input mode." >&2; exit 2; }
 
 # Ensure inspect is complete before creating a reviewed candidate.
 [[ -f "$FEASIBILITY_ROOT/manifests/calibration_images.json" ]] || {
@@ -130,16 +135,8 @@ else
 fi
 CANDIDATE_ID="$(python "$WORKFLOW" candidate "$RECONSTRUCTION_ROOT" "${CANDIDATE_ARGS[@]}" --id-only)"
 OVERLAY="$FEASIBILITY_ROOT/masks/candidates/$CANDIDATE_ID/review_union_outline.png"
-echo "Review null-ROI overlay: $OVERLAY"
+echo "Optional troubleshooting overlay: $OVERLAY"
 echo "Candidate ID: $CANDIDATE_ID"
-if [[ -z "$CONFIRM_ROI_ID" ]]; then
-    read -r -p "Type the exact candidate ID to approve this ROI: " CONFIRM_ROI_ID
-fi
-[[ "$CONFIRM_ROI_ID" == "$CANDIDATE_ID" ]] || {
-    echo "Error: ROI was not approved; exact candidate ID mismatch." >&2
-    exit 2
-}
-
 mkdir -p "$FEASIBILITY_ROOT/logs" "$FEASIBILITY_ROOT/transforms/rovir_full"
 python "$WORKFLOW" approve "$RECONSTRUCTION_ROOT" "$CANDIDATE_ID" >/dev/null
 POSITIVE="$FEASIBILITY_ROOT/inputs/rovir/positive_signal_images"
@@ -166,8 +163,6 @@ else
 fi
 python "$WORKFLOW" transform-prepare "$RECONSTRUCTION_ROOT" "$FEASIBILITY_ROOT/logs/bart_version_rovir.txt" "$VIRTUAL_COILS" >/dev/null
 
-TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
-SEQUENCE_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sequence)"
 if [[ -z "$ECALIB_CROP" ]]; then
     ECALIB_CROP="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field ecalib_crop)"
 fi
@@ -198,11 +193,26 @@ else
     bart wave "${WAVE_ARGS[@]}" "$BART_OUTPUT/coil_sens" "$INPUTS/psf" "$INPUTS/wave_kspace" "$BART_OUTPUT/fista_r0/image_wave"
     printf '%s\n' "$WAVE_COMMAND" >"$BART_OUTPUT/fista_r0/wave_command.txt"
 fi
-python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" \
-    --bart-inputs "$INPUTS" --image "$BART_OUTPUT/fista_r0/image_wave" \
-    --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT" \
-    --suffix "BARTWaveMPRAGEROVir${VIRTUAL_COILS}FISTAR0"
+mapfile -d '' -t MAGNITUDE_NIFTIS < <(
+    find "$NIFTI_OUTPUT" -type f -name '*_part-mag_*.nii.gz' -print0
+)
+mapfile -d '' -t PHASE_NIFTIS < <(
+    find "$NIFTI_OUTPUT" -type f -name '*_part-phase_*.nii.gz' -print0
+)
+if [[ ${#MAGNITUDE_NIFTIS[@]} -eq 1 && ${#PHASE_NIFTIS[@]} -eq 1 \
+      && -f "${MAGNITUDE_NIFTIS[0]%.nii.gz}.json" \
+      && -f "${PHASE_NIFTIS[0]%.nii.gz}.json" ]]; then
+    echo "Reusing complete nested ROVir magnitude/phase NIfTI outputs."
+elif [[ -n "$(find "$NIFTI_OUTPUT" -type f -print -quit)" ]]; then
+    echo "Error: existing ROVir NIfTI output is incomplete or ambiguous." >&2
+    exit 2
+else
+    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" \
+        --bart-inputs "$INPUTS" --image "$BART_OUTPUT/fista_r0/image_wave" \
+        --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT" \
+        --suffix "BARTWaveMPRAGEROVir${VIRTUAL_COILS}FISTAR0"
+fi
 python "$WORKFLOW" finalize "$RECONSTRUCTION_ROOT" "$VIRTUAL_COILS" >/dev/null
 echo "Completed canonical ROVir branch: $ROVIR_ROOT"
 echo "Contract: $ROVIR_ROOT/manifest.json"
-echo "QC: $ROVIR_ROOT/qc/standard_vs_rovir_fista_r0_fixed_window.png"
+echo "QC directory: $ROVIR_ROOT/qc"

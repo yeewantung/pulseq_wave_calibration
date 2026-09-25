@@ -323,6 +323,27 @@ def record_calibration_images(
         for record in existing.get("physical_set4_rss_slice_montages", []):
             _validate_file_record(record)
         _validate_file_record(existing.get("bart"))
+        if int(existing.get("format_version", 0)) < 2:
+            rss_array = _spatial_cfl_view(rss)
+            if not np.isfinite(rss_array).all():
+                raise ValueError("Calibration RSS contains nonfinite samples.")
+            overview = (
+                root
+                / "diagnostics"
+                / "calibration_views"
+                / "physical_set4_rss.png"
+            )
+            _write_rss_overview(np.asarray(rss_array.real), overview)
+            existing = {
+                **existing,
+                "format_version": 2,
+                "diagnostic_figure_revision": "array_index_ticks_v2",
+                "diagnostic_figure_updated_at_utc": datetime.now(
+                    timezone.utc
+                ).isoformat(),
+                "physical_set4_rss_review_figure": _file_record(overview),
+            }
+            _write_json(existing_manifest_path, existing)
         return existing
     physical_shape = _active_coil_shape(physical)
     image_shape = _active_coil_shape(images)
@@ -344,9 +365,10 @@ def record_calibration_images(
         np.asarray(rss_array.real), root / "diagnostics" / "calibration_views"
     )
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "status": "mprage_rovir_calibration_images_ready",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "diagnostic_figure_revision": "array_index_ticks_v2",
         "physical_calibration_manifest_sha256": sha256_file(
             root / PHYSICAL_CALIBRATION_MANIFEST
         ),
@@ -1344,13 +1366,18 @@ def derive_box_union_mask_candidate(
                     "A different ROVir ROI is already approved; refusing to alter candidate provenance."
                 )
         if any(record.get("candidate_id") == candidate_id for record in candidates):
-            if (
+            current_images_hash = sha256_file(images_manifest_path)
+            needs_update = (
                 existing_manifest.get("active_candidate_id") != candidate_id
-                and not approved_path.is_file()
-            ):
+                or existing_manifest.get("calibration_images_manifest_sha256")
+                != current_images_hash
+            ) and not approved_path.is_file()
+            if needs_update:
+                _validate_cfl_against_record(rss_path, existing_manifest.get("rss"))
                 existing_manifest = {
                     **existing_manifest,
                     "active_candidate_id": candidate_id,
+                    "calibration_images_manifest_sha256": current_images_hash,
                     "updated_at_utc": datetime.now(timezone.utc).isoformat(),
                 }
                 _write_json(manifest_path, existing_manifest)
@@ -1426,9 +1453,10 @@ def derive_box_union_mask_candidate(
         }
         _write_json(staging / "manifest.json", manifest)
         (staging / "REVIEW_INSTRUCTIONS.txt").write_text(
-            "Review the red union outline against the indexed ACS RSS views.\n"
+            "The explicit CLI ROI selection authorizes this candidate.\n"
+            "Use the red union outline later for optional troubleshooting.\n"
             "The outlined union estimates nuisance signal; it is not a reconstruction mask.\n"
-            f"Approve only by supplying the exact candidate ID: {candidate_id}\n",
+            f"Immutable provenance candidate ID: {candidate_id}\n",
             encoding="utf-8",
         )
         if existing_manifest is None:
@@ -1458,11 +1486,11 @@ def approve_region_mask_candidate(
     feasibility_output_root: str | Path,
     candidate_id: str,
 ) -> dict[str, Any]:
-    """Install one explicitly selected candidate as immutable approved masks.
+    """Install one explicitly requested ROI candidate as immutable masks.
 
     Args:
         feasibility_output_root: Approved diagnostic root.
-        candidate_id: Exact visually reviewed candidate identifier.
+        candidate_id: Hash-derived identifier for the explicit CLI ROI union.
 
     Returns:
         Approval manifest binding copied masks to the candidate manifest.
@@ -1507,7 +1535,7 @@ def approve_region_mask_candidate(
             "format_version": 1,
             "status": "mprage_rovir_masks_approved",
             "approved_at_utc": datetime.now(timezone.utc).isoformat(),
-            "approval_method": "explicit candidate_id supplied by user",
+            "approval_method": "explicit ROI option supplied by user",
             "candidate_id": candidate_id,
             "candidate_manifest_sha256": sha256_file(candidates_path),
             "validation": validation,
@@ -1666,6 +1694,23 @@ def write_rovir_transform_qc(
     transform_path = root / "transforms" / "rovir_full" / "transform"
     transform = np.asarray(open_cfl(transform_path))
     validation = validate_rovir_transform(transform, orthogonality_tolerance=1e-4)
+    existing_manifest_path = root / ROVIR_QC_MANIFEST
+    if existing_manifest_path.is_file():
+        existing = _read_json(existing_manifest_path)
+        if (
+            existing.get("status")
+            != "mprage_bart_rovir_transform_qc_ready"
+            or existing.get("rovir_input_manifest_sha256")
+            != sha256_file(input_manifest_path)
+            or existing.get("selected_virtual_coils") is not None
+            or existing.get("transform_validation") != validation
+        ):
+            raise ValueError("Existing ROVir transform QC uses another scientific contract.")
+        _validate_cfl_against_record(transform_path, existing.get("transform"))
+        _validate_file_record(existing.get("bart"))
+        _validate_file_record(existing.get("region_curve_csv"))
+        _validate_file_record(existing.get("region_curve_plot"))
+        return existing
     images = _coil_cfl_view(
         root / "inputs" / "physical_calibration" / "physical_set4_coil_images"
     )
@@ -2261,27 +2306,74 @@ def _write_rss_overview(rss: np.ndarray, output: Path) -> None:
     figure = Figure(figsize=(12, 8), constrained_layout=True)
     FigureCanvasAgg(figure)
     for axis_index in range(3):
+        displayed_axes = tuple(index for index in range(3) if index != axis_index)
+        x_index, y_index = displayed_axes
         center_axis = figure.add_subplot(2, 3, axis_index + 1)
         center_axis.imshow(
-            np.rot90(np.take(rss, centers[axis_index], axis=axis_index)),
+            np.take(rss, centers[axis_index], axis=axis_index).T,
             cmap="gray",
             vmin=0,
             vmax=display_maximum,
+            origin="lower",
         )
         center_axis.set_title(f"{axis_names[axis_index]} center {centers[axis_index]}")
-        center_axis.axis("off")
+        _set_array_index_ticks(
+            center_axis,
+            axis_names[x_index],
+            rss.shape[x_index],
+            axis_names[y_index],
+            rss.shape[y_index],
+        )
         projection_axis = figure.add_subplot(2, 3, axis_index + 4)
         projection_axis.imshow(
-            np.rot90(np.max(rss, axis=axis_index)),
+            np.max(rss, axis=axis_index).T,
             cmap="gray",
             vmin=0,
             vmax=display_maximum,
+            origin="lower",
         )
         projection_axis.set_title(f"{axis_names[axis_index]} maximum projection")
-        projection_axis.axis("off")
+        _set_array_index_ticks(
+            projection_axis,
+            axis_names[x_index],
+            rss.shape[x_index],
+            axis_names[y_index],
+            rss.shape[y_index],
+        )
     figure.suptitle("Physical-coil set-4 calibration RSS; shared fixed window")
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=160)
+
+
+def _set_array_index_ticks(
+    axis: Any,
+    x_name: str,
+    x_size: int,
+    y_name: str,
+    y_size: int,
+) -> None:
+    """Label one RSS panel with sparse native-array index ticks.
+
+    Args:
+        axis: Matplotlib axis containing one transposed array plane.
+        x_name: Logical name of the horizontal array axis.
+        x_size: Number of samples on the horizontal array axis.
+        y_name: Logical name of the vertical array axis.
+        y_size: Number of samples on the vertical array axis.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Adds native-index ticks and axis labels to ``axis``.
+    """
+    x_ticks = np.unique(np.linspace(0, x_size - 1, min(5, x_size), dtype=int))
+    y_ticks = np.unique(np.linspace(0, y_size - 1, min(5, y_size), dtype=int))
+    axis.set_xticks(x_ticks)
+    axis.set_yticks(y_ticks)
+    axis.set_xlabel(f"{x_name} array index", fontsize=8)
+    axis.set_ylabel(f"{y_name} array index", fontsize=8)
+    axis.tick_params(axis="both", labelsize=7)
 
 
 def _write_rss_slice_montages(rss: np.ndarray, output_directory: Path) -> list[Path]:

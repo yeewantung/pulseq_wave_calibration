@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Collect both reconstruction branches and apply one shared presentation mask.
+# Collect preferred ROVir/standard cases and apply one shared presentation mask.
 # This workflow never prepares k-space or launches BART reconstruction.
 
 usage() {

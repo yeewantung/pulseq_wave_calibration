@@ -169,13 +169,12 @@ does not detect anatomy or regions; it receives the positive and negative coil
 images produced from the reviewed box union.
 
 The red contour is the exact binary union used for negative estimation. It is
-not a hard reconstruction mask. If desired head, scalp, face, or neck anatomy
-falls inside it, revise the boxes before typing the candidate ID. Argument
-order and duplicate boxes do not change the ID when the final union is
-identical. If the first outline is unsatisfactory, stop before approval and
-rerun with revised boxes. Each distinct candidate is retained by ID; none is
-overwritten. Once one candidate is approved, a different approval is rejected
-to keep downstream transform provenance immutable.
+not a hard reconstruction mask. An explicit ROI option authorizes the run, so
+there is no second candidate-ID prompt. The overlay and candidate ID remain
+available for later troubleshooting. Argument order and duplicate boxes do not
+change the ID when the final union is identical. Once installed, a different
+ROI is rejected within that output root to keep downstream transform
+provenance immutable.
 
 ## ROVir run or retro reuse is rejected
 
@@ -183,15 +182,37 @@ The canonical gate is `normal/rovir/manifest.json`. Do not edit it or point
 retro reconstruction at an older feasibility experiment. A ROVir run fails
 closed for a partial CFL pair, changed command, different candidate ID,
 transform hash, selected Ncc, standard-normal manifest, PSF, ecalib record, or
-source. `--ecalib-crop` is a deliberate normal-ROVir override and is recorded;
-omit it to inherit the completed normal crop.
+source. `--ecalib-crop` is a deliberate ROVir override and is recorded. Omit it
+to inherit an available standard normal crop; when no standard ecalib command
+exists, ROVir uses the MPRAGE launcher default `0.6`.
 
 `sample_mprage_retro_lr_recon.sh --rovir` never estimates another transform.
-It requires all five standard retro BART-input cases, applies the canonical
-normal ROVir coil basis before retrospective sampling/cropping, and writes only
-`retro/<case>/rovir/`. If only normal ROVir has completed, rerunning the NIfTI
-collector safely adds that available branch without requiring unfinished ROVir
-retro siblings.
+It does not prepare or reconstruct the standard-coil branches. Instead, it
+validates the canonical normal ROVir image k-space, CSM, PSF, transform, ROI,
+and corrected ACS provenance, then directly prepares all five pure-mask cases
+below `retro/<case>/rovir/`. Standard retro BART inputs are not prerequisites.
+This is intentional for legacy roots whose standard Ncc inputs predate the
+corrected centered image-domain ACS readout crop.
+
+An interrupted older normal ROVir run may contain complete BART and nested
+NIfTI outputs but lack `normal/rovir/manifest.json`. The `--rovir` retro entry
+point validates those existing artifacts and writes only the missing QC and
+canonical wrapper contract; it does not rerun BART or change scientific
+arrays. Explicit `--ecalib-crop` and PSF-fitting overrides are rejected on
+this path because the completed ROVir CSM and PSF are immutable inputs.
+
+## ROVir BART Wave stops because the GPU is out of memory
+
+Rerun the same `run` command without `-g` to resume on CPU, or rerun it later
+with `-g` after GPU memory is available. Completed physical ACS, masks, BART
+ROVir transform, projected ROVir inputs, and CSM are validated and reused; only
+the missing FISTA-r0 reconstruction continues.
+
+No destructive `--force` option is needed. Transform-QC diagnostics are
+idempotent. For an older interrupted run whose QC wrapper was regenerated, the
+workflow accepts a provenance-only refresh only after the source, solver-input,
+ROI, transform, PSF, geometry, and prepared-array hashes all still match. A
+scientific mismatch remains a hard failure.
 
 ## A legacy normal manifest does not match the current PSF implementation
 

@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare and sequentially reconstruct native R3x2, three direct-crop LR R3x2
-# cases, and native R3x3. The same native ACS map estimate is reused.
+# Reconstruct five standard retro cases, or their canonical ROVir counterparts.
 
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [-g]"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
-    echo "       [--rovir]"
+    echo "       [--rovir]  use only the completed canonical ROVir branch"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -50,9 +49,30 @@ done
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
-if [[ "$USE_ROVIR" == true && "$ECALIB_CROP_EXPLICIT" == false ]]; then
-    ECALIB_CROP="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$OUTPUT_ROOT" --field ecalib_crop)"
-    echo "Inherited standard-normal ecalib crop for --rovir: $ECALIB_CROP"
+if [[ "$USE_ROVIR" == true ]]; then
+    [[ "$ECALIB_CROP_EXPLICIT" == false ]] || {
+        echo "Error: --rovir reuses its canonical CSM; do not supply --ecalib-crop." >&2
+        exit 2
+    }
+    [[ "$PSF_COEFFICIENT_PROCESSING" == "sine-line" \
+        && -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" \
+        && -z "$PSF_FIT_Y_MIN" && -z "$PSF_FIT_Y_MAX" \
+        && -z "$PSF_FIT_Z_MIN" && -z "$PSF_FIT_Z_MAX" ]] || {
+        echo "Error: --rovir reuses its canonical PSF; do not supply PSF processing overrides." >&2
+        exit 2
+    }
+    python "$SCRIPT_DIR/mprage_rovir_workflow.py" validate-invocation \
+        "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" >/dev/null
+    # Interrupted older runs may have every scientific artifact but no final
+    # wrapper contract. Validate them and create only that missing contract.
+    python "$SCRIPT_DIR/mprage_rovir_workflow.py" finalize-existing \
+        "$OUTPUT_ROOT" >/dev/null
+    ROVIR_ARGS=("$OUTPUT_ROOT")
+    if [[ "$USE_GPU" == true ]]; then
+        ROVIR_ARGS+=(-g)
+    fi
+    bash "$SCRIPT_DIR/sample_mprage_rovir_retro_recon.sh" "${ROVIR_ARGS[@]}"
+    exit 0
 fi
 NORMAL_INPUTS="$OUTPUT_ROOT/normal/bart_inputs"
 NORMAL_OUTPUT="$OUTPUT_ROOT/normal/bart_output"
@@ -211,16 +231,6 @@ if [[ "$USE_GPU" == true ]]; then
     R3X3_ARGS+=(-g)
 fi
 bash "$SCRIPT_DIR/sample_mprage_retro_r3x3_recon.sh" "${R3X3_ARGS[@]}"
-
-# Opt-in ROVir branches consume only the completed canonical normal contract.
-# Standard outputs above remain unchanged and available as controls.
-if [[ "$USE_ROVIR" == true ]]; then
-    ROVIR_ARGS=("$OUTPUT_ROOT")
-    if [[ "$USE_GPU" == true ]]; then
-        ROVIR_ARGS+=(-g)
-    fi
-    bash "$SCRIPT_DIR/sample_mprage_rovir_retro_recon.sh" "${ROVIR_ARGS[@]}"
-fi
 
 echo "Retrospective MPRAGE reconstructions complete: $RETRO_ROOT"
 if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then

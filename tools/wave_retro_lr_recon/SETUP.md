@@ -245,12 +245,17 @@ scripts/sample_mprage_rovir_recon.sh --help
 scripts/sample_mprage_nifti_collection.sh --help
 ```
 
-`sample_mprage_rovir_recon.sh` requires a completed normal FISTA-r0 NIfTI and
-its recorded ecalib command. Run `inspect` first. It writes only inside the
-already approved reconstruction root at `normal/rovir/`, derives TWIX and
-sequence paths from the normal manifest, and never accepts a separate public
-configuration file. BART is CPU-default; only its Wave reconstruction honors
-the optional `-g` flag.
+`sample_mprage_rovir_recon.sh` requires accepted prepared MPRAGE inputs and the
+case-matched PSF, but not a completed standard CSM, FISTA reconstruction, or
+NIfTI. Run `inspect` first. It writes only inside the already approved
+reconstruction root at `normal/rovir/`. Its public commands accept
+`TWIX.dat OUTPUT_ROOT SEQUENCE.seq` in the same order as normal and
+retrospective MPRAGE reconstruction, then strictly validate those sources
+against the prepared-input manifest. If a standard ecalib command exists its
+crop is inherited; otherwise the MPRAGE default `0.6` is used unless explicitly
+overridden. The interface never accepts a separate public configuration file.
+BART is CPU-default; only its Wave reconstruction honors the optional `-g`
+flag.
 
 ## Macha environment
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Reconstruct all standard MPRAGE retro cases with the canonical normal ROVir basis.
+# Reconstruct all MPRAGE retro cases directly from the canonical normal ROVir branch.
 
 usage() {
     echo "Usage: $0 RECONSTRUCTION_ROOT [-g]"
@@ -21,7 +21,7 @@ done
 ROOT="$(cd -- "$ROOT" && pwd -P)"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
-echo "Validating and hashing the canonical normal ROVir source contract; this can be quiet for several minutes."
+echo "Preparing pure-mask cases from the canonical normal ROVir contract; validation can be quiet for several minutes."
 python "$SCRIPT_DIR/prepare_mprage_rovir_retro.py" "$ROOT" >/dev/null
 TWIX_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field sequence)"

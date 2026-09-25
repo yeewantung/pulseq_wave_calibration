@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build canonical-copy and whole-head-masked MPRAGE NIfTI collections."""
+"""Build ROVir-preferred canonical and masked MPRAGE NIfTI collections."""
 
 from __future__ import annotations
 
@@ -69,15 +69,15 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Reconstruction root containing branch-specific normal/nifti "
-            "and optional retro cases."
+            "and optional standard or ROVir retro cases."
         ),
     )
     parser.add_argument(
         "--require-retro",
         action="store_true",
         help=(
-            "Require all four standard R3x2 retrospective cases for every "
-            "discovered normal branch."
+            "Require all four R3x2 retrospective cases for every discovered "
+            "normal method; a method-matched ROVir case satisfies the requirement."
         ),
     )
     parser.add_argument(

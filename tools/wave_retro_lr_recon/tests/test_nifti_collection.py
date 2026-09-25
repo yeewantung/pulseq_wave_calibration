@@ -269,7 +269,7 @@ class NiftiCollectionTests(unittest.TestCase):
                 build_mprage_nifti_collection(root)
 
     def test_discovers_available_normal_and_retro_rovir_branches(self) -> None:
-        """Add ROVir siblings idempotently without making partial ROVir mandatory.
+        """Prefer method-matched ROVir cases and retain standard fallbacks.
 
         Returns:
             None.
@@ -277,6 +277,8 @@ class NiftiCollectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "reconstruction"
             self._write_complete_source_tree(root, include_r3x3=False)
+            baseline = build_mprage_nifti_collection(root, require_retro=True)
+            self.assertEqual(len(baseline["cases"]), 10)
             self._write_case(
                 root / "normal" / "rovir" / "nifti" / "fista_r0",
                 (32, 32, 32),
@@ -292,11 +294,54 @@ class NiftiCollectionTests(unittest.TestCase):
                 (32, 32, 32),
                 (1.0, 1.0, 1.0),
             )
+            self._write_case(
+                root
+                / "retro"
+                / "native_r3x2"
+                / "rovir"
+                / "nifti"
+                / "optimal_wavelet",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
             manifest = build_mprage_nifti_collection(root, require_retro=True)
             groups = {(entry["branch"], entry["case"]) for entry in manifest["cases"]}
             self.assertIn(("rovir_fista_r0", "normal"), groups)
             self.assertIn(("rovir_fista_r0", "native_r3x2"), groups)
             self.assertNotIn(("rovir_fista_r0", "lr_x_1p5mm_r3x2"), groups)
+            self.assertNotIn(("fista_r0", "normal"), groups)
+            self.assertNotIn(("fista_r0", "native_r3x2"), groups)
+            self.assertIn(("fista_r0", "lr_x_1p5mm_r3x2"), groups)
+            self.assertIn(("optimal_wavelet", "normal"), groups)
+            self.assertNotIn(("optimal_wavelet", "native_r3x2"), groups)
+            self.assertIn(("rovir_optimal_wavelet", "native_r3x2"), groups)
+            self.assertEqual(len(groups), 10)
+            self.assertEqual(manifest["head_mask"]["source_branch"], "rovir_fista_r0")
+            self.assertEqual(
+                manifest["synchronization"]["rovir_replacements"],
+                [
+                    {
+                        "replaced_case_group": "fista_r0:native_r3x2",
+                        "preferred_case_group": "rovir_fista_r0:native_r3x2",
+                    },
+                    {
+                        "replaced_case_group": "fista_r0:normal",
+                        "preferred_case_group": "rovir_fista_r0:normal",
+                    },
+                    {
+                        "replaced_case_group": "optimal_wavelet:native_r3x2",
+                        "preferred_case_group": "rovir_optimal_wavelet:native_r3x2",
+                    },
+                ],
+            )
+            self.assertEqual(
+                manifest["synchronization"]["no_longer_discovered_case_groups"], []
+            )
+
+            refreshed = build_mprage_nifti_collection(root, require_retro=True)
+            self.assertEqual(len(refreshed["cases"]), 10)
+            self.assertEqual(refreshed["synchronization"]["added_case_groups"], [])
+            self.assertEqual(refreshed["synchronization"]["rovir_replacements"], [])
 
     def _write_complete_source_tree(
         self, root: Path, *, include_r3x3: bool = True

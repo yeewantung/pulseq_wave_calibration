@@ -30,7 +30,12 @@ from .bart_io import sha256_file
 
 COLLECTION_BUILDER = "wave_retro_lr.nifti_collection"
 RECONSTRUCTION_BRANCHES = ("fista_r0", "optimal_wavelet")
-MASK_BRANCH_PREFERENCE = ("optimal_wavelet", "fista_r0")
+MASK_BRANCH_PREFERENCE = (
+    "rovir_optimal_wavelet",
+    "rovir_fista_r0",
+    "optimal_wavelet",
+    "fista_r0",
+)
 REQUIRED_RETRO_CASES = (
     "native_r3x2",
     "lr_x_1p5mm_r3x2",
@@ -416,6 +421,11 @@ def _discover_case_sources(
                             case_directory.name
                         ] = pairs
 
+    # For one case and reconstruction method, a complete ROVir result is the
+    # preferred coil-processing realization. Keep the standard result only as
+    # a per-case fallback when its ROVir counterpart is absent.
+    sources = _prefer_rovir_case_sources(sources)
+
     if require_retro:
         required_cases = list(REQUIRED_RETRO_CASES)
         required_cases.extend(
@@ -425,10 +435,13 @@ def _discover_case_sources(
         )
         for branch in sorted(standard_normal_branches):
             for case in required_cases:
-                if case not in sources[branch]:
+                if case not in sources.get(branch, {}) and case not in sources.get(
+                    f"rovir_{branch}", {}
+                ):
                     directory = output_root / "retro" / case / "nifti" / branch
                     raise FileNotFoundError(
-                        f"No {branch} canonical NIfTI files found for {case}: {directory}"
+                        f"No standard or ROVir {branch} canonical NIfTI files found "
+                        f"for {case}: {directory}"
                     )
 
     branch_order = {
@@ -444,6 +457,36 @@ def _discover_case_sources(
             for case in sorted(cases, key=lambda name: (name != "normal", name))
         }
     return ordered
+
+
+def _prefer_rovir_case_sources(
+    sources: dict[str, dict[str, list[tuple[Path, Path]]]],
+) -> dict[str, dict[str, list[tuple[Path, Path]]]]:
+    """Prefer complete ROVir sources over method-matched standard sources.
+
+    Args:
+        sources: Discovered source pairs keyed by branch and stable case name.
+
+    Returns:
+        A new mapping in which ``rovir_<method>:<case>`` replaces
+        ``<method>:<case>`` while unrelated methods and cases are retained.
+    """
+    selected = {
+        branch: dict(cases)
+        for branch, cases in sources.items()
+    }
+    for rovir_branch, rovir_cases in tuple(selected.items()):
+        if not rovir_branch.startswith("rovir_"):
+            continue
+        standard_branch = rovir_branch.removeprefix("rovir_")
+        standard_cases = selected.get(standard_branch)
+        if standard_cases is None:
+            continue
+        for case in rovir_cases:
+            standard_cases.pop(case, None)
+        if not standard_cases:
+            selected.pop(standard_branch)
+    return selected
 
 
 def _collection_synchronization(
@@ -471,13 +514,26 @@ def _collection_synchronization(
         for branch, cases in branch_sources.items()
         for case in cases
     }
+    replacements = []
+    replaced_previous: set[str] = set()
+    for group in sorted(previous - discovered):
+        branch, case = group.split(":", 1)
+        preferred = f"rovir_{branch}:{case}"
+        if preferred in discovered:
+            replacements.append(
+                {"replaced_case_group": group, "preferred_case_group": preferred}
+            )
+            replaced_previous.add(group)
     return {
         "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
         "previous_case_groups": sorted(previous),
         "discovered_case_groups": sorted(discovered),
         "retained_case_groups": sorted(previous & discovered),
         "added_case_groups": sorted(discovered - previous),
-        "no_longer_discovered_case_groups": sorted(previous - discovered),
+        "rovir_replacements": replacements,
+        "no_longer_discovered_case_groups": sorted(
+            previous - discovered - replaced_previous
+        ),
     }
 
 
@@ -773,7 +829,7 @@ def _materialize_collection(
             )
 
     return {
-        "format_version": 3,
+        "format_version": 4,
         "builder": COLLECTION_BUILDER,
         "status": "complete",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -788,6 +844,10 @@ def _materialize_collection(
             "mask_resampling": "nearest-neighbor in NIfTI physical space when grids differ",
             "masked_outputs_for_presentation_only": True,
             "masked_outputs_excluded_from_regularization_evaluation": True,
+            "coil_processing_selection": (
+                "complete method-matched ROVir case replaces standard case; "
+                "standard case is retained as fallback when ROVir is absent"
+            ),
         },
         "head_mask": mask_record,
         "cases": case_records,

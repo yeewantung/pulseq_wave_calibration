@@ -14,6 +14,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.rovir_workflow import (  # noqa: E402
     approve_and_prepare_solver,
+    finalize_existing_normal_rovir,
     finalize_normal_rovir,
     finish_inspection,
     load_recommended_boxes,
@@ -21,6 +22,7 @@ from wave_retro_lr.rovir_workflow import (  # noqa: E402
     prepare_inspection,
     prepare_reviewed_candidate,
     record_transform_and_prepare_reconstruction,
+    validate_normal_rovir_invocation,
 )
 
 
@@ -37,6 +39,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("output_root", type=Path)
         if stage == "context":
             command.add_argument("--field", default=None)
+    invocation = commands.add_parser("validate-invocation")
+    invocation.add_argument("twix", type=Path)
+    invocation.add_argument("output_root", type=Path)
+    invocation.add_argument("sequence", type=Path)
     finish = commands.add_parser("inspect-finish")
     finish.add_argument("output_root", type=Path)
     finish.add_argument("bart_version_file", type=Path)
@@ -56,6 +62,8 @@ def _parser() -> argparse.ArgumentParser:
     finalize = commands.add_parser("finalize")
     finalize.add_argument("output_root", type=Path)
     finalize.add_argument("virtual_coils", type=int)
+    finalize_existing = commands.add_parser("finalize-existing")
+    finalize_existing.add_argument("output_root", type=Path)
     return parser
 
 
@@ -100,6 +108,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.stage == "context":
         result = normal_rovir_context(args.output_root)
+    elif args.stage == "validate-invocation":
+        result = validate_normal_rovir_invocation(
+            args.twix, args.output_root, args.sequence
+        )
     elif args.stage == "inspect-prepare":
         result = prepare_inspection(args.output_root)
     elif args.stage == "inspect-finish":
@@ -129,6 +141,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.stage == "finalize":
         result = finalize_normal_rovir(args.output_root, args.virtual_coils)
+    elif args.stage == "finalize-existing":
+        result = finalize_existing_normal_rovir(args.output_root)
     else:  # pragma: no cover
         raise RuntimeError(f"Unhandled stage: {args.stage}")
     if args.stage == "candidate" and args.id_only:

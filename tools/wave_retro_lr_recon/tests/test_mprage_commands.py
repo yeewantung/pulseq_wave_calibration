@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import inspect
+import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
@@ -17,6 +20,12 @@ from wave_retro_lr.mprage import (  # noqa: E402
     prepare_normal_mprage,
     prepare_retro_mprage,
     prepare_retro_mprage_r3x3,
+)
+from wave_retro_lr.rovir_workflow import (  # noqa: E402
+    _single_magnitude,
+    finalize_existing_normal_rovir,
+    normal_rovir_context,
+    validate_normal_rovir_invocation,
 )
 from scripts.prepare_mprage_normal import _parser as normal_parser  # noqa: E402
 from scripts.prepare_mprage_retro import _parser as retro_parser  # noqa: E402
@@ -173,8 +182,8 @@ class SampleCommandTests(unittest.TestCase):
         self.assertEqual(defaults.closing_radius_mm, 1.5)
         self.assertEqual(defaults.dilation_radius_mm, 0.0)
 
-    def test_public_rovir_cli_has_one_review_gate_and_no_config(self) -> None:
-        """Keep the optional ROVir recovery interface compact and explicit.
+    def test_public_rovir_cli_treats_explicit_roi_as_authorization(self) -> None:
+        """Keep the ROVir interface compact, explicit, and nonredundant.
 
         Returns:
             None.
@@ -187,22 +196,170 @@ class SampleCommandTests(unittest.TestCase):
             ["bash", str(public), "--help"], check=False, capture_output=True, text=True
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("inspect [RECONSTRUCTION_ROOT]", completed.stdout)
-        self.assertIn("run [RECONSTRUCTION_ROOT]", completed.stdout)
+        self.assertIn("inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq", completed.stdout)
+        self.assertIn("run TWIX.dat OUTPUT_ROOT SEQUENCE.seq", completed.stdout)
+        self.assertNotIn("defaults to the current directory", completed.stdout)
         self.assertIn("--null-box", completed.stdout)
+        self.assertNotIn("--confirm-roi-id", completed.stdout)
         self.assertNotIn("--config", completed.stdout)
         source = public.read_text(encoding="utf-8")
-        self.assertEqual(source.count("read -r -p"), 1)
+        self.assertNotIn("read -r -p", source)
+        self.assertNotIn("exact candidate ID mismatch", source)
+        self.assertIn("choose exactly one ROI input mode", source)
         self.assertIn("bart fft -iu 7", source)
         self.assertIn("bart rss 8", source)
         self.assertIn("bart rovir", source)
         self.assertIn("bart ecalib -m 1 -c", source)
         self.assertIn('WAVE_ARGS=(-w -f -r 0 -i 100 -t 1e-6)', source)
+        self.assertIn('validate-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT"', source)
+        self.assertIn("Reusing complete nested ROVir magnitude/phase NIfTI outputs", source)
+        self.assertIn("existing ROVir NIfTI output is incomplete or ambiguous", source)
         retro_source = (SCRIPTS / "sample_mprage_retro_lr_recon.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn("--rovir", retro_source)
         self.assertIn("sample_mprage_rovir_retro_recon.sh", retro_source)
+        self.assertIn("finalize-existing", retro_source)
+        self.assertLess(
+            retro_source.index('if [[ "$USE_ROVIR" == true ]]'),
+            retro_source.index('python "$SCRIPT_DIR/prepare_mprage_retro.py"'),
+        )
+        self.assertIn("--rovir reuses its canonical CSM", retro_source)
+        self.assertIn("--rovir reuses its canonical PSF", retro_source)
+
+    def test_public_rovir_sources_are_validated_against_normal_manifest(self) -> None:
+        """Bind the explicit public arguments to the normal source contract.
+
+        Returns:
+            None.
+        """
+        expected = {"output_root": "/reconstruction"}
+        with patch(
+            "wave_retro_lr.rovir_workflow._validated_source_contract"
+        ) as validate, patch(
+            "wave_retro_lr.rovir_workflow.normal_rovir_context",
+            return_value=expected,
+        ) as context:
+            actual = validate_normal_rovir_invocation(
+                "input.dat", "/reconstruction", "input.seq"
+            )
+        validate.assert_called_once_with(
+            "input.dat",
+            "input.seq",
+            "/reconstruction",
+            include_twix_hash=False,
+        )
+        context.assert_called_once_with("/reconstruction")
+        self.assertEqual(actual, expected)
+
+    def test_rovir_context_does_not_require_standard_reconstruction(self) -> None:
+        """Use prepared inputs alone and treat nested normal NIfTI as optional.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            manifest = root / "normal" / "bart_inputs" / "manifest.json"
+            manifest.parent.mkdir(parents=True)
+            twix.write_bytes(b"twix")
+            sequence.write_bytes(b"sequence")
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source": {
+                            "twix": {"path": str(twix)},
+                            "sequence": {"path": str(sequence)},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            context = normal_rovir_context(root)
+            self.assertFalse(context["normal_reconstruction_required"])
+            self.assertEqual(context["standard_comparison_status"], "not_available")
+            self.assertIsNone(context["normal_magnitude_nifti"])
+            self.assertEqual(context["ecalib_crop"], 0.6)
+            self.assertEqual(context["ecalib_crop_source"], "mprage_launcher_default")
+
+            nested = root / "normal" / "nifti" / "fista_r0" / "sub-normal"
+            nested.mkdir(parents=True)
+            magnitude = nested / "sub-normal_part-mag_BARTWaveMPRAGENormalFISTAR0.nii.gz"
+            magnitude.touch()
+            output = root / "normal" / "bart_output"
+            output.mkdir(parents=True)
+            (output / "ecalib_command.txt").write_text(
+                "bart ecalib -m 1 -c 0.1 input output\n", encoding="utf-8"
+            )
+
+            context = normal_rovir_context(root)
+            self.assertEqual(context["standard_comparison_status"], "available")
+            self.assertEqual(context["normal_magnitude_nifti"], str(magnitude.resolve()))
+            self.assertEqual(context["ecalib_crop"], 0.1)
+            self.assertEqual(
+                context["ecalib_crop_source"], "standard_normal_ecalib_command"
+            )
+            self.assertEqual(
+                _single_magnitude(
+                    root / "normal" / "nifti" / "fista_r0", recursive=True
+                ),
+                magnitude.resolve(),
+            )
+
+    def test_finalize_existing_rovir_infers_ncc_or_reuses_contract(self) -> None:
+        """Finalize interrupted output without asking the user for Ncc.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            inputs = root / "normal" / "rovir" / "bart_inputs" / "manifest.json"
+            inputs.parent.mkdir(parents=True)
+            inputs.write_text(
+                json.dumps({"rovir": {"virtual_coils": 24}}), encoding="utf-8"
+            )
+            context = {
+                "output_root": str(root),
+                "rovir_root": str(root / "normal" / "rovir"),
+                "normal_manifest_sha256": "normal-hash",
+            }
+            completed = {
+                "status": "mprage_normal_rovir_complete",
+                "retro_consumable": True,
+            }
+            with patch(
+                "wave_retro_lr.rovir_workflow.normal_rovir_context",
+                return_value=context,
+            ), patch(
+                "wave_retro_lr.rovir_workflow.finalize_normal_rovir",
+                return_value=completed,
+            ) as finalize:
+                self.assertEqual(finalize_existing_normal_rovir(root), completed)
+            finalize.assert_called_once_with(root, 24)
+
+            canonical = root / "normal" / "rovir" / "manifest.json"
+            canonical.write_text(
+                json.dumps(
+                    {
+                        **completed,
+                        "normal_source_manifest": {"sha256": "normal-hash"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "wave_retro_lr.rovir_workflow.normal_rovir_context",
+                return_value=context,
+            ), patch(
+                "wave_retro_lr.rovir_workflow.finalize_normal_rovir"
+            ) as finalize:
+                reused = finalize_existing_normal_rovir(root)
+            finalize.assert_not_called()
+            self.assertTrue(reused["retro_consumable"])
 
     def test_mprage_preparation_defaults_to_automatic_sine_line(self) -> None:
         """Keep the sample, preparation CLI, and Python API defaults aligned.

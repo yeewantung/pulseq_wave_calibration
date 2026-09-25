@@ -1,4 +1,4 @@
-"""Tests for the staged, review-gated MPRAGE ROVir feasibility workflow."""
+"""Tests for the staged MPRAGE ROVir feasibility workflow."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.bart_io import create_cfl, open_cfl, sha256_file  # noqa: E402
 from wave_retro_lr.rovir_feasibility import (  # noqa: E402
+    CALIBRATION_IMAGES_MANIFEST,
     _validate_four_region_masks,
     approve_region_mask_candidate,
     derive_box_union_mask_candidate,
@@ -243,6 +244,11 @@ class RovirFeasibilityTests(unittest.TestCase):
             self.assertTrue(
                 (root / "diagnostics" / "region_curves" / "rovir_two_region_curves.png").is_file()
             )
+            qc_path = root / "manifests" / "rovir_transform_qc.json"
+            qc_hash = sha256_file(qc_path)
+            resumed_qc = write_rovir_transform_qc(root, version)
+            self.assertEqual(resumed_qc, qc)
+            self.assertEqual(sha256_file(qc_path), qc_hash)
 
     def test_box_union_is_order_independent_and_has_no_ten_box_limit(self) -> None:
         """Hash the exact union while retaining overlap and duplicate provenance.
@@ -377,6 +383,23 @@ class RovirFeasibilityTests(unittest.TestCase):
             )
             self.assertEqual(
                 len(images_manifest["physical_set4_rss_slice_montages"]), 3
+            )
+            self.assertEqual(images_manifest["format_version"], 2)
+            self.assertEqual(
+                images_manifest["diagnostic_figure_revision"],
+                "array_index_ticks_v2",
+            )
+
+            manifest_path = root / CALIBRATION_IMAGES_MANIFEST
+            legacy = json.loads(manifest_path.read_text(encoding="utf-8"))
+            legacy["format_version"] = 1
+            legacy.pop("diagnostic_figure_revision", None)
+            manifest_path.write_text(json.dumps(legacy), encoding="utf-8")
+            migrated = record_calibration_images(root, version)
+            self.assertEqual(migrated["format_version"], 2)
+            self.assertEqual(
+                migrated["diagnostic_figure_revision"],
+                "array_index_ticks_v2",
             )
 
             config = root / "mask_candidates.local.json"

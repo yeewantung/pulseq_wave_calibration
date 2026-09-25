@@ -382,55 +382,56 @@ reconstruction.
 
 ## Implemented user-facing ROVir workflow
 
-ROVir is an optional recovery path after a user has completed a normal Wave
-reconstruction and identified shoulder wrapping. It is a coil-processing
-branch of that normal dataset, not a replacement for the standard branch and
-not an independent source configuration. The public interface must therefore
-derive its TWIX, sequence, geometry, coil ordering, accepted PSF, ecalib crop,
-and source hashes from the completed `normal/bart_inputs/manifest.json`.
-`--config` is not part of the public interface.
+ROVir is an optional recovery path after shoulder wrapping is identified from
+ACS inspection or a standard reconstruction. It is a coil-processing branch of
+the same prepared dataset, not an independent source configuration. A completed
+standard CSM, FISTA reconstruction, or NIfTI is not required. The public
+interface must validate its explicit TWIX and sequence arguments and derive
+geometry, coil ordering, accepted PSF, and source hashes from
+`normal/bart_inputs/manifest.json`. `--config` is not part of the public
+interface.
 
-The default reconstruction root is the current directory. A user may instead
-provide one positional reconstruction root. The command must resolve and print
-that root before writing, require its exact normal manifest, and never scan
-other directories or guess a source. ROVir outputs live under `normal/rovir/`
-inside the already approved reconstruction root.
+Both commands require `TWIX.dat OUTPUT_ROOT SEQUENCE.seq` in the same order as
+the normal and retrospective MPRAGE launchers. They resolve and print the root,
+strictly validate both supplied sources against its normal manifest, and never
+scan other directories or guess a source. ROVir outputs live under
+`normal/rovir/` inside the already approved reconstruction root.
 
-### Public commands and the single review gate
+### Public commands and explicit ROI authorization
 
 Only two public commands are exposed:
 
 ```bash
-cd RECONSTRUCTION_ROOT
-scripts/sample_mprage_rovir_recon.sh inspect
+scripts/sample_mprage_rovir_recon.sh inspect \
+    TWIX.dat OUTPUT_ROOT SEQUENCE.seq
 
 scripts/sample_mprage_rovir_recon.sh run \
+    TWIX.dat OUTPUT_ROOT SEQUENCE.seq \
   --null-box "ro=0:20,lin=0:25,par=all" \
   --null-box "ro=0:20,lin=48:71,par=all" \
   --virtual-coils 24 -g
 ```
 
-`inspect` validates the completed normal source, exports or strictly reuses the
+`inspect` validates the accepted prepared-input source, exports or strictly reuses the
 corrected alias-free physical-coil set-4 ACS, and creates geometry-bound RSS
-figures with explicit `RO, LIN, PAR` indices. It also emits a conservative null
+figures with explicit `RO, LIN, PAR` array-index ticks. It also emits a conservative null
 ROI recommendation when the data support one. It does not approve the
 recommendation or launch ROVir, ecalib, or reconstruction.
 
-`run` constructs the submitted ROI union, writes a final red-outline review
-figure, prints its candidate ID and path, and pauses once. The user must type
-the exact candidate ID to approve the ROI. A noninteractive resumed invocation
-may supply that exact ID with `--confirm-roi-id`; a generic yes flag is not
-sufficient. After ROI approval, conditioning curves, transform QC, ecalib,
-reconstruction, NIfTI export, and final QC are automatic troubleshooting
-outputs rather than further manual gates. Strict hash, geometry, conditioning,
-finite-value, or provenance failures still stop the workflow.
+`run` treats an explicit `--null-box`, `--null-box-file`, or
+`--use-recommended` option as authorization for that ROI. It writes the exact
+red-outline figure and hash-derived candidate ID for provenance and later
+troubleshooting, but does not add a redundant interactive confirmation.
+Conditioning curves, transform QC, ecalib, reconstruction, NIfTI export, and
+final QC are automatic. Strict hash, geometry, conditioning, finite-value, or
+provenance failures still stop the workflow.
 
 The retained coil count is an explicit `--virtual-coils` input and is never
-selected from a curve automatically. The normal ecalib crop is inherited from
-the accepted normal reconstruction; an explicit override is allowed only when
-recorded as a deliberate difference. Version 1 reconstructs the FISTA
-lambda-zero control so that ROVir is assessed without adding a regularization
-change.
+selected from a curve automatically. An available standard ecalib crop is
+inherited; without one, the MPRAGE launcher default `0.6` is used. An explicit
+override is allowed only when recorded as a deliberate difference. Version 1
+reconstructs the FISTA lambda-zero control so that ROVir is assessed without
+adding a regularization change.
 
 ### ROI recommendation and override
 
@@ -466,13 +467,13 @@ Python slices, individual and union voxel counts, the submitted box list, the
 canonical list, and exact mask hashes. The candidate ID is based on the final
 union-mask hash, so argument order does not change its identity.
 
-For many boxes, the review figure shows the union as one uncluttered red
+For many boxes, the troubleshooting figure shows the union as one uncluttered red
 contour and places the numbered box coordinates in an adjacent table. The box
 union is an interference-estimation region, not an anatomical segmentation or
 hard reconstruction mask. The review must make clear that desired anatomy
 inside the union may be suppressed by the learned coil subspace.
 
-### Automatic work after ROI approval
+### Automatic work after explicit ROI selection
 
 One resumable `run` invocation performs the following internal operations:
 
@@ -534,14 +535,17 @@ approved mask, transform, selected Ncc, corrected ACS, accepted PSF, and ecalib
 settings. A missing, incomplete, ambiguous, or incompatible contract is an
 error rather than a fallback to ordinary coil compression.
 
-The retro input builder rereads the matching physical-coil image stream,
-applies the same selected ROVir basis, and only then performs the requested
-retrospective sampling or spatial low-resolution crop. Each standard retro
-result remains untouched; ROVir outputs occupy a sibling `rovir/` branch. Retro
-manifests and NIfTI sidecars record the ROVir contract path and hash, ROI
-candidate ID, transform hash, Ncc, coil-processing label, and normal-source
-manifest hash. NIfTI collection discovery must idempotently add available
-standard and ROVir normal/retro branches.
+The retro input builder consumes the already projected canonical normal ROVir
+image k-space and only then performs the requested retrospective sampling or
+spatial low-resolution crop. It resolves case geometry and pure sampling masks
+directly from the bound normal source contract; standard retro inputs are not
+prerequisites. Each standard retro result remains untouched; ROVir outputs
+occupy a sibling `rovir/` branch. Retro manifests and NIfTI sidecars record the
+ROVir contract path and hash, exact mask count/hash, ROI candidate ID,
+transform hash, Ncc, coil-processing label, and normal-source manifest hash.
+NIfTI collection discovery must idempotently prefer an available ROVir
+normal/retro case over its method-matched standard counterpart while retaining
+standard fallback for cases without ROVir.
 
 Regularization is orthogonal to the coil-processing tag. Existing retro
 methods may run with `--rovir`, but any lambda transferred from a standard-coil
@@ -558,10 +562,11 @@ remains available as the mandatory control.
 3. The two-command shell orchestration writes the canonical normal ROVir
    contract while keeping every BART command explicit in shell.
 4. `--rovir` consumes that contract for all five normal-compatible retro cases
-   without changing standard behavior or external submodules.
-5. NIfTI collection discovery adds available standard and ROVir branches
-   idempotently. Documentation, privacy checks, tool tests, and upstream
-   Wave-MPRAGE tests remain release gates.
+   without requiring standard retro inputs or changing standard behavior and
+   external submodules.
+5. NIfTI collection discovery prefers available method-matched ROVir cases and
+   synchronizes replacements idempotently. Documentation, privacy checks, tool
+   tests, and upstream Wave-MPRAGE tests remain release gates.
 
 Implementation stops for source review before any new production run. A new
 production directory or a new branch inside an existing reconstruction root
