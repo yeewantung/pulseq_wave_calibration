@@ -34,6 +34,7 @@ from wave_retro_lr.twix_noise import (  # noqa: E402
     covariance_compatibility,
     expected_white_noise_variance_ratio,
     fft_scale_factors,
+    fft_scale_factors_by_block,
     load_measurement0_noise,
     load_measurement_headers,
     measurement_metadata,
@@ -60,6 +61,7 @@ ARRAY_ELEMENTS = ("A1", "A2", "A3", "A4")
 BODY_ELEMENTS = ("B1", "B2")
 NOISE_FFT_SCALE = (1.25, 1.5, 1.75, 2.0)
 ACQUISITION_FFT_SCALE = (3.0, 3.25, 3.5, 3.75)
+BODY_FFT_SCALE = (180.75, 172.5)
 MEASUREMENT_TABLE = (
     (11111, 31, "synthetic_adjust"),
     (22222, 32, "synthetic_imaging"),
@@ -203,6 +205,27 @@ def coil_lines(
     return lines
 
 
+def fft_scale_lines(block: int, factors: Sequence[float]) -> list[str]:
+    """Build the FFT-scale assignments of one coil-select block.
+
+    VD/VE headers store FFT-scale factors per ``aRxCoilSelectData`` block,
+    with hexadecimal ``bValid`` flags, as in the measured pilot header.
+
+    Args:
+        block: ``aRxCoilSelectData`` block index.
+        factors: FFT-scale factors in index order.
+
+    Returns:
+        ASCCONV assignment lines including the container attribute line.
+    """
+    prefix = f"sCoilSelectMeas.aRxCoilSelectData[{block}].aFFT_SCALE"
+    lines: list[str] = []
+    for index, factor in enumerate(factors):
+        lines += [f"{prefix}[{index}].flFactor = {factor}", f"{prefix}[{index}].bValid = 0x1"]
+    lines.append(f"{prefix}.__attribute__.size = {len(factors)}")
+    return lines
+
+
 def header_buffers(
     protocol: str, dwell_ns: int, fft_scale: Sequence[float], *, body_block: bool
 ) -> list[tuple[str, str]]:
@@ -213,7 +236,8 @@ def header_buffers(
         dwell_ns: Dwell time in nanoseconds.
         fft_scale: FFT-scale factors to record.
         body_block: Whether to add a block-1 body-coil selection that reuses
-            list indices 0/1 and ADC channels 1/2.
+            list indices 0/1 and ADC channels 1/2 and has its own FFT-scale
+            factors, as in a measurement-0 adjustment scan.
 
     Returns:
         Header buffers for :func:`measurement_header`.
@@ -221,14 +245,10 @@ def header_buffers(
     lines = [f'tProtocolName = "{protocol}"', f"sRXSPEC.alDwellTime[0] = {dwell_ns}"]
     lines += coil_lines(0, ARRAY_COIL, ARRAY_ELEMENTS)
     lines.append("sCoilSelectMeas.aRxCoilSelectData[0].ucNoiseDecorrMode = 0x2")
+    lines += fft_scale_lines(0, fft_scale)
     if body_block:
         lines += coil_lines(1, BODY_COIL, BODY_ELEMENTS, rx_offset=len(ARRAY_ELEMENTS))
-    for index, factor in enumerate(fft_scale):
-        lines += [
-            f"sCoilSelectMeas.aFFT_SCALE[{index}].flFactor = {factor}",
-            f"sCoilSelectMeas.aFFT_SCALE[{index}].bValid = 1",
-            f"sCoilSelectMeas.aFFT_SCALE[{index}].lRxChannel = {index + 1}",
-        ]
+        lines += fft_scale_lines(1, BODY_FFT_SCALE)
     xprotocol = (
         "<XProtocol>\n{\n"
         '<ParamDouble."flReadoutOSFactor">  { <Precision> 6  2.000000  }\n'
@@ -1020,6 +1040,8 @@ class MetadataTests(unittest.TestCase):
                 },
                 "fft_scale_factors": [1.25, 1.5, 1.75],
                 "fft_scale_valid_flags": [True, None, True],
+                "fft_scale_block": None,
+                "fft_scale_by_block": {},
                 "fft_scale_applied": False,
                 "raw_data_correction_applied": False,
             },
@@ -1051,6 +1073,8 @@ class MetadataTests(unittest.TestCase):
         self.assertIsNone(empty["dwell_ns"])
         self.assertIsNone(empty["noise_decorrelation_mode"])
         self.assertEqual(empty["fft_scale_factors"], [])
+        self.assertIsNone(empty["fft_scale_block"])
+        self.assertEqual(empty["fft_scale_by_block"], {})
 
     def test_fft_scale_factor_validation(self) -> None:
         """Order factors by index and reject ambiguous or malformed entries.
@@ -1074,6 +1098,72 @@ class MetadataTests(unittest.TestCase):
                 fft_scale_factors(yaps)
         with self.assertRaises(ValueError):
             measurement_metadata({("sRXSPEC", "alDwellTime", "0"): "slow"})
+
+    def test_fft_scale_is_read_per_coil_select_block(self) -> None:
+        """Keep each coil-select block's FFT-scale factors separate.
+
+        The measured adjustment scan stores block-0 receive-array factors and
+        block-1 body-coil factors, with hexadecimal ``bValid`` flags. Block 0
+        is reported, every block is recorded, and ambiguous or malformed
+        layouts are still refused.
+
+        Returns:
+            None.
+        """
+        array = ("sCoilSelectMeas", "aRxCoilSelectData", "0", "aFFT_SCALE")
+        body = ("sCoilSelectMeas", "aRxCoilSelectData", "1", "aFFT_SCALE")
+        yaps = {
+            array + ("0", "flFactor"): 4.5,
+            array + ("0", "bValid"): "0x1",
+            array + ("1", "flFactor"): "4.75",
+            array + ("1", "bValid"): "0x0",
+            array + ("__attribute__", "size"): 2.0,
+            body + ("0", "flFactor"): 180.75,
+            body + ("0", "bValid"): "0x1",
+            body + ("1", "flFactor"): 172.5,
+        }
+        self.assertEqual(fft_scale_factors(yaps), [4.5, 4.75])
+        blocks = {
+            0: {"factors": [4.5, 4.75], "valid_flags": [True, False]},
+            1: {"factors": [180.75, 172.5], "valid_flags": [True, None]},
+        }
+        self.assertEqual(fft_scale_factors_by_block(yaps), blocks)
+        metadata = measurement_metadata(yaps)
+        self.assertEqual(metadata["fft_scale_factors"], [4.5, 4.75])
+        self.assertEqual(metadata["fft_scale_valid_flags"], [True, False])
+        self.assertEqual(metadata["fft_scale_block"], 0)
+        self.assertEqual(metadata["fft_scale_by_block"], blocks)
+        self.assertFalse(metadata["fft_scale_applied"])
+        json.dumps(metadata)
+        # A single block keeps the previous single-prefix result.
+        array_only = {key: value for key, value in yaps.items() if key[2] == "0"}
+        self.assertEqual(measurement_metadata(array_only)["fft_scale_by_block"], {0: blocks[0]})
+
+        third = ("sCoilSelectMeas", "aRxCoilSelectData", "2", "aFFT_SCALE")
+        refused = {
+            "blocks without block 0": {body + ("0", "flFactor"): 1.0, third + ("0", "flFactor"): 1.0},
+            "a block and another prefix": {
+                array + ("0", "flFactor"): 1.0,
+                ("sCoilSelectMeas", "aFFT_SCALE", "0", "flFactor"): 1.0,
+            },
+            "gap in block 1": {array + ("0", "flFactor"): 1.0, body + ("1", "flFactor"): 1.0},
+            "non-finite block-1 factor": {array + ("0", "flFactor"): 1.0, body + ("0", "flFactor"): "nan"},
+            "non-numeric block-1 flag": {
+                array + ("0", "flFactor"): 1.0,
+                body + ("0", "flFactor"): 1.0,
+                body + ("0", "bValid"): "maybe",
+            },
+        }
+        for name, header in refused.items():
+            with self.subTest(case=name), self.assertRaises(ValueError):
+                measurement_metadata(header)
+        for flag, expected in (("0x1", True), ("0x0", False), ("1", True), (0.0, False), ("true", True)):
+            with self.subTest(flag=flag):
+                header = {array + ("0", "flFactor"): 1.0, array + ("0", "bValid"): flag}
+                self.assertEqual(measurement_metadata(header)["fft_scale_valid_flags"], [expected])
+        for flag in ("maybe", "nan", float("inf")):
+            with self.subTest(flag=flag), self.assertRaises(ValueError):
+                measurement_metadata({array + ("0", "flFactor"): 1.0, array + ("0", "bValid"): flag})
 
 
 class NoiseArrayTests(unittest.TestCase):
@@ -1404,6 +1494,15 @@ class MapvbvdIntegrationTests(unittest.TestCase):
         self.assertEqual(noise_metadata["fft_scale_factors"], list(NOISE_FFT_SCALE))
         self.assertEqual(acquisition_metadata["fft_scale_factors"], list(ACQUISITION_FFT_SCALE))
         self.assertEqual(noise_metadata["fft_scale_valid_flags"], [True] * 4)
+        self.assertEqual(noise_metadata["fft_scale_block"], 0)
+        self.assertEqual(
+            noise_metadata["fft_scale_by_block"],
+            {
+                0: {"factors": list(NOISE_FFT_SCALE), "valid_flags": [True] * 4},
+                1: {"factors": list(BODY_FFT_SCALE), "valid_flags": [True] * 2},
+            },
+        )
+        self.assertEqual(sorted(acquisition_metadata["fft_scale_by_block"]), [0])
         self.assertFalse(noise_metadata["raw_data_correction_factors_present"])
         self.assertAlmostEqual(
             expected_white_noise_variance_ratio(

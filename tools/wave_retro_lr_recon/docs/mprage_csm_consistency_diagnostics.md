@@ -276,8 +276,12 @@ manifest and report. They do not select a winner or prove a mechanism.
 
 The noise source is the measurement-0 adjustment scan, whose dwell (4 us in
 the reviewed data) differs from the 5 us set-4 ACS. FFT-scale metadata also
-differ between measurements and are recorded but not applied. A white-noise
-dwell ratio is reported only as an approximation.
+differ between measurements and are recorded but not applied. They are read
+per coil-select block and never merged. The adjustment scan stores block 0
+(the receive array) and block 1 (two body-coil reference elements), so each
+measurement record keeps `fft_scale_by_block` and reports the block-0 factors
+as `fft_scale_factors`. `bValid` flags may be hexadecimal, such as `0x1`. A
+white-noise dwell ratio is reported only as an approximation.
 
 Before RNR is labelled calibrated, two matrix-level checks must both pass:
 
@@ -356,7 +360,8 @@ text of the log written for the invocation that created the manifest, or
   and for FISTA-r0 `gpu`), `physical_calibration`
   (exporter manifest, inherited status, CFL record, set index), `noise`
   (raid table, MDH walks, channel identity, set-4 lattice, block-0 coil
-  select, metadata, covariance file and statistics, held-out split,
+  select, per-measurement metadata with FFT scale per coil-select block,
+  covariance file and statistics, held-out split,
   comparison, and compatibility, dwell-ratio expectation,
   `absolute_acs_noise_calibration_claimed: false`), `map1_reference`.
 - `two_map_calibration.json`: `prepare_manifest`, `command` (`argv`, `text`,

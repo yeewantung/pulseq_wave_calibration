@@ -97,6 +97,37 @@ Wave-MPRAGE subjects. Its state on 2026-09-30:
   convergence controls, and every Stage 4 experiment stay out of scope, and
   the two-map CSM is never used for reconstruction. On any failure, stop
   without overwriting or deleting outputs and report the exact error.
+- **The Stage 3 pilot is stopped after a failed `prepare`.** It ran at commit
+  `343cbad` on 2026-09-30 (20:08 America/New_York). `print-calibration-command`
+  passed. `prepare` exited with code 2 after 2 min 43 s (peak RSS 11.5 GiB):
+  `Error: FFT-scale entries occur under several header prefixes:
+  [('sCoilSelectMeas', 'aRxCoilSelectData', '0'), ('sCoilSelectMeas',
+  'aRxCoilSelectData', '1')].` The measurement-0 adjustment scan
+  (`AdjCoilSens`) stores coil-select block 0 (52 head-array elements and
+  FFT-scale entries) and block 1 (2 body-coil elements and entries).
+  `twix_noise.fft_scale_factors()` is not block-aware, so it refuses. The
+  MPRAGE measurement has block 0 only and parses. Before the error, the
+  exporter wrote `inputs/physical_calibration/` and
+  `manifests/physical_calibration.json`, plus one environment log (527 MB).
+  No prepare manifest exists. These outputs were neither moved nor deleted.
+  The export is complete and recorded by its own manifest, so a later
+  `prepare` verifies and reuses it; nothing needs to be moved aside unless
+  that verification fails. `calibrate` and `roi-template` have not run.
+- **The fix is committed locally (the commit after `343cbad`, not pushed).**
+  The user approved making it, then its commit and the pilot rerun, on
+  2026-09-30. `twix_noise` now reads FFT scale per
+  coil-select block, never merged: block 0 is reported as
+  `fft_scale_factors`, and every block is recorded in `fft_scale_by_block`,
+  with `fft_scale_block` naming the reported block. A header with a single
+  prefix reads as before. Several prefixes must all be coil-select blocks
+  and include block 0. The fix also parses hexadecimal `bValid` flags such as
+  `0x1`, which the committed code rejected (`FFT-scale bValid 0 is not
+  numeric: '0x1'.`) on both measured headers. The csm-consistency fixture's
+  adjustment scan now carries the measured two-block layout and reproduces
+  the pilot error on the committed code. The full suite passes 232/232, and
+  synthetic outputs are unchanged (44 of 44 hashes). A read-only header
+  parse of the pilot TWIX now succeeds for both measurements. The pilot
+  rerun (`prepare`, `calibrate`, `roi-template`) follows this commit.
 - Do not push, and do not commit further changes, without the user's explicit
   authorization.
 

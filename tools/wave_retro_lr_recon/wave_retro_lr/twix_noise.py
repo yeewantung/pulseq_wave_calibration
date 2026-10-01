@@ -23,7 +23,8 @@ Scientific contract:
 * Header coil selection is compared per ``aRxCoilSelectData`` block. Blocks
   are never merged, because non-array blocks (for example body-coil reference
   elements of an adjustment scan) can reuse the list indices and ADC channel
-  numbers of the receive-array block.
+  numbers of the receive-array block. FFT-scale factors are read per block in
+  the same way: block 0 is reported and every block is recorded.
 
 Only :func:`read_multiraid_table_from_file`, :func:`walk_measurement`,
 :func:`load_measurement_headers`, and :func:`load_measurement0_noise` read
@@ -704,10 +705,16 @@ def compare_coil_select(
 
 
 def fft_scale_factors(meas_yaps: Mapping[Any, Any]) -> list[float]:
-    """Return the header FFT-scale factors in index order; never apply them.
+    """Return the receive-array FFT-scale factors in index order; never apply them.
 
-    Factors are read from keys ending in ``aFFT_SCALE[i].flFactor``. They are
-    measurement-specific metadata that this module records only.
+    Factors are read from keys ending in ``aFFT_SCALE[i].flFactor``. VD/VE
+    headers store them per coil-select block, under
+    ``sCoilSelectMeas.aRxCoilSelectData[b].aFFT_SCALE[i]``, and blocks are
+    never merged. When several blocks hold factors, the block-0
+    receive-array factors are returned and :func:`fft_scale_factors_by_block`
+    records every block. Factors stored under one other prefix are returned
+    as stored. They are measurement-specific metadata that this module
+    records only.
 
     Args:
         meas_yaps: mapVBVD ``MeasYaps``-compatible mapping.
@@ -717,23 +724,43 @@ def fft_scale_factors(meas_yaps: Mapping[Any, Any]) -> list[float]:
 
     Raises:
         TypeError: If ``meas_yaps`` is not a mapping.
-        ValueError: If factors appear under several key prefixes, indices are
-            not contiguous from zero, or a factor is not finite.
+        ValueError: If factors appear under several key prefixes that are not
+            all coil-select blocks including block 0, indices are not
+            contiguous from zero, or a factor is not finite.
     """
-    entries = _fft_scale_entries(meas_yaps)
-    factors = {
-        index: fields["flFactor"] for index, fields in entries.items() if "flFactor" in fields
-    }
-    if sorted(factors) != list(range(len(factors))):
-        raise ValueError(
-            f"FFT-scale factor indices are not contiguous from zero: {sorted(factors)}."
-        )
-    result: list[float] = []
-    for index in range(len(factors)):
-        value = _optional_float(factors[index], f"FFT-scale factor {index}")
-        if value is None:
-            raise ValueError(f"FFT-scale factor {index} is empty.")
-        result.append(value)
+    return _fft_factor_list(_fft_scale_selection(meas_yaps)[1], "FFT-scale")
+
+
+def fft_scale_factors_by_block(meas_yaps: Mapping[Any, Any]) -> dict[int, dict[str, list[Any]]]:
+    """Return the FFT-scale factors and ``bValid`` flags of every coil-select block.
+
+    Each ``sCoilSelectMeas.aRxCoilSelectData[b]`` block is validated on its own
+    and never merged with another, because a non-array block (for example the
+    body-coil reference selection of an adjustment scan) has its own factors.
+    The factors are recorded only.
+
+    Args:
+        meas_yaps: mapVBVD ``MeasYaps``-compatible mapping.
+
+    Returns:
+        Mapping ``block -> {"factors": [...], "valid_flags": [...]}`` sorted by
+        block; empty when no factor is stored under a coil-select block.
+
+    Raises:
+        TypeError: If ``meas_yaps`` is not a mapping.
+        ValueError: If two key prefixes name the same block, a block's indices
+            are not contiguous from zero, a factor is not finite, or a
+            ``bValid`` flag is not Boolean-like.
+    """
+    blocks = _coil_select_fft_groups(_fft_scale_groups(meas_yaps))
+    result: dict[int, dict[str, list[Any]]] = {}
+    for block in sorted(blocks):
+        label = f"Coil-select block {block} FFT-scale"
+        factors = _fft_factor_list(blocks[block], label)
+        result[block] = {
+            "factors": factors,
+            "valid_flags": _fft_flag_list(blocks[block], len(factors), label),
+        }
     return result
 
 
@@ -753,15 +780,19 @@ def measurement_metadata(
         ``readout_oversampling_factor``, ``noise_decorrelation_mode`` (block-0
         ``ucNoiseDecorrMode``), ``raw_data_correction_factors_present``,
         ``raw_data_correction_factors`` (parsed real/imaginary field values,
-        ``None`` when a field is absent), ``fft_scale_factors``,
-        ``fft_scale_valid_flags`` (``bValid`` per factor, ``None`` if
-        unrecorded), and the constant flags ``fft_scale_applied=False`` and
-        ``raw_data_correction_applied=False``. Absent scalar fields are
-        ``None``; no default is assumed.
+        ``None`` when a field is absent), ``fft_scale_factors`` (see
+        :func:`fft_scale_factors`), ``fft_scale_valid_flags`` (``bValid`` per
+        factor, ``None`` if unrecorded), ``fft_scale_block`` (coil-select
+        block of those factors, ``None`` for another prefix or when none is
+        stored), ``fft_scale_by_block`` (see
+        :func:`fft_scale_factors_by_block`), and the constant flags
+        ``fft_scale_applied=False`` and ``raw_data_correction_applied=False``.
+        Absent scalar fields are ``None``; no default is assumed.
 
     Raises:
         TypeError: If a header is not a mapping.
-        ValueError: If a recorded numeric field is malformed.
+        ValueError: If a recorded numeric field or flag is malformed, or the
+            FFT-scale layout is ambiguous.
     """
     yaps = _normalized_header(meas_yaps)
     meas = _normalized_header(meas_header)
@@ -772,7 +803,8 @@ def measurement_metadata(
     for field_name in ("dRawDataCorrectionFactorRe", "dRawDataCorrectionFactorIm"):
         value = meas.get((field_name,), yaps.get((field_name,)))
         raw_correction[field_name] = _number_list(value)
-    factors = fft_scale_factors(meas_yaps)
+    fft_block, fft_entries = _fft_scale_selection(meas_yaps)
+    factors = _fft_factor_list(fft_entries, "FFT-scale")
     return {
         "protocol_name": protocol_name or None,
         "dwell_ns": _optional_float(
@@ -789,7 +821,9 @@ def measurement_metadata(
         ),
         "raw_data_correction_factors": raw_correction,
         "fft_scale_factors": factors,
-        "fft_scale_valid_flags": _fft_scale_valid_flags(meas_yaps, len(factors)),
+        "fft_scale_valid_flags": _fft_flag_list(fft_entries, len(factors), "FFT-scale"),
+        "fft_scale_block": fft_block,
+        "fft_scale_by_block": fft_scale_factors_by_block(meas_yaps),
         "fft_scale_applied": False,
         "raw_data_correction_applied": False,
     }
@@ -1609,42 +1643,147 @@ def _is_contiguous(table: Mapping[int, str]) -> bool:
     return bool(keys) and keys == list(range(keys[0], keys[-1] + 1))
 
 
-def _fft_scale_entries(meas_yaps: Mapping[Any, Any]) -> dict[int, dict[str, Any]]:
-    """Group ``aFFT_SCALE[i].<field>`` header values by index.
+def _fft_scale_groups(meas_yaps: Mapping[Any, Any]) -> dict[tuple[str, ...], dict[int, dict[str, Any]]]:
+    """Group ``aFFT_SCALE[i].<field>`` header values by key prefix and index.
 
     Args:
         meas_yaps: ``MeasYaps``-compatible mapping.
 
     Returns:
-        Mapping ``index -> {field name -> raw value}``.
+        Mapping ``prefix -> {index -> {field name -> raw value}}``, where the
+        prefix holds every key component before ``aFFT_SCALE``.
 
     Raises:
         TypeError: If ``meas_yaps`` is not a mapping.
-        ValueError: If FFT-scale entries occur under several key prefixes.
     """
-    entries: dict[int, dict[str, Any]] = {}
-    prefixes: set[tuple[str, ...]] = set()
+    groups: dict[tuple[str, ...], dict[int, dict[str, Any]]] = {}
     for parts, value in _normalized_header(meas_yaps).items():
         if _FFT_SCALE_COMPONENT not in parts:
             continue
         position = parts.index(_FFT_SCALE_COMPONENT)
         if len(parts) != position + 3 or not _NUMERIC_INDEX.fullmatch(parts[position + 1]):
             continue
-        prefixes.add(parts[:position])
-        entries.setdefault(int(parts[position + 1]), {})[parts[position + 2]] = value
-    if len(prefixes) > 1:
-        raise ValueError(
-            f"FFT-scale entries occur under several header prefixes: {sorted(prefixes)}."
-        )
-    return entries
+        group = groups.setdefault(parts[:position], {})
+        group.setdefault(int(parts[position + 1]), {})[parts[position + 2]] = value
+    return groups
 
 
-def _fft_scale_valid_flags(meas_yaps: Mapping[Any, Any], count: int) -> list[bool | None]:
-    """Return the recorded ``bValid`` flag of each FFT-scale factor.
+def _coil_select_block(prefix: tuple[str, ...]) -> int | None:
+    """Return the coil-select block named by an FFT-scale key prefix.
+
+    Args:
+        prefix: Key components before ``aFFT_SCALE``.
+
+    Returns:
+        Block ``b`` for ``sCoilSelectMeas.aRxCoilSelectData[b]``, else ``None``.
+    """
+    if len(prefix) == 3 and prefix[:2] == _COIL_SELECT_PREFIX and _NUMERIC_INDEX.fullmatch(prefix[2]):
+        return int(prefix[2])
+    return None
+
+
+def _coil_select_fft_groups(
+    groups: Mapping[tuple[str, ...], dict[int, dict[str, Any]]],
+) -> dict[int, dict[int, dict[str, Any]]]:
+    """Key the FFT-scale groups stored under coil-select blocks by block.
+
+    Args:
+        groups: Output of :func:`_fft_scale_groups`.
+
+    Returns:
+        Mapping ``block -> {index -> {field name -> raw value}}``; groups
+        under other prefixes are omitted.
+
+    Raises:
+        ValueError: If two key prefixes name the same block.
+    """
+    blocks: dict[int, dict[int, dict[str, Any]]] = {}
+    for prefix, entries in groups.items():
+        block = _coil_select_block(prefix)
+        if block is None:
+            continue
+        if block in blocks:
+            raise ValueError(f"FFT-scale entries name coil-select block {block} twice.")
+        blocks[block] = entries
+    return blocks
+
+
+def _fft_scale_selection(
+    meas_yaps: Mapping[Any, Any],
+) -> tuple[int | None, dict[int, dict[str, Any]]]:
+    """Select the FFT-scale entries that describe the receive array.
+
+    Entries under one prefix are used as stored. When several prefixes hold
+    entries, every prefix must be a coil-select block and block 0 must be
+    among them; the block-0 entries are selected and no blocks are merged.
 
     Args:
         meas_yaps: ``MeasYaps``-compatible mapping.
-        count: Number of FFT-scale factors.
+
+    Returns:
+        ``(block, entries)``: the coil-select block of the selected entries
+        (``None`` for another prefix or when none is stored), and the mapping
+        ``index -> {field name -> raw value}``.
+
+    Raises:
+        TypeError: If ``meas_yaps`` is not a mapping.
+        ValueError: If entries occur under several prefixes that are not all
+            coil-select blocks including block 0, or two prefixes name the
+            same block.
+    """
+    groups = _fft_scale_groups(meas_yaps)
+    blocks = _coil_select_fft_groups(groups)
+    if len(groups) <= 1:
+        prefix, entries = next(iter(groups.items()), ((), {}))
+        return _coil_select_block(prefix), entries
+    if len(blocks) != len(groups) or 0 not in blocks:
+        raise ValueError(
+            "FFT-scale entries occur under several header prefixes that are not all "
+            f"coil-select blocks including block 0: {sorted(groups)}."
+        )
+    return 0, blocks[0]
+
+
+def _fft_factor_list(entries: Mapping[int, Mapping[str, Any]], label: str) -> list[float]:
+    """Validate and order the ``flFactor`` values of one FFT-scale group.
+
+    Args:
+        entries: Mapping ``index -> {field name -> raw value}``.
+        label: Group name used in error messages.
+
+    Returns:
+        Finite factors ordered by index ``0..N-1``.
+
+    Raises:
+        ValueError: If indices are not contiguous from zero or a factor is
+            empty or not finite.
+    """
+    factors = {
+        index: fields["flFactor"] for index, fields in entries.items() if "flFactor" in fields
+    }
+    if sorted(factors) != list(range(len(factors))):
+        raise ValueError(f"{label} factor indices are not contiguous from zero: {sorted(factors)}.")
+    result: list[float] = []
+    for index in range(len(factors)):
+        value = _optional_float(factors[index], f"{label} factor {index}")
+        if value is None:
+            raise ValueError(f"{label} factor {index} is empty.")
+        result.append(value)
+    return result
+
+
+def _fft_flag_list(
+    entries: Mapping[int, Mapping[str, Any]], count: int, label: str
+) -> list[bool | None]:
+    """Return the recorded ``bValid`` flag of each factor in one FFT-scale group.
+
+    Flags may be Booleans, ``true``/``false`` text, or finite decimal or
+    hexadecimal codes such as ``0x1``, as mapVBVD returns them.
+
+    Args:
+        entries: Mapping ``index -> {field name -> raw value}``.
+        count: Number of factors in the group.
+        label: Group name used in error messages.
 
     Returns:
         One Boolean per factor index, or ``None`` when no flag is recorded.
@@ -1652,7 +1791,6 @@ def _fft_scale_valid_flags(meas_yaps: Mapping[Any, Any], count: int) -> list[boo
     Raises:
         ValueError: If a recorded flag is not Boolean-like.
     """
-    entries = _fft_scale_entries(meas_yaps)
     flags: list[bool | None] = []
     for index in range(count):
         value = entries.get(index, {}).get("bValid")
@@ -1664,8 +1802,10 @@ def _fft_scale_valid_flags(meas_yaps: Mapping[Any, Any], count: int) -> list[boo
         elif text.lower() in {"true", "false"}:
             flags.append(text.lower() == "true")
         else:
-            number = _optional_float(value, f"FFT-scale bValid {index}")
-            flags.append(bool(number))
+            code = _header_code(value)
+            if isinstance(code, str) or (isinstance(code, float) and not math.isfinite(code)):
+                raise ValueError(f"{label} bValid {index} is not Boolean-like: {value!r}.")
+            flags.append(bool(code))
     return flags
 
 

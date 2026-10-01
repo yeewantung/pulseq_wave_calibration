@@ -342,21 +342,51 @@ def _walk(roles: dict[str, tuple[int, tuple[int, int], tuple[int, int], int]], c
     }
 
 
-def _coil_yaps(dwell_ns: float, elements: list[str]) -> dict[tuple[str, ...], Any]:
-    """Build a synthetic MeasYaps mapping with one block-0 coil selection.
+# Block-1 body-coil selection of the measurement-0 adjustment scan, which
+# keeps its own FFT-scale factors as in the measured pilot header.
+BODY_COIL_ELEMENTS = ("BC1", "BC2")
+BODY_COIL_FFT_SCALE = (180.75, 172.5)
+
+
+def _array_fft_scale(count: int) -> list[float]:
+    """Return the synthetic receive-array FFT-scale factors.
+
+    Args:
+        count: Number of array elements.
+
+    Returns:
+        One factor per element in index order.
+    """
+    return [4.5 + 0.125 * index for index in range(count)]
+
+
+def _coil_yaps(dwell_ns: float, elements: list[str], *, body_coil: bool = False) -> dict[tuple[str, ...], Any]:
+    """Build a synthetic MeasYaps mapping with the scanner's coil-select layout.
+
+    Block 0 is the receive array with one FFT-scale factor per element. FFT
+    scale is stored per coil-select block with hexadecimal ``bValid`` text, as
+    mapVBVD returns it.
 
     Args:
         dwell_ns: Dwell time in nanoseconds.
         elements: Element names ordered by ADC channel.
+        body_coil: Whether to add the adjustment scan's block-1 body-coil
+            selection, which reuses list indices and ADC channels 1 and 2.
 
     Returns:
         Tuple-keyed header mapping.
     """
     yaps: dict[tuple[str, ...], Any] = {("sRXSPEC", "alDwellTime", "0"): float(dwell_ns)}
-    for index, element in enumerate(elements):
-        prefix = ("sCoilSelectMeas", "aRxCoilSelectData", "0", "asList", str(index))
-        yaps[prefix + ("lADCChannelConnected",)] = float(index + 1)
-        yaps[prefix + ("sCoilElementID", "tElement")] = f'"{element}"'
+    blocks = [("0", list(elements), _array_fft_scale(len(elements)))]
+    if body_coil:
+        blocks.append(("1", list(BODY_COIL_ELEMENTS), list(BODY_COIL_FFT_SCALE)))
+    for block, names, factors in blocks:
+        selection = ("sCoilSelectMeas", "aRxCoilSelectData", block)
+        for index, (element, factor) in enumerate(zip(names, factors)):
+            yaps[selection + ("asList", str(index), "lADCChannelConnected")] = float(index + 1)
+            yaps[selection + ("asList", str(index), "sCoilElementID", "tElement")] = f'"{element}"'
+            yaps[selection + ("aFFT_SCALE", str(index), "flFactor")] = factor
+            yaps[selection + ("aFFT_SCALE", str(index), "bValid")] = "0x1"
     return yaps
 
 
@@ -406,7 +436,7 @@ def synthetic_patches(
     acquisition_roles["refscan_set4"] = (nacs * nacs, (0, nacs - 1), (0, nacs - 1), nacs * nacs)
     acquisition_walk = _walk(acquisition_roles, acquisition_channels or channels)
     headers = [
-        {"MeasYaps": _coil_yaps(4000.0, elements), "Meas": {"flReadoutOSFactor": 2.0}},
+        {"MeasYaps": _coil_yaps(4000.0, elements, body_coil=True), "Meas": {"flReadoutOSFactor": 2.0}},
         {"MeasYaps": _coil_yaps(5000.0, acquisition_elements or elements), "Meas": {"flReadoutOSFactor": 2.0}},
     ]
 
@@ -736,6 +766,38 @@ class ContractValidationTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "alias-free"):
                 csm_consistency.validate_accepted_baseline(example.accepted)
+
+    def test_prepare_records_fft_scale_per_coil_select_block(self) -> None:
+        """Record the adjustment scan's two coil-select blocks without merging.
+
+        The measured pilot header stores block-0 receive-array and block-1
+        body-coil FFT-scale factors in its measurement-0 adjustment scan.
+        Prepare reports the block-0 factors, records every block, and never
+        applies them.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            example = build_synthetic_example(Path(temporary))
+            with synthetic_patches(example):
+                csm_consistency.prepare_csm_consistency(
+                    example.twix, example.sequence, example.accepted, example.output
+                )
+            recorded = json.loads(
+                (example.output / csm_consistency.LAYOUT["prepare_manifest"]).read_text(encoding="utf-8")
+            )["noise"]
+            array = {"factors": _array_fft_scale(example.physical), "valid_flags": [True] * example.physical}
+            body = {"factors": list(BODY_COIL_FFT_SCALE), "valid_flags": [True, True]}
+            for key, blocks in (("noise_metadata", {"0": array, "1": body}), ("acquisition_metadata", {"0": array})):
+                with self.subTest(measurement=key):
+                    metadata = recorded[key]
+                    self.assertEqual(metadata["fft_scale_factors"], array["factors"])
+                    self.assertEqual(metadata["fft_scale_valid_flags"], array["valid_flags"])
+                    self.assertEqual(metadata["fft_scale_block"], 0)
+                    self.assertEqual(metadata["fft_scale_by_block"], blocks)
+                    self.assertFalse(metadata["fft_scale_applied"])
+            self.assertFalse(recorded["fft_scale_applied"])
 
     def test_prepare_rejects_channel_or_coil_selection_mismatch(self) -> None:
         """Fail closed when channel IDs or block-0 element maps disagree.
