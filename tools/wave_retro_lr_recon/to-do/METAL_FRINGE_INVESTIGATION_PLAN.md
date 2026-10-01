@@ -68,6 +68,19 @@ session before authorizing the next stage.
   package and the Stage 3 calibration-only pilot for `225_noncontrast`. The
   pilot runs through `roi-template`, then stops for manual ROI review;
   `diagnose` follows after the reviewed labels, stopping at Review Gate 3.
+- On 2026-10-01 the user paused the ROI-based `diagnose`. The fringe is
+  superimposed on anatomy, so mutually exclusive fringe and preserved-tissue
+  labels are not a sound primary endpoint. The user then approved
+  single-variable intervention arms against the accepted baseline:
+  1, a FISTA `-i 300` convergence control; 2a and 2b, map 1 alone and maps
+  1 + 2 of the Stage 3 two-map calibration, without Soft-SENSE weighting;
+  4, PCA-24; and 3, prewhitened PCA-12. They run one at a time in the order
+  1, 2, 4, 3, with a visual review after each. This ordering supersedes
+  Stages 4-6 below; see
+  [`../docs/mprage_metal_fringe_interventions.md`](../docs/mprage_metal_fringe_interventions.md).
+  Arm 1 and the shared review figures passed code review on 2026-10-01 and
+  are committed locally. Arm 1 is authorized to run once the shared GPU is
+  below 100 % utilization, and the work stops at visual review after it.
 - The user confirmed `225_noncontrast` as the diagnostic pilot at the Gate 2 v3
   review, and earlier an existing, empty output root for it. Both are
   recorded only in the ignored local configuration. Nothing has been written

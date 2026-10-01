@@ -128,6 +128,43 @@ Wave-MPRAGE subjects. Its state on 2026-09-30:
   synthetic outputs are unchanged (44 of 44 hashes). A read-only header
   parse of the pilot TWIX now succeeds for both measurements. The pilot
   rerun (`prepare`, `calibrate`, `roi-template`) follows this commit.
+- **The Stage 3 pilot is waiting for the user's manual ROI review.** The
+  rerun at commit `2b18541` (2026-09-30, 20:44-20:48 America/New_York)
+  completed three stages:
+  - `prepare` (16 s, peak RSS 8.8 GiB) reused the verified physical set-4
+    export. Channel identity, the 32x32 set-4 lattice, and block-0 coil
+    select all match. The held-out noise split is compatible, and the
+    expected ACS/noise white-noise variance ratio is 0.8.
+  - `calibrate` (2 min 23 s, peak RSS 3.7 GiB) ran `bart ecalib -m 2 -c 0`
+    (1 min 46 s) on the prepared `kspace_calib`, and the input hash record
+    matched it exactly.
+  - `roi-template` (15 s, peak RSS 1.1 GiB) exported the RAS reference and
+    the empty five-label template. The orientation round trip is exact, and
+    shape and affine match the accepted FISTA-r0 magnitude NIfTI.
+
+  The output root holds 3.4 GB. `diagnose` runs only after the user saves
+  the reviewed labels at the recorded destination; the pilot then stops at
+  Review Gate 3.
+- **The ROI-based `diagnose` is paused (user, 2026-10-01).** The fringe is
+  superimposed on anatomy, so mutually exclusive labels are not a sound
+  primary endpoint. Do not create or infer a reviewed label map, and keep
+  every Stage 3 output: the arms read them.
+- **Intervention arms (approved 2026-10-01).** These are single-variable arms
+  against the accepted baseline. They run one at a time in the order 1, 2a
+  and 2b, 4, 3, with a visual review after each and a disk check before
+  each run. There is no Soft-SENSE weighting. See
+  `docs/mprage_metal_fringe_interventions.md`. The arm roots sit under
+  `interventions/` in the subject directory, and their paths are recorded
+  in the ignored config as `intervention_output_roots`. Only arm 1's name is
+  final; the later i100/i300 names wait for its convergence result. Arm 1
+  (`sample_mprage_fista_convergence.sh`) and the shared review figures
+  (`mprage_intervention_qc.py`) passed code review on 2026-10-01 and are
+  committed locally (not pushed). Review found two blockers, both fixed
+  before approval: `verify_control` now checks a fixed required-output
+  contract, and any entry left without a manifest counts as an
+  interrupted run. The user authorized running Arm 1 once the shared GPU
+  is below 100 % utilization, then stopping at visual review. No other
+  arm is authorized.
 - Do not push, and do not commit further changes, without the user's explicit
   authorization.
 

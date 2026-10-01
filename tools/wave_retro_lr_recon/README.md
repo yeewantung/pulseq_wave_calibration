@@ -385,6 +385,9 @@ whether the integrated FLASH ACS is locally one-map consistent near metal.
 They run one diagnostic `bart ecalib -m 2 -c 0` whose maps never feed Wave
 reconstruction, and they change no default. See
 [`mprage_csm_consistency_diagnostics.md`](docs/mprage_csm_consistency_diagnostics.md).
+The single-variable reconstruction arms that follow it, and their shared
+fixed-normalization review figures, are described in
+[`mprage_metal_fringe_interventions.md`](docs/mprage_metal_fringe_interventions.md).
 
 ## GRE workflow
 
