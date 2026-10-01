@@ -380,6 +380,12 @@ reused rather than ROVir-optimized. The Wavelet block is directly visible in
 the main ROVir launcher and is resumable with the rest of that workflow. It
 reuses the canonical ROVir transform, CSM, PSF, FISTA output, and manifest.
 
+The calibration-only set-4 coil-sensitivity consistency diagnostics test
+whether the integrated FLASH ACS is locally one-map consistent near metal.
+They run one diagnostic `bart ecalib -m 2 -c 0` whose maps never feed Wave
+reconstruction, and they change no default. See
+[`mprage_csm_consistency_diagnostics.md`](docs/mprage_csm_consistency_diagnostics.md).
+
 ## GRE workflow
 
 GRE mirrors the same normal, retrospective, and collection stages. The main

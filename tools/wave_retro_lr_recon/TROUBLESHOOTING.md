@@ -158,6 +158,42 @@ The accepted PSF is hash-validated and copied without recalibration, while
 ecalib and FISTA-r0 retain the explicitly requested matched settings. Keep
 subject-specific paths only in an ignored local launcher.
 
+## Check whether set-4 calibration is locally one-map consistent near metal
+
+For coherent fringes near dental metal, the calibration-only diagnostics in
+[`mprage_csm_consistency_diagnostics.md`](docs/mprage_csm_consistency_diagnostics.md)
+compare one-map and two-map coil-space projection residuals, ESPIRiT
+eigenvalues, and model-free local coil-vector rank inside reviewed ROIs. Use
+`scripts/sample_mprage_csm_consistency.sh` with a separately approved output
+root. It never runs Wave reconstruction, Soft-SENSE, or a PSF fit. A partial
+CFL pair or a changed command fails closed. A stage also refuses in two cases:
+
+- it will not reuse outputs whose recorded size or SHA-256 changed, or whose
+  record names a file outside the current output root, a nonexistent path, or
+  a path that is not a stable absolute path (relative, or through `/proc` or
+  `/dev`), even when it names the right file from the current directory;
+- it will not run over outputs that an interrupted run left without a
+  manifest.
+
+Move the files named in the error aside and rerun that stage. Every stage
+records stable absolute paths, so a manifest refused for its path spelling has
+been edited. Do not repair it by hand; prepare again in a new, separately
+approved output root.
+For calibrate,
+two-map maps are reused only through their calibration manifest. They must
+also have been computed from the prepared accepted `kspace_calib` recorded in
+`csm/map2_uncropped/ecalib_input.sha256`. If calibrate reports two-map outputs
+without a calibration manifest, move `csm/map2_uncropped/` and
+`csm/eigenvalues/` aside and rerun it. Accepted roots whose `ecalib` or
+FISTA-r0 command record names another root's files are rejected. If diagnose
+reports that the background-air ROI is too small on the native set-4 grid,
+draw a larger air region: both coil bases need more native air voxels than
+coils. Each stage invocation writes its own log under `logs/environment/`.
+A changed or missing log that a manifest recorded stops reuse of that
+manifest. The residual-to-noise ratio is labelled uncalibrated unless the
+measurement-0 noise covariance and the empirical air covariance agree at
+matrix level.
+
 ## ROVir inspect cannot recommend a null ROI
 
 `no_safe_automatic_recommendation` is a valid result, not a failed BART run.

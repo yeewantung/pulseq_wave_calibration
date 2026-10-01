@@ -26,6 +26,63 @@ At every review gate, stop and give the user the evidence, proposed change,
 tests, and exact commands. The user intends to request a separate code-review
 session before authorizing the next stage.
 
+## Review status
+
+- Stage 0: plan and scope confirmed.
+- Stage 1: read-only evidence audit and diagnostic specification completed on
+  2026-09-29; Gate 1 received a conditional pass for dataset-independent
+  Stage 2 code only.
+- Stage 2: the diagnostic code described in
+  [`../docs/mprage_csm_consistency_diagnostics.md`](../docs/mprage_csm_consistency_diagnostics.md)
+  is implemented on the investigation branch.
+- The initial Gate 2 review (2026-09-30) requested changes in four areas:
+  - binding the accepted ecalib record to the current accepted root;
+  - validating the accepted FISTA-r0 record;
+  - validating reviewed ROI label values before integer narrowing;
+  - verifying recorded outputs before any stage reuses existing results.
+
+  All four are fixed with negative tests, and the v2 review confirmed them.
+  The sampling-null correction passed the initial review. An independent
+  adversarial audit of the fixes found one further blocking gap and five
+  minor gaps, all fixed with tests before resubmission. The blocking gap was
+  that calibrate reused stale two-map outputs whose command text matched.
+- The second Gate 2 review (v2) confirmed those fixes. It raised three
+  blockers, fixed with exact negative tests and confirmed by the v3 review:
+  - `//proc` and `//dev` paths bypassed the process-dependent-path rule;
+  - a summary, its output record, and its metric file removed together passed
+    diagnostics reuse;
+  - recorded environment logs were rewritten on reuse and not verified.
+- The third Gate 2 review (v3) raised two provenance blockers, fixed with
+  exact negative tests:
+  - manifest file and CFL records and the `ecalib_input.sha256` names
+    accepted relative paths whenever the working directory made them name the
+    right file; every recorded path must now be a stable absolute path, not
+    through `/proc` or `/dev`, that names the expected file;
+  - the sequence, accepted-manifest, and command records of the prepare
+    manifest were checked by hash alone, so their paths could name
+    nonexistent files; they are now verified as complete file records.
+- Gate 2 approved the Stage 2 code at the v4 review on 2026-09-30. The approval
+  authorizes neither the real-data stages nor a commit; each needs separate
+  explicit authorization.
+- On 2026-09-30 the user separately authorized a local commit of the Stage 2
+  package and the Stage 3 calibration-only pilot for `225_noncontrast`. The
+  pilot runs through `roi-template`, then stops for manual ROI review;
+  `diagnose` follows after the reviewed labels, stopping at Review Gate 3.
+- The user confirmed `225_noncontrast` as the diagnostic pilot at the Gate 2 v3
+  review, and earlier an existing, empty output root for it. Both are
+  recorded only in the ignored local configuration. Nothing has been written
+  there and no scientific processing has run.
+
+Stage 1 corrected or added these facts, which the sections below include:
+
+- The FLASH set-4 TE is sequence-specific (see acquisition facts).
+- FLASH set 4 and MPRAGE share the readout gradient, polarity, sample count,
+  and dwell.
+- Measurement-0 noise comes from the adjustment scan at a different dwell.
+- In BART v1.0, `ecalib -S` with `-c 0` keeps every map weight at or above
+  0.5, and `|lambda| >= 1` produces weights near 2; Soft-SENSE is therefore
+  not approved for Stage 2 or Stage 3 preparation.
+
 ## Required starting procedure for a fresh agent
 
 1. Work in the repository root and read every applicable `AGENTS.md`.
@@ -76,7 +133,21 @@ tests after implementation.
 
 ## Current reconstruction and acquisition facts
 
-The ignored local manifest identifies two subjects and paired acquisitions.
+The ignored local manifest identifies two subjects, each with a noncontrast
+and a contrast-enhanced acquisition. The letter C in a `+C` or `-C` filename
+denotes contrast enhancement; the sign indicates no reversed readout, gradient
+polarity, or other reconstruction condition. Use these labels everywhere:
+`225_noncontrast`, `225_contrast`, `169_noncontrast`, and `169_contrast`.
+
+The two acquisitions of one subject are not registered repeat measurements.
+Motion, slab position and orientation, centre position, and adjustments
+differ, and contrast enhancement changes the measured signal. Their PSFs are
+therefore not compared as matched repeats, within-subject PSF differences are
+not used to assess PSF correctness, and those differences do not reopen
+refscan sets 0 through 3. If PSF fitting must be mentioned, the neutral
+wording is: acquisition-specific PSF-fit diagnostic difference with unresolved
+geometry, motion, contrast, and adjustment confounds.
+
 The accepted `c=0` branches use:
 
 ```text
@@ -89,10 +160,10 @@ from integrated set-4 ACS. It retains 12 virtual coils:
 
 | Dataset arm | Physical coils | Ncc | Recorded retained ACS energy |
 | --- | ---: | ---: | ---: |
-| subject 225, first acquisition | 52 | 12 | 0.91087 |
-| subject 225, paired acquisition | 52 | 12 | 0.89157 |
-| subject 169, first acquisition | 40 | 12 | 0.89705 |
-| subject 169, paired acquisition | 40 | 12 | 0.86135 |
+| `225_noncontrast` | 52 | 12 | 0.91087 |
+| `225_contrast` | 52 | 12 | 0.89157 |
+| `169_noncontrast` | 40 | 12 | 0.89705 |
+| `169_contrast` | 40 | 12 | 0.86135 |
 
 The inspected sequence definitions describe a five-set integrated FLASH
 refscan, but only zero-based set 4 is used for sensitivity-map calibration:
@@ -111,11 +182,22 @@ For the inspected MPRAGE sequence:
 - set 4 has a 32-by-32 central PE region and full oversampled readout;
 - calibration readout duration is 5.12 ms with 1024 samples, or 5 microseconds
   per sample;
-- calibration TE is 4.3625 ms;
-- MPRAGE TE is 3.6325 ms;
-- measured MPRAGE dwell time is also 5 microseconds; and
+- calibration TE is 4.3625 ms in the FOV-220 sequence used for subject 225
+  and 4.3825 ms in the FOV-192 sequence used for subject 169;
+- MPRAGE TE is 3.6325 ms in both sequences;
+- measured MPRAGE dwell time is also 5 microseconds;
+- every ADC of MPRAGE and of refscan sets 0 through 4 uses the same readout
+  gradient event, a constant +195,312.5 Hz/m with the same polarity, so FLASH
+  set 4 and MPRAGE share the readout gradient, polarity, 1024 samples, and
+  5 us dwell, and their off-resonance readout displacement is the same:
+  5.12 mm/kHz along readout; and
 - MPRAGE contains one acquired contrast/echo, so it cannot directly provide a
   conventional phase-difference B0 map.
+
+The production CSM path below selects the last refscan set under a
+"at least five sets" guard. That equals set 4 for these files, which contain
+exactly five sets with a complete, duplicate-free 32 x 32 set-4 lattice; the
+diagnostic path requires set index exactly 4.
 
 The current CSM preparation path is:
 
@@ -146,13 +228,18 @@ sets 0 through 3 only if at least one reviewed trigger is met:
 
 - set-4, convergence, PCA-24, whitening, and multi-map diagnostics fail to
   explain or alter the artifact;
-- accepted PSF diagnostic residuals or coefficient curves are abnormal;
-- paired acquisitions with the same sequence produce unexplained, materially
-  different PSF coefficients; or
+- accepted PSF diagnostic residuals or coefficient curves are abnormal within
+  one acquisition; or
 - the artifact is also global and present away from metal-related regions.
 
+Contrast and noncontrast acquisitions are not registered repeats, so
+within-subject PSF differences, such as the observed 12.9% and 16.0% complex
+PSF differences, are not evidence of a PSF error and are not a trigger.
+
 Until a trigger is reviewed, reuse the accepted PSF exactly and do not add a
-PSF parameter sweep.
+PSF parameter sweep. The fringe remains more consistent with metal-related
+readout displacement and pile-up, set-4 CSM inconsistency, R = 3 unfolding
+leakage, and Wave spreading than with a primary global PSF error.
 
 ## Why FLASH set 4 can be B0-sensitive
 
@@ -170,10 +257,22 @@ corrupt a CSM by themselves. The metal case is more difficult:
 6. The Wave reconstruction subsequently combines that CSM with a B0-free,
    position-dependent PSF, allowing the local mismatch to spread coherently.
 
-Because FLASH set 4 and MPRAGE use the same nominal dwell time, their first-order
-readout displacement may be similar. This can make the calibration partly
-self-consistent, but it does not make it a physical B0 correction: the TE,
-contrast, temporal ordering, pile-up mixtures, and Wave encoding differ.
+FLASH set 4 and MPRAGE use the same readout gradient, polarity, 1024 samples,
+and 5 us dwell, so their off-resonance readout displacement is the same:
+5.12 mm/kHz along readout. For an individual isochromat under a constant
+readout gradient, off-resonance phase is equivalent to a readout-direction
+shift, and Wave does not add EPI-like B0 distortion. Near metal, however,
+non-invertible pile-up, intravoxel dephasing, excitation differences, signal
+voids, and displaced or mixed coil sensitivities can still violate the
+single-map SENSE model. The shared displacement can make the calibration
+partly self-consistent, but it is not a physical B0 correction: the TE
+(0.730 ms or 0.750 ms longer for FLASH), contrast, inversion preparation,
+excitation pulse, temporal ordering, and pile-up mixtures differ.
+
+The R = 3 LIN alias-partner mechanism, in which a locally inconsistent metal
+region leaks through unfolding to positions about `round(N_LIN / 3)` LIN away
+(about +-85 LIN for 256), is a testable hypothesis, not a conclusion. Stage 3
+pre-registers it as an ROI test together with an edge-matched control.
 
 The most informative initial question is therefore not merely whether the CSM
 phase looks unusual. It is whether set-4 coil data require more than one local
@@ -198,23 +297,37 @@ maximum planned control; no higher channel count is in scope.
 
 ### H3: correlated noise biases compression and conditioning
 
-Both TWIX files contain explicit noise data in measurement 0. Preliminary
-inspection found matching sequential raw channel IDs between noise, MPRAGE,
-and refscan data. Estimated noise covariance is materially non-diagonal:
+Every TWIX file contains explicit noise data in measurement 0, which is the
+AdjCoilSens adjustment scan: 256 noise lines of 512 samples at 4 us dwell
+with twofold oversampling, whereas MPRAGE and set 4 use 5 us. Both subject-225
+files embed the same adjustment measurement, so `225_contrast` has no
+independent noise scan; `169_contrast` has its own. MDH channel IDs are
+identical and sequential in noise, image, and all refscan sets, and the
+block-0 coil-element-to-ADC maps are identical between the adjustment and
+acquisition headers. Raw-data correction is flagged on no MPRAGE or refscan
+line, and FFT-scale metadata differ between measurements and are not applied.
+Estimated noise covariance is materially non-diagonal:
 
-| Subject | Median absolute off-diagonal correlation | 95th percentile | Covariance condition number |
+| Acquisition | Median absolute off-diagonal correlation | 95th percentile | Covariance condition number |
 | --- | ---: | ---: | ---: |
-| 225 | 0.055 | 0.282 | 17.5 |
-| 169 | 0.064 | 0.317 | 26.4 |
+| `225_noncontrast`, `225_contrast` (shared scan) | 0.056 | 0.285 | 17.5 |
+| `169_noncontrast` | 0.066 | 0.316 | 26.4 |
+| `169_contrast` | 0.057 | 0.305 | 21.5 |
 
 Prewhitening before PCA is therefore justified, subject to explicit channel,
-scaling, and held-out-noise validation.
+scaling, and held-out-noise validation. Scaling the noise covariance by the
+dwell ratio (0.8) is only a white-noise approximation and does not establish
+absolute ACS noise calibration.
 
 ### H4: FLASH set-4 single-map CSM is locally inconsistent
 
 Metal displacement and pile-up can make the set-4 coil vector locally
 multi-component. ESPIRiT second-eigenvalue evidence and one-map versus two-map
-coil-space projection residuals should be examined before reconstruction.
+coil-space projection residuals should be examined before reconstruction. The
+phase-free projection residual `rho` is the primary diagnostic; the
+noise-normalized RNR is a conditional secondary diagnostic that is interpreted
+only after a matrix-level comparison of the noise-scan and empirical-air
+covariances.
 
 ### H5: the forward model is missing B0 evolution
 
@@ -245,7 +358,9 @@ Review gate 0:
 
 ## Review stage 1: evidence audit and diagnostic specification
 
-This stage is read-only and produces no scientific output directory.
+This stage is read-only and produces no scientific output directory. It was
+completed on 2026-09-29; the corrections it produced are listed under Review
+status.
 
 ### Required checks
 
@@ -294,8 +409,9 @@ model insufficiency when it fails, not proof of generalization when it passes.
 
 ### Controls
 
-- Compare paired acquisitions within each subject as reproducibility checks,
-  but do not infer what the condition suffix means without provenance.
+- Contrast and noncontrast acquisitions of one subject are not registered
+  repeat measurements. They are not reproducibility checks for calibration
+  metrics or PSFs; report each acquisition separately.
 - A non-metal control is desirable for false-positive calibration. The agent
   must propose a candidate and obtain user confirmation rather than selecting
   one from private data by assumption.
@@ -313,7 +429,32 @@ Review gate 1:
 
 ## Review stage 2: dataset-independent diagnostic implementation
 
-Implement only after review gate 1 approval.
+Implement only after review gate 1 approval. Gate 1 approved Stage 2 code with
+these scientific decisions:
+
+- Approved: accepted PCA-12 data for ESPIRiT, eigenvalue, and projection
+  diagnostics; physical-coil model-free local-rank diagnostics; Hann-apodized
+  coil images as the primary variant and unapodized images as a secondary
+  sensitivity analysis; the five-label geometry-bound ROI contract (metal
+  void/null, metal pile-up/bright displacement, fringe, preserved anatomy,
+  background air); the pre-registered +-85 LIN partner test and edge-matched
+  control; `225_noncontrast` as the preferred future pilot only if the user
+  confirms that its fringe is representative (the user confirmed it as the
+  pilot at the Gate 2 v3 review); hashing each TWIX once during
+  an authorized prepare stage; and reuse of the existing physical set-4
+  exporter without changing ROVir code, documenting its inherited ROVir-named
+  manifest status.
+- Not approved: any Soft-SENSE run or `ecalib -S`; physical-coil ESPIRiT;
+  PCA-24 before its reviewed stage; changed normal reconstruction defaults;
+  edits to `mprage.py`, production launchers, converters, ROVir modules, or
+  NIfTI collection without a reviewed blocker; investigation of refscan sets
+  0 through 3; and any real-data BART `ecalib`, `wave`, `fft`, or `rss`.
+- Physical-coil ESPIRiT is not implemented. With the default 24^3 calibration
+  region, 40 or 52 coils give a wide, poorly constrained calibration matrix
+  (8640 or 11,232 columns against 6859 rows), which makes estimator choice
+  and conditioning questionable.
+- Thresholds are pre-registered descriptive defaults, recorded in manifests
+  and reports. They do not select a winner or prove a mechanism.
 
 ### Intended code boundary
 
@@ -355,7 +496,9 @@ Review gate 2:
 
 Begin only after the user confirms the exact diagnostic output directory and
 authorizes the run. Use one subject and one acquisition first; the user chooses
-which arm has the clearest representative fringe.
+which arm has the clearest representative fringe. The user chose
+`225_noncontrast`, confirmed its output root, and authorized the pilot on
+2026-09-30 after Gate 2 approval.
 
 The pilot is calibration-only. It must not run Wave reconstruction.
 
@@ -365,25 +508,37 @@ Required products:
 OUTPUT_ROOT/
   inputs/
     physical_calibration/
+    noise/
   csm/
     map1/
-    map2_soft/
+    map2_uncropped/
     eigenvalues/
+  rois/
+    template/
+    reviewed/
   diagnostics/
     calibration_views/
     coil_projection_residuals/
     local_rank/
+    csm_coherence/
     roi_overlays/
   manifests/
   reports/
   logs/
 ```
 
-The exact BART commands require review. The two-map candidate should evaluate
-true Soft-SENSE support, using `ecalib -m 2 -S` rather than copying the
-historical hard-cropped `-m 2` command. The interaction between `-S` and the
-accepted `c=0` setting is a new model choice, not another hard-crop sweep, and
-must be stated explicitly.
+The only proposed real-data calibration command is
+`bart ecalib -m 2 -c 0 ...` on the accepted PCA-12 `kspace_calib`. It is
+diagnostic only and produces two uncropped map sets and their eigenvalue
+maps; it must not be used for Wave reconstruction. The accepted one-map CSM
+remains the reconstruction baseline. Map components are inspected separately,
+and RSS is never the only presentation.
+
+Soft-SENSE is not part of Stage 2 or Stage 3 preparation. In BART v1.0,
+`-S` weights each map by `s((sqrt(|lambda|) - c) / (1 - c))`; with the
+accepted `c = 0` every weight stays at or above 0.5, and the upper branch of
+`s` makes weights near 2 for `|lambda| >= 1`. Any later Soft-SENSE proposal
+needs a separately reviewed crop value.
 
 Review gate 3:
 
@@ -537,7 +692,7 @@ field information. Strong smoothness priors can also be wrong next to metal.
 The feasibility report should evaluate, in order:
 
 1. a separately acquired dual- or multi-echo field map;
-2. reversed readout polarity or different-bandwidth paired acquisitions;
+2. acquisitions repeated with reversed readout polarity or a different bandwidth;
 3. whether any existing auxiliary acquisition truly supplies compatible B0
    information; and
 4. only then a regularized joint image/B0 model.
