@@ -7,7 +7,9 @@ shell entry point retains every BART command explicitly.
 from __future__ import annotations
 
 import json
+import math
 import re
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -31,6 +33,7 @@ from .rovir_feasibility import (
 )
 
 CANONICAL_ROVIR_MANIFEST = Path("normal") / "rovir" / "manifest.json"
+NORMAL_ROVIR_WAVELET_LAMBDA = 0.035
 
 
 def validate_normal_rovir_invocation(
@@ -102,12 +105,19 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
         crop = 0.6
         crop_source = "mprage_launcher_default"
     rovir_root = root / "normal" / "rovir"
+    sampling_class_path = root / "normal" / "bart_inputs" / "sampling_class.txt"
+    if not sampling_class_path.is_file():
+        raise FileNotFoundError(sampling_class_path)
+    sampling_class = sampling_class_path.read_text(encoding="utf-8").strip()
+    if sampling_class not in {"R1", "R3x1"}:
+        raise ValueError(f"Unsupported normal sampling class: {sampling_class!r}")
     return {
         "output_root": str(root),
         "normal_manifest": str(manifest_path),
         "normal_manifest_sha256": sha256_file(manifest_path),
         "twix": str(twix),
         "sequence": str(sequence),
+        "sampling_class": sampling_class,
         "normal_reconstruction_required": False,
         "normal_magnitude_nifti": None if normal_nifti is None else str(normal_nifti),
         "normal_magnitude_candidate_count": len(normal_magnitudes),
@@ -117,6 +127,188 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
         "rovir_root": str(rovir_root),
         "feasibility_root": str(rovir_root / "feasibility"),
     }
+
+
+def normal_rovir_wavelet_context(output_root: str | Path) -> dict[str, Any]:
+    """Validate inputs for the selected normal R3x1 ROVir Wavelet branch.
+
+    Args:
+        output_root: Existing reconstruction root containing a completed
+            canonical normal ROVir branch.
+
+    Returns:
+        Validated paths and provenance for the fixed selected Wavelet run.
+
+    Raises:
+        FileNotFoundError: If a required manifest or artifact is absent.
+        ValueError: If the source is not R3x1 or any immutable record differs.
+    """
+    context = normal_rovir_context(output_root)
+    if context["sampling_class"] != "R3x1":
+        raise ValueError(
+            "Normal ROVir Wavelet is selected only for R3x1 source data."
+        )
+    root = Path(context["output_root"])
+    rovir_root = Path(context["rovir_root"])
+    contract_path = root / CANONICAL_ROVIR_MANIFEST
+    contract = _read_json(contract_path)
+    if (
+        contract.get("status") != "mprage_normal_rovir_complete"
+        or contract.get("retro_consumable") is not True
+        or contract.get("normal_source_manifest", {}).get("sha256")
+        != context["normal_manifest_sha256"]
+    ):
+        raise ValueError("Canonical normal ROVir contract is incomplete or incompatible.")
+    for label in ("twix", "sequence"):
+        _validate_source_identity(contract.get("source", {}).get(label), label)
+
+    inputs = rovir_root / "bart_inputs"
+    inputs_manifest_path = inputs / "manifest.json"
+    _validate_file_record(
+        contract.get("artifacts", {}).get("prepared_inputs_manifest"),
+        inputs_manifest_path,
+        "prepared ROVir inputs manifest",
+    )
+    inputs_manifest = _read_json(inputs_manifest_path)
+    if inputs_manifest.get("source") != contract.get("source"):
+        raise ValueError("ROVir prepared inputs and canonical source provenance disagree.")
+    _validate_cfl_record(
+        inputs_manifest.get("artifacts", {}).get("wave_kspace"),
+        inputs / "wave_kspace",
+        "normal ROVir image k-space",
+    )
+    _validate_cfl_record(
+        inputs_manifest.get("psf_calibration", {}).get("copied"),
+        inputs / "psf",
+        "normal ROVir PSF",
+    )
+    coil_sens = rovir_root / "bart_output" / "coil_sens"
+    _validate_cfl_record(
+        contract.get("ecalib", {}).get("coil_sens"),
+        coil_sens,
+        "normal ROVir CSM",
+    )
+    _validate_file_record(
+        contract.get("ecalib", {}).get("command_record"),
+        rovir_root / "bart_output" / "ecalib_command.txt",
+        "normal ROVir ecalib command",
+    )
+    return {
+        **context,
+        "normal_rovir_contract": str(contract_path),
+        "normal_rovir_contract_sha256": sha256_file(contract_path),
+        "bart_inputs": str(inputs),
+        "coil_sens": str(coil_sens),
+        "virtual_coils": int(contract["coil_processing"]["virtual_coils"]),
+        "wavelet_lambda": NORMAL_ROVIR_WAVELET_LAMBDA,
+    }
+
+
+def finalize_normal_rovir_wavelet(output_root: str | Path) -> dict[str, Any]:
+    """Validate and record the selected normal R3x1 ROVir Wavelet branch.
+
+    Args:
+        output_root: Existing reconstruction root containing the completed
+            Wavelet BART and NIfTI outputs.
+
+    Returns:
+        Stable branch-specific completion manifest.
+
+    Raises:
+        FileNotFoundError: If reconstruction or NIfTI artifacts are absent.
+        ValueError: If the command, source contract, or artifacts differ.
+
+    Side Effects:
+        Writes only the branch manifest below ``bart_output/optimal_wavelet``;
+        the canonical normal ROVir contract remains unchanged.
+    """
+    context = normal_rovir_wavelet_context(output_root)
+    rovir_root = Path(context["rovir_root"])
+    branch_root = rovir_root / "bart_output" / "optimal_wavelet"
+    image_base = branch_root / "image_wave"
+    _require_cfl(image_base)
+    command_record = branch_root / "wave_command.txt"
+    if not command_record.is_file():
+        raise FileNotFoundError(command_record)
+    command = command_record.read_text(encoding="utf-8").strip()
+    command_tokens = shlex.split(command)
+    inputs = Path(context["bart_inputs"])
+    coil_sens = Path(context["coil_sens"])
+    command_tail = [
+        "-w",
+        "-f",
+        "-r",
+        "3.5e-2",
+        "-i",
+        "100",
+        "-t",
+        "1e-6",
+        str(coil_sens),
+        str(inputs / "psf"),
+        str(inputs / "wave_kspace"),
+        str(image_base),
+    ]
+    if command_tokens not in (
+        ["bart", "wave", *command_tail],
+        ["bart", "wave", "-g", *command_tail],
+    ):
+        raise ValueError("ROVir Wavelet command differs from the selected contract.")
+    lambda_match = re.search(r"(?:^|\s)-r\s+([^\s]+)", command)
+    if lambda_match is None:
+        raise ValueError("ROVir Wavelet command does not record a lambda.")
+    try:
+        recorded_lambda = float(lambda_match.group(1))
+    except ValueError as exc:
+        raise ValueError("ROVir Wavelet command lambda is not numeric.") from exc
+    if not math.isclose(
+        recorded_lambda,
+        NORMAL_ROVIR_WAVELET_LAMBDA,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError("ROVir Wavelet command used a different lambda.")
+    magnitude = _single_magnitude(
+        rovir_root / "nifti" / "optimal_wavelet", recursive=True
+    )
+    phase = _single_phase(rovir_root / "nifti" / "optimal_wavelet")
+    magnitude_sidecar = _nifti_sidecar(magnitude)
+    phase_sidecar = _nifti_sidecar(phase)
+    contract_path = Path(context["normal_rovir_contract"])
+    manifest = {
+        "format_version": 1,
+        "status": "mprage_normal_rovir_wavelet_complete",
+        "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_normal_rovir_contract": _file_record(contract_path),
+        "selected_regularization": {
+            "method": "wavelet",
+            "lambda": NORMAL_ROVIR_WAVELET_LAMBDA,
+            "reused_from_standard_coil_experiment": True,
+            "optimized_for_rovir": False,
+        },
+        "artifacts": {
+            "command_record": _file_record(command_record),
+            "image": cfl_record(image_base),
+            "magnitude_nifti": _file_record(magnitude),
+            "magnitude_sidecar": _file_record(magnitude_sidecar),
+            "phase_nifti": _file_record(phase),
+            "phase_sidecar": _file_record(phase_sidecar),
+        },
+        "psf_recalibrated": False,
+        "ecalib_rerun": False,
+        "rovir_transform_rerun": False,
+    }
+    manifest_path = branch_root / "manifest.json"
+    if manifest_path.is_file():
+        existing = _read_json(manifest_path)
+        comparable = dict(existing)
+        comparable.pop("completed_at_utc", None)
+        expected = dict(manifest)
+        expected.pop("completed_at_utc", None)
+        if comparable != expected:
+            raise ValueError("Existing normal ROVir Wavelet manifest is incompatible.")
+        return existing
+    _write_json(manifest_path, manifest)
+    return manifest
 
 
 def prepare_inspection(output_root: str | Path) -> dict[str, Any]:
@@ -489,6 +681,48 @@ def _single_magnitude(directory: Path, *, recursive: bool) -> Path:
     return matches[0].resolve()
 
 
+def _single_phase(directory: Path) -> Path:
+    """Find exactly one phase NIfTI below a reconstruction directory.
+
+    Args:
+        directory: Directory to search recursively.
+
+    Returns:
+        Unique phase NIfTI path.
+
+    Raises:
+        FileNotFoundError: If the directory does not contain exactly one phase.
+    """
+    matches = sorted(directory.glob("**/*_part-phase_*.nii.gz")) if directory.is_dir() else []
+    if len(matches) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one phase NIfTI below {directory}; found {len(matches)}."
+        )
+    return matches[0].resolve()
+
+
+def _nifti_sidecar(path: Path) -> Path:
+    """Return the required JSON sidecar path for one ``.nii.gz`` file.
+
+    Args:
+        path: Magnitude or phase NIfTI path.
+
+    Returns:
+        Matching existing JSON sidecar path.
+
+    Raises:
+        ValueError: If the input filename is not ``.nii.gz``.
+        FileNotFoundError: If the sidecar is absent.
+    """
+    suffix = ".nii.gz"
+    if not path.name.endswith(suffix):
+        raise ValueError(f"Expected a .nii.gz file: {path}")
+    sidecar = path.with_name(path.name[: -len(suffix)] + ".json")
+    if not sidecar.is_file():
+        raise FileNotFoundError(sidecar)
+    return sidecar.resolve()
+
+
 def _magnitude_candidates(directory: Path, *, recursive: bool) -> list[Path]:
     """Return all candidate magnitude NIfTIs without making them a hard gate.
 
@@ -559,6 +793,67 @@ def _file_record(path: str | Path) -> dict[str, Any]:
     if not resolved.is_file():
         raise FileNotFoundError(resolved)
     return {"path": str(resolved), "size_bytes": resolved.stat().st_size, "sha256": sha256_file(resolved)}
+
+
+def _validate_file_record(record: object, path: Path, label: str) -> None:
+    """Require a file to retain its recorded path, size, and SHA-256.
+
+    Args:
+        record: Immutable file-record mapping.
+        path: Expected current file.
+        label: Human-readable artifact name.
+
+    Raises:
+        ValueError: If the record or current file differs.
+    """
+    if not isinstance(record, Mapping):
+        raise ValueError(f"Canonical contract lacks {label} provenance.")
+    current = _file_record(path)
+    if any(record.get(key) != current[key] for key in current):
+        raise ValueError(f"Canonical {label} differs from its recorded file.")
+
+
+def _validate_cfl_record(record: object, base: Path, label: str) -> None:
+    """Require a BART CFL pair to match its recorded geometry and hashes.
+
+    Args:
+        record: Immutable BART-pair record mapping.
+        base: Expected current BART basename.
+        label: Human-readable artifact name.
+
+    Raises:
+        ValueError: If the record or current pair differs.
+    """
+    if not isinstance(record, Mapping):
+        raise ValueError(f"Canonical contract lacks {label} provenance.")
+    current = cfl_record(base)
+    for key in ("shape", "header_sha256", "payload_sha256"):
+        if record.get(key) != current.get(key):
+            raise ValueError(f"Canonical {label} differs from its recorded artifact.")
+
+
+def _validate_source_identity(record: object, label: str) -> None:
+    """Require a source file to retain its recorded identity.
+
+    Args:
+        record: Source identity containing path, stat fields, and SHA-256.
+        label: Human-readable source name.
+
+    Raises:
+        ValueError: If the source record or current file differs.
+    """
+    if not isinstance(record, Mapping) or not isinstance(record.get("path"), str):
+        raise ValueError(f"Canonical ROVir contract lacks {label} identity.")
+    path = Path(record["path"]).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError(f"Canonical ROVir {label} source is unavailable: {path}")
+    stat = path.stat()
+    if (
+        int(record.get("size_bytes", -1)) != stat.st_size
+        or int(record.get("mtime_ns", -1)) != stat.st_mtime_ns
+        or record.get("sha256") != sha256_file(path)
+    ):
+        raise ValueError(f"Canonical ROVir {label} source identity changed.")
 
 
 def _read_json(path: str | Path) -> dict[str, Any]:

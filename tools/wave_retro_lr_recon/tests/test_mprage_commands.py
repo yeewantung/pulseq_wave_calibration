@@ -15,6 +15,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.nifti_collection import HeadMaskParameters  # noqa: E402
+from wave_retro_lr.bart_io import create_cfl  # noqa: E402
 from wave_retro_lr.mprage import (  # noqa: E402
     R3X3_WAVELET_LAMBDA,
     prepare_normal_mprage,
@@ -23,6 +24,7 @@ from wave_retro_lr.mprage import (  # noqa: E402
 )
 from wave_retro_lr.rovir_workflow import (  # noqa: E402
     _single_magnitude,
+    finalize_normal_rovir_wavelet,
     finalize_existing_normal_rovir,
     normal_rovir_context,
     validate_normal_rovir_invocation,
@@ -223,6 +225,13 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn('validate-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT"', source)
         self.assertIn("Reusing complete nested ROVir magnitude/phase NIfTI outputs", source)
         self.assertIn("existing ROVir NIfTI output is incomplete or ambiguous", source)
+        self.assertNotIn("sample_mprage_rovir_normal_wavelet_recon.sh", source)
+        self.assertIn('WAVELET_LAMBDA="3.5e-2"', source)
+        self.assertIn('WAVELET_ARGS=(-w -f -r "$WAVELET_LAMBDA"', source)
+        self.assertIn("wavelet-context", source)
+        self.assertIn("finalize-wavelet", source)
+        rovir_retro_source = retro.read_text(encoding="utf-8")
+        self.assertIn("LAMBDAS=(3.5e-2 2.5e-2 2.5e-2 2.2e-2 4.5e-2)", rovir_retro_source)
         retro_source = (SCRIPTS / "sample_mprage_retro_lr_recon.sh").read_text(
             encoding="utf-8"
         )
@@ -273,6 +282,9 @@ class SampleCommandTests(unittest.TestCase):
             sequence = root / "input.seq"
             manifest = root / "normal" / "bart_inputs" / "manifest.json"
             manifest.parent.mkdir(parents=True)
+            (manifest.parent / "sampling_class.txt").write_text(
+                "R3x1\n", encoding="utf-8"
+            )
             twix.write_bytes(b"twix")
             sequence.write_bytes(b"sequence")
             manifest.write_text(
@@ -293,6 +305,7 @@ class SampleCommandTests(unittest.TestCase):
             self.assertIsNone(context["normal_magnitude_nifti"])
             self.assertEqual(context["ecalib_crop"], 0.6)
             self.assertEqual(context["ecalib_crop_source"], "mprage_launcher_default")
+            self.assertEqual(context["sampling_class"], "R3x1")
 
             nested = root / "normal" / "nifti" / "fista_r0" / "sub-normal"
             nested.mkdir(parents=True)
@@ -369,6 +382,61 @@ class SampleCommandTests(unittest.TestCase):
                 reused = finalize_existing_normal_rovir(root)
             finalize.assert_not_called()
             self.assertTrue(reused["retro_consumable"])
+
+    def test_normal_rovir_wavelet_finalize_is_branch_local_and_idempotent(self) -> None:
+        """Record a fixed-lambda branch without changing the canonical contract.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            rovir_root = root / "normal" / "rovir"
+            inputs = rovir_root / "bart_inputs"
+            coil_sens = rovir_root / "bart_output" / "coil_sens"
+            branch = rovir_root / "bart_output" / "optimal_wavelet"
+            image = branch / "image_wave"
+            for base in (coil_sens, inputs / "psf", inputs / "wave_kspace", image):
+                base.parent.mkdir(parents=True, exist_ok=True)
+                array = create_cfl(base, (2, 2, 2, 1, 1))
+                array[...] = 1
+                array.flush()
+                del array
+            contract = rovir_root / "manifest.json"
+            contract.write_text('{"status":"mprage_normal_rovir_complete"}\n', encoding="utf-8")
+            command = (
+                "bart wave -w -f -r 3.5e-2 -i 100 -t 1e-6 "
+                f"{coil_sens} {inputs / 'psf'} {inputs / 'wave_kspace'} {image}"
+            )
+            (branch / "wave_command.txt").write_text(command + "\n", encoding="utf-8")
+            nifti = rovir_root / "nifti" / "optimal_wavelet" / "sub-normal"
+            nifti.mkdir(parents=True)
+            for part in ("mag", "phase"):
+                image_path = nifti / f"sub-normal_part-{part}_ROVirOptimalWavelet.nii.gz"
+                image_path.write_bytes(part.encode("utf-8"))
+                image_path.with_name(image_path.name[:-7] + ".json").write_text(
+                    "{}\n", encoding="utf-8"
+                )
+            context = {
+                "rovir_root": str(rovir_root),
+                "bart_inputs": str(inputs),
+                "coil_sens": str(coil_sens),
+                "normal_rovir_contract": str(contract),
+            }
+            with patch(
+                "wave_retro_lr.rovir_workflow.normal_rovir_wavelet_context",
+                return_value=context,
+            ):
+                first = finalize_normal_rovir_wavelet(root)
+                second = finalize_normal_rovir_wavelet(root)
+            self.assertEqual(first, second)
+            self.assertEqual(first["selected_regularization"]["lambda"], 0.035)
+            self.assertFalse(first["selected_regularization"]["optimized_for_rovir"])
+            self.assertTrue((branch / "manifest.json").is_file())
+            self.assertEqual(
+                contract.read_text(encoding="utf-8"),
+                '{"status":"mprage_normal_rovir_complete"}\n',
+            )
 
     def test_mprage_preparation_defaults_to_automatic_sine_line(self) -> None:
         """Keep the sample, preparation CLI, and Python API defaults aligned.

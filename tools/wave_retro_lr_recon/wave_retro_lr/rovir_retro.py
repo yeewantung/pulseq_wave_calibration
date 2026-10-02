@@ -39,7 +39,7 @@ from .sampling import (
 
 ROVIR_RETRO_CASES = tuple(name for name, _ in RETRO_CASES) + (R3X3_CASE_ID,)
 ROVIR_REUSED_WAVELET_LAMBDAS = {
-    "native_r3x2": 0.03,
+    "native_r3x2": 0.035,
     "lr_x_1p5mm_r3x2": 0.025,
     "lr_y_1p5mm_r3x2": 0.025,
     "lr_xy_1p25mm_r3x2": 0.022,

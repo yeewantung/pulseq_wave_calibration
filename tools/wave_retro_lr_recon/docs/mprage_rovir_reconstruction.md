@@ -132,8 +132,18 @@ After the explicit ROI selection, the command automatically:
 - reuses the accepted PSF without recalibration;
 - estimates a CSM in the ROVir coil basis;
 - reconstructs the mandatory FISTA lambda-zero control;
+- for R3x1 source data, reconstructs Wavelet `lambda=3.5e-2`, explicitly
+  labeled as reused from the standard-coil selection rather than
+  ROVir-optimized;
 - exports magnitude and phase NIfTIs; and
 - writes shared-window standard-versus-ROVir QC.
+
+The R3x1 Wavelet block is implemented directly in the same public launcher as
+FISTA-r0. Rerunning the exact `run` command validates and reuses completed ROI,
+ROVir, ecalib, FISTA, Wavelet, and NIfTI stages and continues only the missing
+stage. Its separate branch manifest leaves the canonical ROVir contract hash
+unchanged. R1 normal ROVir remains FISTA-r0-only because no R1 Wavelet value
+was selected.
 
 The completed canonical contract is:
 

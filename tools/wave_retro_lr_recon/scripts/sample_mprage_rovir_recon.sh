@@ -223,6 +223,55 @@ else
         --suffix "BARTWaveMPRAGEROVir${VIRTUAL_COILS}FISTAR0"
 fi
 python "$WORKFLOW" finalize "$RECONSTRUCTION_ROOT" "$VIRTUAL_COILS" >/dev/null
+if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_class)" == "R3x1" ]]; then
+    # Keep the selected R3x1 Wavelet branch visible and resumable in this launcher.
+    python "$WORKFLOW" wavelet-context "$RECONSTRUCTION_ROOT" >/dev/null
+    WAVELET_LAMBDA="3.5e-2"
+    WAVELET_BART_OUTPUT="$BART_OUTPUT/optimal_wavelet"
+    WAVELET_NIFTI_OUTPUT="$ROVIR_ROOT/nifti/optimal_wavelet"
+    mkdir -p "$WAVELET_BART_OUTPUT" "$WAVELET_NIFTI_OUTPUT"
+    if [[ "$USE_GPU" == true ]]; then
+        WAVELET_ARGS=(-g -w -f -r "$WAVELET_LAMBDA" -i 100 -t 1e-6)
+    else
+        WAVELET_ARGS=(-w -f -r "$WAVELET_LAMBDA" -i 100 -t 1e-6)
+    fi
+    printf -v WAVELET_COMMAND '%q ' bart wave "${WAVELET_ARGS[@]}" "$BART_OUTPUT/coil_sens" "$INPUTS/psf" "$INPUTS/wave_kspace" "$WAVELET_BART_OUTPUT/image_wave"
+    WAVELET_COMMAND="${WAVELET_COMMAND% }"
+    if [[ -f "$WAVELET_BART_OUTPUT/image_wave.hdr" && -f "$WAVELET_BART_OUTPUT/image_wave.cfl" ]]; then
+        [[ -f "$WAVELET_BART_OUTPUT/wave_command.txt" && "$(<"$WAVELET_BART_OUTPUT/wave_command.txt")" == "$WAVELET_COMMAND" ]] || {
+            echo "Error: existing normal ROVir Wavelet output used another command." >&2
+            exit 2
+        }
+    elif [[ -e "$WAVELET_BART_OUTPUT/image_wave.hdr" || -e "$WAVELET_BART_OUTPUT/image_wave.cfl" || -e "$WAVELET_BART_OUTPUT/wave_command.txt" ]]; then
+        echo "Error: incomplete normal ROVir Wavelet output." >&2
+        exit 2
+    else
+        bart wave "${WAVELET_ARGS[@]}" "$BART_OUTPUT/coil_sens" "$INPUTS/psf" "$INPUTS/wave_kspace" "$WAVELET_BART_OUTPUT/image_wave"
+        printf '%s\n' "$WAVELET_COMMAND" >"$WAVELET_BART_OUTPUT/wave_command.txt"
+    fi
+    mapfile -d '' -t WAVELET_MAGNITUDE_NIFTIS < <(
+        find "$WAVELET_NIFTI_OUTPUT" -type f -name '*_part-mag_*.nii.gz' -print0
+    )
+    mapfile -d '' -t WAVELET_PHASE_NIFTIS < <(
+        find "$WAVELET_NIFTI_OUTPUT" -type f -name '*_part-phase_*.nii.gz' -print0
+    )
+    if [[ ${#WAVELET_MAGNITUDE_NIFTIS[@]} -eq 1 && ${#WAVELET_PHASE_NIFTIS[@]} -eq 1 \
+          && -f "${WAVELET_MAGNITUDE_NIFTIS[0]%.nii.gz}.json" \
+          && -f "${WAVELET_PHASE_NIFTIS[0]%.nii.gz}.json" ]]; then
+        echo "Reusing complete normal ROVir Wavelet magnitude/phase NIfTI outputs."
+    elif [[ -n "$(find "$WAVELET_NIFTI_OUTPUT" -type f -print -quit)" ]]; then
+        echo "Error: existing normal ROVir Wavelet NIfTI output is incomplete or ambiguous." >&2
+        exit 2
+    else
+        python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" \
+            --bart-inputs "$INPUTS" --image "$WAVELET_BART_OUTPUT/image_wave" \
+            --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$WAVELET_NIFTI_OUTPUT" \
+            --suffix "BARTWaveMPRAGENativeR3x1ROVir${VIRTUAL_COILS}OptimalWavelet"
+    fi
+    python "$WORKFLOW" finalize-wavelet "$RECONSTRUCTION_ROOT" >/dev/null
+else
+    echo "Normal R1 ROVir remains FISTA-r0-only; no R1 Wavelet value is selected."
+fi
 echo "Completed canonical ROVir branch: $ROVIR_ROOT"
 echo "Contract: $ROVIR_ROOT/manifest.json"
 echo "QC directory: $ROVIR_ROOT/qc"

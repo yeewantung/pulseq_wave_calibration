@@ -16,9 +16,11 @@ from wave_retro_lr.rovir_workflow import (  # noqa: E402
     approve_and_prepare_solver,
     finalize_existing_normal_rovir,
     finalize_normal_rovir,
+    finalize_normal_rovir_wavelet,
     finish_inspection,
     load_recommended_boxes,
     normal_rovir_context,
+    normal_rovir_wavelet_context,
     prepare_inspection,
     prepare_reviewed_candidate,
     record_transform_and_prepare_reconstruction,
@@ -34,10 +36,10 @@ def _parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="stage", required=True)
-    for stage in ("context", "inspect-prepare", "candidate-id"):
+    for stage in ("context", "wavelet-context", "inspect-prepare", "candidate-id"):
         command = commands.add_parser(stage)
         command.add_argument("output_root", type=Path)
-        if stage == "context":
+        if stage in {"context", "wavelet-context"}:
             command.add_argument("--field", default=None)
     invocation = commands.add_parser("validate-invocation")
     invocation.add_argument("twix", type=Path)
@@ -64,6 +66,8 @@ def _parser() -> argparse.ArgumentParser:
     finalize.add_argument("virtual_coils", type=int)
     finalize_existing = commands.add_parser("finalize-existing")
     finalize_existing.add_argument("output_root", type=Path)
+    finalize_wavelet = commands.add_parser("finalize-wavelet")
+    finalize_wavelet.add_argument("output_root", type=Path)
     return parser
 
 
@@ -108,6 +112,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.stage == "context":
         result = normal_rovir_context(args.output_root)
+    elif args.stage == "wavelet-context":
+        result = normal_rovir_wavelet_context(args.output_root)
     elif args.stage == "validate-invocation":
         result = validate_normal_rovir_invocation(
             args.twix, args.output_root, args.sequence
@@ -143,11 +149,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = finalize_normal_rovir(args.output_root, args.virtual_coils)
     elif args.stage == "finalize-existing":
         result = finalize_existing_normal_rovir(args.output_root)
+    elif args.stage == "finalize-wavelet":
+        result = finalize_normal_rovir_wavelet(args.output_root)
     else:  # pragma: no cover
         raise RuntimeError(f"Unhandled stage: {args.stage}")
     if args.stage == "candidate" and args.id_only:
         print(result["candidate_id"])
-    elif args.stage == "context" and args.field is not None:
+    elif args.stage in {"context", "wavelet-context"} and args.field is not None:
         if args.field not in result or isinstance(result[args.field], (dict, list)):
             raise ValueError(f"Context has no scalar field {args.field!r}.")
         print(result[args.field])

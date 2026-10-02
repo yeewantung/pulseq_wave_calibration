@@ -429,9 +429,11 @@ provenance failures still stop the workflow.
 The retained coil count is an explicit `--virtual-coils` input and is never
 selected from a curve automatically. An available standard ecalib crop is
 inherited; without one, the MPRAGE launcher default `0.6` is used. An explicit
-override is allowed only when recorded as a deliberate difference. Version 1
-reconstructs the FISTA lambda-zero control so that ROVir is assessed without
-adding a regularization change.
+override is allowed only when recorded as a deliberate difference. The
+mandatory FISTA lambda-zero control assesses ROVir without adding a
+regularization change. For an R3x1 source, the production workflow also writes
+Wavelet `lambda=3.5e-2` as a separate comparison branch, explicitly labeled as
+reused from the standard-coil experiment rather than ROVir-optimized.
 
 ### ROI recommendation and override
 
@@ -485,8 +487,10 @@ One resumable `run` invocation performs the following internal operations:
 6. preserve ACS separately and verify zero outside the image sampling mask;
 7. reuse the accepted PSF without recalibration;
 8. run matched ecalib and BART Wave FISTA lambda zero;
-9. export magnitude and phase NIfTIs; and
-10. create scale-restored, shared-window standard-versus-ROVir QC and a
+9. for R3x1, run or resume the selected Wavelet comparison without changing
+   the canonical ROVir contract;
+10. export magnitude and phase NIfTIs; and
+11. create scale-restored, shared-window standard-versus-ROVir QC and a
     complete canonical `normal/rovir/manifest.json`.
 
 Internal operations remain manifest-backed and independently resumable, but
@@ -543,9 +547,8 @@ prerequisites. Each standard retro result remains untouched; ROVir outputs
 occupy a sibling `rovir/` branch. Retro manifests and NIfTI sidecars record the
 ROVir contract path and hash, exact mask count/hash, ROI candidate ID,
 transform hash, Ncc, coil-processing label, and normal-source manifest hash.
-NIfTI collection discovery must idempotently prefer an available ROVir
-normal/retro case over its method-matched standard counterpart while retaining
-standard fallback for cases without ROVir.
+NIfTI collection discovery retains available standard and ROVir normal/retro
+cases as separate additive branches for direct comparison.
 
 Regularization is orthogonal to the coil-processing tag. Existing retro
 methods may run with `--rovir`, but any lambda transferred from a standard-coil

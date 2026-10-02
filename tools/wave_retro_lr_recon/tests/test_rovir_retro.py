@@ -16,6 +16,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 from wave_retro_lr.bart_io import cfl_record, create_cfl, open_cfl, sha256_file  # noqa: E402
 from wave_retro_lr.rovir_retro import (  # noqa: E402
     ROVIR_RETRO_CASES,
+    ROVIR_REUSED_WAVELET_LAMBDAS,
     prepare_mprage_rovir_retro,
 )
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
@@ -42,6 +43,10 @@ class RovirRetroTests(unittest.TestCase):
                 self.assertFalse(entry["standard_retro_inputs_required"])
                 self.assertTrue(entry["fista_lambda_zero_required"])
                 self.assertFalse(entry["selected_regularization"]["optimized_for_rovir"])
+                self.assertEqual(
+                    entry["selected_regularization"]["lambda"],
+                    ROVIR_REUSED_WAVELET_LAMBDAS[case],
+                )
                 inputs = root / "retro" / case / "rovir" / "bart_inputs"
                 self.assertTrue(
                     (inputs / "wave_kspace.cfl").is_file()
@@ -53,6 +58,7 @@ class RovirRetroTests(unittest.TestCase):
                 self.assertFalse((root / "retro" / case / "bart_inputs").exists())
             reused = prepare_mprage_rovir_retro(root)
             self.assertEqual(len(reused), 5)
+            self.assertEqual(ROVIR_REUSED_WAVELET_LAMBDAS["native_r3x2"], 0.035)
 
             changed = create_cfl(transform, (1, 1, 1, 2, 2))
             changed[...] = 0

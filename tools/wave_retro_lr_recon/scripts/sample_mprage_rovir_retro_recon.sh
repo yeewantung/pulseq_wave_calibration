@@ -27,7 +27,7 @@ TWIX_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --fie
 SEQUENCE_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field sequence)"
 
 CASES=(native_r3x2 lr_x_1p5mm_r3x2 lr_y_1p5mm_r3x2 lr_xy_1p25mm_r3x2 native_r3x3)
-LAMBDAS=(3e-2 2.5e-2 2.5e-2 2.2e-2 4.5e-2)
+LAMBDAS=(3.5e-2 2.5e-2 2.5e-2 2.2e-2 4.5e-2)
 SUFFIXES=(NativeR3x2 LRX1p5mmR3x2 LRY1p5mmR3x2 LRXY1p25mmR3x2 NativeR3x3)
 
 run_method() {

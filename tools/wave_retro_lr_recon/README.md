@@ -374,6 +374,12 @@ ROVir is currently implemented only for MPRAGE. It is not exposed for GRE;
 the GRE acquisition FOV normally avoids the extended-body shoulder-wrap
 failure mode that motivated this feature.
 
+For R3x1 source data, the normal ROVir workflow retains both FISTA-r0 and the
+standard-selection Wavelet `lambda=3.5e-2` comparison. The latter is labeled as
+reused rather than ROVir-optimized. The Wavelet block is directly visible in
+the main ROVir launcher and is resumable with the rest of that workflow. It
+reuses the canonical ROVir transform, CSM, PSF, FISTA output, and manifest.
+
 ## GRE workflow
 
 GRE mirrors the same normal, retrospective, and collection stages. The main
