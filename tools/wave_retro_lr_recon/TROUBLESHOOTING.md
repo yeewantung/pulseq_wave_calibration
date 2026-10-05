@@ -28,10 +28,12 @@ and must not be repaired by editing either manifest.
 Wavelet constants inherited from the Ncc=12 studies are written under
 `wavelet_transferred_vcc12`. The reviewed MPRAGE Ncc=24 native-R3x1 selection
 is instead written under `wavelet_selected_vcc24` at `lambda=3e-2`; it is not
-extrapolated to retrospective cases. GRE remains transferred until its compact
-native-R3x1 assessment is reviewed. GRE candidates must use one lambda across
-all echoes and preserve magnitude, wrapped phase, inter-echo scaling, and
-delta-B0 review. The software does not select a winner automatically.
+extrapolated to retrospective cases. The reviewed GRE Ncc=24 native-R3x1
+selection is likewise written under `wavelet_selected_vcc24` at one shared
+`lambda=1.5e-2` across all echoes. GRE retrospective branches remain
+`wavelet_transferred_vcc12` when explicitly requested because those geometries
+were not swept. Magnitude, wrapped phase, inter-echo scaling, and delta-B0
+remain required review dimensions for any future candidate.
 
 ## A profile or ROVir invocation is rejected
 
@@ -65,6 +67,8 @@ be copied into normal reconstruction commands:
 | --- | --- |
 | MPRAGE VCC24 native-R3x1 metric provenance used for manual `3e-2` selection | `f4f199eae91077b25f742249912da4800a57198b4d742ce5847e01dceb601b78` |
 | MPRAGE VCC24 native-R3x1 metric CSV | `ca5ea4689cd947e0e989d808bd73ae0f4f812b73b4871a6eb69d0c783bcc80f8` |
+| GRE VCC24 native-R3x1 shared-lambda evaluation manifest used for manual `1.5e-2` selection | `fecbac4b66c6ba3b6d8723e4e47cc67bb2e40ead6bf88a9cc509914c111544f6` |
+| GRE VCC24 native-R3x1 shared-lambda metric CSV | `bbcd3dc2245d4a309b4550bb60b099294b7ba350525ecbef66d089c9642ab656` |
 | Corrected five-case MPRAGE selection manifest | `07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6` |
 | Native-R3x3 logical mask on the reviewed `256 x 256` grid, residue `(1, 2)` | `36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3` |
 | Native-R3x3 MPRAGE selection manifest | `07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d` |

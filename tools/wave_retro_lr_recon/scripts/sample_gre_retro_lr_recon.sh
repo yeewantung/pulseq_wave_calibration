@@ -14,7 +14,7 @@ TWIX_FILE="$1"; OUTPUT_ROOT="${2%/}"; SEQUENCE_FILE="$3"; shift 3
 VIRTUAL_COILS=24; ECALIB_CROP="0.6"; USE_GPU=false
 RECON_PROFILE="fista-only"; PROFILE_EXPLICIT=false
 PSF_COEFFICIENT_PROCESSING="sine-line"; PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
-GRE_SHARED_WAVELET_LAMBDA="0.015"
+GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12="0.015"
 select_profile() { [[ "$PROFILE_EXPLICIT" == false ]] || { echo "Error: reconstruction-profile flags are mutually exclusive." >&2; exit 2; }; RECON_PROFILE="$1"; PROFILE_EXPLICIT=true; }
 while (($#)); do
     case "$1" in
@@ -73,7 +73,7 @@ run_case_branch() {
 for case_id in native_r3x2 lin_low_resolution_r3x2; do
     maps="$NORMAL_OUTPUT/coil_sens"; [[ "$case_id" == lin_low_resolution_r3x2 ]] && maps="$RETRO_ROOT/$case_id/bart_inputs/coil_sens"
     if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == fista-only ]]; then run_case_branch "$case_id" "$maps" fista_r0 fista 0 "BARTWaveGRE${case_id}FISTAR0"; fi
-    if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then run_case_branch "$case_id" "$maps" wavelet_transferred_vcc12 wavelet "$GRE_SHARED_WAVELET_LAMBDA" "BARTWaveGRE${case_id}WaveletTransferredFromVCC12"; fi
+    if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then run_case_branch "$case_id" "$maps" wavelet_transferred_vcc12 wavelet "$GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12" "BARTWaveGRE${case_id}WaveletTransferredFromVCC12"; fi
 done
 R3X3_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --ecalib-crop "$ECALIB_CROP" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING" "--$RECON_PROFILE")
 [[ -n "$PSF_FIT_KX_MIN" ]] && R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")

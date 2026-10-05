@@ -33,11 +33,12 @@ The four main launchers accept mutually exclusive profiles: `--reg-full`
 to Wavelet-only; retrospective reconstruction defaults to FISTA-only. The
 reviewed MPRAGE Ncc=24 native-R3x1 sweep selected `lambda=3e-2`, so default
 VCC24 normal reconstruction uses `wavelet_selected_vcc24`. Explicit lambda
-overrides use `wavelet_candidate`. Counts other than 24 and the unswept MPRAGE
-retrospective cases retain their Ncc=12 values under
-`wavelet_transferred_vcc12`; GRE remains transferred until its separate sweep
-is reviewed. MPRAGE R1 rejects profiles containing Wavelet because no positive
-R1 value has been approved.
+overrides use `wavelet_candidate`. The reviewed two-echo GRE Ncc=24 native-R3x1
+sweep independently retained the shared `lambda=1.5e-2`, so its default VCC24
+normal reconstruction also uses `wavelet_selected_vcc24`. Counts other than 24
+and unswept retrospective cases retain their Ncc=12 values under
+`wavelet_transferred_vcc12`. MPRAGE R1 rejects profiles containing Wavelet
+because no positive R1 value has been approved.
 
 The default MPRAGE retrospective batch is `native_r3x2`,
 `lr_y_1p5mm_r3x2`, and `native_r3x3`. LR-X and LR-XY remain explicit options
@@ -473,18 +474,20 @@ scripts/sample_gre_normal_recon.sh \
     -g
 ```
 
-Omit `-g` for CPU BART Wave. By default every echo is reconstructed
-independently only in `wavelet_transferred_vcc12` at the shared lambda
+Omit `-g` for CPU BART Wave. At the default Ncc=24, every echo is reconstructed
+independently only in `wavelet_selected_vcc24` at the reviewed shared lambda
 `0.015`. Use `--reg-full` to add `fista_r0` (`-w -f -r 0`) or
-`--fista-only` for the control alone. The shared Wavelet value comes from the hash-bound
-`wavelet_shared_echo_selection.json`. There is no joint-echo or inferred LLR
-reconstruction.
+`--fista-only` for the control alone. Counts other than 24 retain the same
+numeric value as an explicitly labeled `wavelet_transferred_vcc12` branch.
+There is no joint-echo or inferred LLR reconstruction.
 
-After source review, one compact Ncc=24 candidate may be run per approved
-output root with `--wavelet-lambda VALUE`. The override is applied identically
-to every echo and is written under `wavelet_candidate`; the software does not
-rank or select candidates. Magnitude, phase, inter-echo scaling, and delta-B0
-behavior remain manual review requirements.
+An explicit `--wavelet-lambda VALUE` override is applied identically to every
+echo and written under `wavelet_candidate`; it does not replace or relabel the
+reviewed branch. The Ncc=24 decision used magnitude, phase, inter-echo scaling,
+and delta-B0 metrics plus fixed-window magnitude review. The shared-lambda
+evaluation-manifest and CSV SHA-256 values are
+`fecbac4b66c6ba3b6d8723e4e47cc67bb2e40ead6bf88a9cc509914c111544f6`
+and `bbcd3dc2245d4a309b4550bb60b099294b7ba350525ecbef66d089c9642ab656`.
 
 The converter restores BART output using
 `amplitude = kspace_norm * sqrt(extended_RO * LIN * PAR)` and
@@ -561,8 +564,9 @@ scripts/sample_gre_nifti_collection.sh \
 
 Omit `--require-retro` to collect normal outputs plus any complete
 retrospective geometries already present. `--require-retro` remains compatible
-with legacy roots and accepts asymmetric complete branches. Every included
-branch must contain a magnitude/phase NIfTI and JSON pair for every echo.
+with legacy roots and accepts asymmetric complete branches, including the
+default VCC24 normal `wavelet_selected_vcc24` plus retrospective `fista_r0`.
+Every included branch must contain a magnitude/phase NIfTI and JSON pair for every echo.
 Before copying, the script validates conversion manifests, echo
 times, canonical RAS geometry, shared-Wavelet provenance, and echo-specific
 BART command records.

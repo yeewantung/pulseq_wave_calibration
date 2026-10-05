@@ -35,6 +35,12 @@ effectively tied across the `2.5e-2` to `3.5e-2` quantitative/visual plateau.
 This manual decision is consumed only by the measured MPRAGE VCC24 native-R3x1
 normal launcher; it is not extrapolated to retrospective cases or GRE.
 
+User review independently retained the shared GRE VCC24 native-R3x1
+`lambda=1.5e-2` across both echoes. It is the balanced central-plateau choice
+for magnitude, phase, inter-echo scaling, and delta-B0 behavior. The measured
+GRE VCC24 normal launcher consumes this decision as
+`wavelet_selected_vcc24`; it is not extrapolated to retrospective geometries.
+
 ## Two-echo synthetic-Wave GRE regularization sweep
 
 `gre_synthetic_wave_sweep.py` is the stage-oriented experiment entry point for

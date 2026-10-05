@@ -43,8 +43,15 @@ are `f4f199eae91077b25f742249912da4800a57198b4d742ce5847e01dceb601b78`
 and `ca5ea4689cd947e0e989d808bd73ae0f4f812b73b4871a6eb69d0c783bcc80f8`.
 The default measured MPRAGE VCC24 normal launcher now records this result under
 `wavelet_selected_vcc24`; unswept retrospective cases retain their historical
-transferred values. The GRE/SWI `1.5e-2` choice still requires its separate
-Ncc=24 sweep and explicit review.
+transferred values. The two-echo GRE Ncc=24 native-R3x1 sweep is also complete,
+and user review independently retained one shared `lambda=1.5e-2` across both
+echoes. It leads pooled magnitude NRMSE/NCC, gradient NRMSE, phase-p95 error,
+and wrapped phase-difference correlation within the stable central plateau.
+The shared evaluation-manifest and CSV hashes are
+`fecbac4b66c6ba3b6d8723e4e47cc67bb2e40ead6bf88a9cc509914c111544f6`
+and `bbcd3dc2245d4a309b4550bb60b099294b7ba350525ecbef66d089c9642ab656`.
+The measured GRE VCC24 normal launcher records it under
+`wavelet_selected_vcc24`; unswept retrospective cases remain transferred.
 
 The corrected pure-image-lattice regularization rerun and explicit manual
 visual/metric selection are complete. The approved Wavelet lambdas are
@@ -80,37 +87,25 @@ root and points users to the Wave tool's `TROUBLESHOOTING.md`. It visualizes
 the processed `a`, `b`, and `c` used for reconstruction and does not alter the
 legacy no-Wave synthetic path or any frozen output tree.
 
-The GRE implementation plan is now reconciled with the published upstream and
-current parent tool. `external/wave-gre-flow-comp` is pinned at
-`d3772bda7077da9af16e776fce148ba2cec8fdcf`, including its recursively pinned
-sequence-safety dependency. The next code stage is the focused parent adapter;
-no further upstream change is required for its first implementation. Follow
-the private `gre_retro_lr_recon_plan.md` in order: shared PSF option contract,
-focused upstream loader, per-echo MDH validation, normal preparation,
-retrospective preparation, explicit BART launchers, case-aware NIfTI export,
-documentation, and tests. Do not launch a GRE scientific reconstruction job
-during implementation. The broader synthetic-tool structural cleanup remains
-after GRE unless the user explicitly changes phase order.
+The measured GRE parent adapter is implemented. It validates every echo,
+shares one refscan-derived PCA basis and CSM, evaluates calibrated echo-specific
+PSFs, prepares native R3x2, LIN-low-resolution R3x2, and native R3x3 cases, and
+exports magnitude, wrapped phase, and separate quantitative complex arrays.
+The standard launchers use immutable `vccN` trees and strict hash-bound resume
+records; the collection copies complete branches below one top-level
+`nifti_collection/vccN` tree without masking.
 
 The existing case-matched CSMs and calibrated PSFs remain the reconstruction
 inputs for this rerun, and the approved BET brain mask remains evaluation-only.
 Do not rerun ecalib, PSF calibration, or BET merely to select defaults.
 
-MPRAGE source cleanup and real-data validation are complete. GRE remains
-non-runnable in the parent tool, but its implementation-ready architecture is
-recorded in the private plan `gre_retro_lr_recon_plan.md`. The pinned upstream
-remains the authority for axial sequence parsing, multi-echo trajectories,
-one shared refscan `a/b/c` fit, and GRE NIfTI behavior; the parent owns sampling
-validation, direct crop, target-grid PSF evaluation, manifests, BART I/O, and
-concise orchestration. Confirmed cases are normal native-grid R3x1,
-retrospective native-grid R3x2, and retrospective LIN-cropped R3x2 near
-`0.9 x 1.5 x 2.5 mm`. Retro keeps the PAR grid/resolution and adds factor-two
-PAR sampling. Every case visibly uses unregularized FISTA (`-w -f -r 0`), CPU
-by default with optional `-g`. The initial GRE implementation produces only
-this single FISTA-r0 branch. Do not transfer an MPRAGE lambda or label any GRE
-setting optimal. After a separate representative GRE regularization sweep and
-explicit user selection, add the selected regularized reconstruction as a
-second branch while retaining FISTA-r0 as the control.
+MPRAGE source cleanup and real-data validation are complete. GRE software and
+the independent Ncc=24 native-R3x1 shared-lambda selection are complete; the
+next action is user-run measured GRE normal, retrospective, and collection
+validation. Normal defaults to the reviewed `wavelet_selected_vcc24` branch at
+one shared `1.5e-2` value across all echoes. Retrospective reconstruction
+defaults to FISTA-r0, and any explicitly requested retrospective Wavelet branch
+remains labeled as transferred rather than inheriting the normal selection.
 
 The separate R1 and R3 private-output cleanups remain complete, indexed,
 checksum-validated, frozen, and outside source work. Do not reset or discard

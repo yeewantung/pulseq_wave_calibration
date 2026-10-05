@@ -14,7 +14,7 @@ TWIX_FILE="$1"; OUTPUT_ROOT="${2%/}"; SEQUENCE_FILE="$3"; shift 3
 VIRTUAL_COILS=24; ECALIB_CROP="0.6"; USE_GPU=false
 RECON_PROFILE="fista-only"; PROFILE_EXPLICIT=false
 PSF_COEFFICIENT_PROCESSING="sine-line"; PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
-GRE_SHARED_WAVELET_LAMBDA="0.015"
+GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12="0.015"
 select_profile() { [[ "$PROFILE_EXPLICIT" == false ]] || { echo "Error: reconstruction-profile flags are mutually exclusive." >&2; exit 2; }; RECON_PROFILE="$1"; PROFILE_EXPLICIT=true; }
 while (($#)); do
     case "$1" in
@@ -52,7 +52,9 @@ ECHO_COUNT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], enco
 
 run_branch() {
     local branch="$1" method="$2" lambda_value="$3" suffix="$4"
-    local branch_root="$CASE_ROOT/bart_output/$branch" nifti_root="$CASE_ROOT/nifti/$branch" run_manifest="$branch_root/reconstruction_manifest.json"
+    local branch_root="$CASE_ROOT/bart_output/$branch"
+    local nifti_root="$CASE_ROOT/nifti/$branch"
+    local run_manifest="$branch_root/reconstruction_manifest.json"
     local echo_number echo_label image record expected status; local -a images=() records=() expected_commands=() state_args conversion_args=(--bart-inputs "$CASE_INPUTS") command
     for ((echo_number=1; echo_number<=ECHO_COUNT; echo_number++)); do
         printf -v echo_label 'echo-%02d' "$echo_number"; image="$branch_root/$echo_label/image_wave"; record="$branch_root/$echo_label/wave_command.txt"
@@ -69,5 +71,5 @@ run_branch() {
 }
 
 if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == fista-only ]]; then run_branch fista_r0 fista 0 BARTWaveGRENativeR3x3FISTAR0; fi
-if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then run_branch wavelet_transferred_vcc12 wavelet "$GRE_SHARED_WAVELET_LAMBDA" BARTWaveGRENativeR3x3WaveletTransferredFromVCC12; fi
+if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then run_branch wavelet_transferred_vcc12 wavelet "$GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12" BARTWaveGRENativeR3x3WaveletTransferredFromVCC12; fi
 echo "Native R3x3 retrospective multi-echo GRE complete: $CASE_ROOT ($RECON_PROFILE)"

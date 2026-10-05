@@ -185,7 +185,10 @@ winner automatically.
 Post-implementation status: the MPRAGE Ncc=24 native-R3x1 sweep and manual
 review selected `lambda=3e-2`. The measured default is isolated under
 `wavelet_selected_vcc24`; no retrospective case inherited that value. The GRE
-assessment remains pending.
+Ncc=24 native-R3x1 shared-echo sweep and manual review independently retained
+`lambda=1.5e-2`. Its measured normal default is also isolated under
+`wavelet_selected_vcc24`; no GRE retrospective case inherited the reviewed
+label.
 
 The default retrospective workflow is FISTA-only, so this reassessment does
 not require case-specific retrospective Wavelet sweeps before historical

@@ -16,12 +16,19 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = TOOL_ROOT / "scripts"
 sys.path.insert(0, str(TOOL_ROOT))
 
-from wave_retro_lr.bart_io import sha256_file  # noqa: E402
+from wave_retro_lr.bart_io import create_cfl, sha256_file  # noqa: E402
 from wave_retro_lr.gre import gre_wavelet_selection_provenance  # noqa: E402
 from wave_retro_lr.gre_nifti_collection import (  # noqa: E402
     CASE_LOCATIONS,
     RECONSTRUCTION_BRANCHES,
     build_gre_nifti_collection,
+)
+from wave_retro_lr.reconstruction_state import (  # noqa: E402
+    record_completed_reconstruction,
+)
+from wave_retro_lr.standard import (  # noqa: E402
+    prepared_artifact_records,
+    write_pca_basis,
 )
 
 
@@ -203,6 +210,85 @@ class GreNiftiCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not an unmasked source"):
                 build_gre_nifti_collection(source_root)
 
+    def test_vcc24_selected_normal_and_fista_retro_collection_layout(self) -> None:
+        """Collect the reviewed normal branch with asymmetric FISTA retro cases."""
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "reconstruction"
+            variant = root / "vcc24"
+            self._write_standard_normal_manifest(variant)
+            self._write_case(
+                variant,
+                "native_r3x1",
+                Path("normal"),
+                branches=("wavelet_selected_vcc24",),
+            )
+            self._write_standard_run(
+                variant,
+                "native_r3x1",
+                Path("normal"),
+                "wavelet_selected_vcc24",
+            )
+            for geometry_id, case_location in CASE_LOCATIONS[1:]:
+                self._write_case(
+                    variant,
+                    geometry_id,
+                    case_location,
+                    branches=("fista_r0",),
+                )
+                self._write_standard_run(
+                    variant,
+                    geometry_id,
+                    case_location,
+                    "fista_r0",
+                )
+
+            manifest = build_gre_nifti_collection(root, require_retro=True)
+            self.assertEqual(
+                [record["collection_id"] for record in manifest["variants"]],
+                ["vcc24"],
+            )
+            groups = {
+                (record["branch"], record["geometry_id"])
+                for record in manifest["cases"]
+            }
+            self.assertEqual(
+                groups,
+                {
+                    ("wavelet_selected_vcc24", "native_r3x1"),
+                    ("fista_r0", "native_r3x2"),
+                    ("fista_r0", "lin_low_resolution_r3x2"),
+                    ("fista_r0", "native_r3x3"),
+                },
+            )
+            selected = next(
+                record
+                for record in manifest["cases"]
+                if record["branch"] == "wavelet_selected_vcc24"
+            )
+            self.assertEqual(selected["reconstruction_manifest"]["lambda"], 0.015)
+            self.assertTrue(
+                (
+                    root
+                    / "nifti_collection"
+                    / "vcc24"
+                    / "original_nifti"
+                    / "wavelet_selected_vcc24"
+                    / "normal"
+                ).is_dir()
+            )
+            self.assertTrue(
+                (
+                    root
+                    / "nifti_collection"
+                    / "vcc24"
+                    / "original_nifti"
+                    / "fista_r0"
+                    / "retro"
+                    / "native_r3x3"
+                ).is_dir()
+            )
+
     def test_cli_and_sample_shell_are_path_explicit_and_bart_free(self) -> None:
         """Expose explicit source/destination help without launching BART."""
 
@@ -254,7 +340,12 @@ class GreNiftiCollectionTests(unittest.TestCase):
             self._write_case(source_root, geometry_id, case_location)
 
     def _write_case(
-        self, source_root: Path, geometry_id: str, case_location: Path
+        self,
+        source_root: Path,
+        geometry_id: str,
+        case_location: Path,
+        *,
+        branches: tuple[str, ...] = RECONSTRUCTION_BRANCHES,
     ) -> None:
         """Write both branches for one synthetic GRE geometry.
 
@@ -267,7 +358,7 @@ class GreNiftiCollectionTests(unittest.TestCase):
             None.
         """
 
-        for branch in RECONSTRUCTION_BRANCHES:
+        for branch in branches:
             directory = source_root / case_location / "nifti" / branch
             directory.mkdir(parents=True, exist_ok=True)
             nifti_records = []
@@ -340,6 +431,165 @@ class GreNiftiCollectionTests(unittest.TestCase):
             (directory / "conversion_manifest.json").write_text(
                 json.dumps(conversion), encoding="utf-8"
             )
+
+    def _write_standard_normal_manifest(self, variant: Path) -> None:
+        """Write a compact hash-bound VCC24 normal preparation fixture.
+
+        Args:
+            variant: Count-specific reconstruction root.
+
+        Returns:
+            None.
+        """
+
+        inputs = variant / "normal" / "bart_inputs"
+        inputs.mkdir(parents=True, exist_ok=True)
+        basis = write_pca_basis(
+            inputs / "coil_compression_basis.npy",
+            np.eye(32, 24, dtype=np.complex64),
+        )
+        names = ["kspace_calib"]
+        calibration = create_cfl(inputs / "kspace_calib", (4, 4, 4, 24))
+        calibration[:] = 1
+        calibration.flush()
+        del calibration
+        for echo_number in (1, 2):
+            for prefix in ("psf", "wave_kspace"):
+                name = f"{prefix}_echo-{echo_number:02d}"
+                values = create_cfl(inputs / name, (4, 4, 4, 24, 1))
+                values[:] = 1
+                values.flush()
+                del values
+                names.append(name)
+        payload = {
+            "format_version": 1,
+            "status": "fixture_ready",
+            "standard_pca_variant": "vcc24",
+            "source": {"fixture": "gre-vcc24"},
+            "geometry": {"matrix": [4, 4, 4]},
+            "sampling": {"name": "R3x1"},
+            "coil_compression": {
+                "physical_coils": 32,
+                "virtual_coils": 24,
+                "retained_energy": 0.99,
+                "basis": basis,
+            },
+        }
+        payload["output_artifacts"] = prepared_artifact_records(
+            inputs,
+            tuple(names),
+            ("coil_compression_basis.npy",),
+        )
+        (inputs / "manifest.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _write_standard_run(
+        self,
+        variant: Path,
+        geometry_id: str,
+        case_location: Path,
+        branch: str,
+    ) -> None:
+        """Write one completed standard-PCA GRE run contract for collection.
+
+        Args:
+            variant: Count-specific reconstruction root.
+            geometry_id: Stable normal or retrospective geometry identifier.
+            case_location: Relative normal or retrospective case path.
+            branch: Reconstruction branch to bind.
+
+        Returns:
+            None.
+        """
+
+        normal_inputs = variant / "normal" / "bart_inputs"
+        normal_manifest = normal_inputs / "manifest.json"
+        inputs = variant / case_location / "bart_inputs"
+        if case_location == Path("normal"):
+            prepared_manifest = normal_manifest
+        else:
+            inputs.mkdir(parents=True, exist_ok=True)
+            names = []
+            for echo_number in (1, 2):
+                for prefix in ("psf", "wave_kspace"):
+                    name = f"{prefix}_echo-{echo_number:02d}"
+                    values = create_cfl(inputs / name, (4, 4, 4, 24, 1))
+                    values[:] = 1
+                    values.flush()
+                    del values
+                    names.append(name)
+            payload = {
+                "format_version": 1,
+                "status": "fixture_ready",
+                "standard_pca_variant": "vcc24",
+                "virtual_coils": 24,
+                "source": {"fixture": "gre-vcc24"},
+                "case": {"case_id": geometry_id, "matrix": [4, 4, 4]},
+                "sampling": {"acceleration": [3, 2]},
+                "source_normal_manifest_identity": {
+                    "path": str(normal_manifest),
+                    "sha256": sha256_file(normal_manifest),
+                },
+            }
+            payload["output_artifacts"] = prepared_artifact_records(
+                inputs, tuple(names)
+            )
+            prepared_manifest = inputs / "manifest.json"
+            prepared_manifest.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+        maps = variant / "normal" / "bart_output" / "coil_sens"
+        if not maps.with_suffix(".hdr").is_file():
+            values = create_cfl(maps, (4, 4, 4, 24))
+            values[:] = 1
+            values.flush()
+            del values
+        branch_root = variant / case_location / "bart_output" / branch
+        regularization = 0.0 if branch == "fista_r0" else 0.015
+        images = []
+        records = []
+        commands = []
+        psfs = []
+        kspaces = []
+        for echo_number in (1, 2):
+            echo_label = f"echo-{echo_number:02d}"
+            image = branch_root / echo_label / "image_wave"
+            values = create_cfl(image, (4, 4, 4, 1))
+            values[:] = 1
+            values.flush()
+            del values
+            command = (
+                f"bart wave -w -f -r {regularization:g} -i 100 -t 1e-6 maps "
+                f"psf_{echo_label} kspace_{echo_label} output_{echo_label}"
+            )
+            record = branch_root / echo_label / "wave_command.txt"
+            record.write_text(command + "\n", encoding="utf-8")
+            images.append(image)
+            records.append(record)
+            commands.append(command)
+            psfs.append(inputs / f"psf_{echo_label}")
+            kspaces.append(inputs / f"wave_kspace_{echo_label}")
+        record_completed_reconstruction(
+            branch_root / "reconstruction_manifest.json",
+            prepared_manifest=prepared_manifest,
+            normal_manifest=normal_manifest,
+            profile=("fista-only" if branch == "fista_r0" else "wavelet-only"),
+            case=("normal" if case_location == Path("normal") else geometry_id),
+            branch=branch,
+            method=("fista" if branch == "fista_r0" else "wavelet"),
+            regularization=regularization,
+            maps=maps,
+            psfs=psfs,
+            kspaces=kspaces,
+            images=images,
+            command_records=records,
+            expected_commands=commands,
+            nifti_directory=variant / case_location / "nifti" / branch,
+        )
 
 
 if __name__ == "__main__":

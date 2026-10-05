@@ -739,9 +739,28 @@ class GreSampleInterfaceTests(unittest.TestCase):
         normal_source = normal.read_text(encoding="utf-8")
         retro_source = retro.read_text(encoding="utf-8")
         r3x3_source = r3x3.read_text(encoding="utf-8")
-        for source in (normal_source, retro_source, r3x3_source):
-            self.assertIn('GRE_SHARED_WAVELET_LAMBDA="0.015"', source)
+        self.assertIn(
+            'GRE_SHARED_WAVELET_LAMBDA_SELECTED_VCC24="0.015"',
+            normal_source,
+        )
+        self.assertIn(
+            'GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12="0.015"',
+            normal_source,
+        )
+        self.assertIn('elif [[ "$VIRTUAL_COILS" == 24 ]]', normal_source)
+        self.assertIn(
+            "run_branch wavelet_selected_vcc24 wavelet "
+            '"$GRE_SHARED_WAVELET_LAMBDA_SELECTED_VCC24"',
+            normal_source,
+        )
+        for source in (retro_source, r3x3_source):
+            self.assertIn(
+                'GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12="0.015"',
+                source,
+            )
             self.assertIn("wavelet_transferred_vcc12", source)
+            self.assertNotIn("wavelet_selected_vcc24", source)
+        for source in (normal_source, retro_source, r3x3_source):
             self.assertNotIn("ECHO1_LAMBDA", source)
             self.assertNotIn("ECHO2_LAMBDA", source)
             self.assertIn("ECHO_COUNT", source)
@@ -756,6 +775,16 @@ class GreSampleInterfaceTests(unittest.TestCase):
         self.assertEqual(retro_source.count("sample_gre_retro_r3x3_recon.sh"), 1)
         self.assertIn("manage_standard_reconstruction.py", r3x3_source)
         self.assertNotIn("native_r3x2", r3x3_source)
+        self.assertIn(
+            'local branch_root="$CASE_ROOT/bart_output/$branch"', r3x3_source
+        )
+        self.assertIn(
+            'local run_manifest="$branch_root/reconstruction_manifest.json"',
+            r3x3_source,
+        )
+        self.assertNotIn(
+            'nifti_root="$CASE_ROOT/nifti/$branch" run_manifest=', r3x3_source
+        )
 
     def test_gre_preparation_defaults_to_automatic_sine_line(self) -> None:
         """Keep the sample, preparation CLI, and Python API defaults aligned."""
