@@ -1,6 +1,13 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-09-01, America/New_York
+Updated: 2026-09-29, America/New_York
+
+For measured MPRAGE/GRE implementation, native-R3x3 support, the optional
+MPRAGE ROVir workflow, and the additive standard-plus-ROVir NIfTI collection,
+read `../wave_retro_lr_recon/README.md` and
+`../wave_retro_lr_recon/docs/mprage_rovir_reconstruction.md`. This document
+remains the authority for the synthetic regularization experiments and their
+frozen private-output history.
 
 Read the applicable workspace/server `AGENTS.md`, this tool's `AGENTS.md`, and
 then `EXPERIMENT_PLAN.md`. The plan is the active scientific and implementation
