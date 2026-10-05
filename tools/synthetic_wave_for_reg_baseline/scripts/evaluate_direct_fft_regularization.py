@@ -399,6 +399,14 @@ def _plot_common_window(
 
 
 def _metric_leaders(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return descriptive per-metric leaders without selecting a parameter.
+
+    Args:
+        records: Completed metric rows for one or more regularizers.
+
+    Returns:
+        Per-metric leaders for only the regularizers present in ``records``.
+    """
     definitions = {
         "lowest_nrmse_brain": ("nrmse_brain", "min"),
         "highest_ssim_3d_brain_bbox": ("ssim_3d_brain_bbox", "max"),
@@ -407,7 +415,14 @@ def _metric_leaders(records: list[dict[str, Any]]) -> dict[str, Any]:
         "edge_preservation_ratio_closest_to_one": ("edge_preservation_ratio", "closest_one"),
     }
     leaders: dict[str, Any] = {}
-    for regularizer in ("wavelet", "llr"):
+    available = sorted(
+        {
+            str(row["regularizer"])
+            for row in records
+            if float(row["lambda"]) > 0
+        }
+    )
+    for regularizer in available:
         positive = [
             row
             for row in records
@@ -426,6 +441,8 @@ def _metric_leaders(records: list[dict[str, Any]]) -> dict[str, Any]:
                 "lambda": selected["lambda"],
                 "value": selected[key],
             }
+    if "llr" not in available:
+        return leaders
     leaders["llr_by_block"] = {}
     blocks = sorted(
         {
@@ -559,18 +576,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     metrics_csv = output_dir / "regularization_metrics.csv"
     _write_csv(records, metrics_csv)
-    _plot_metrics(records, "wavelet", plots_dir / "wavelet_metrics.png")
-    _plot_llr_metrics(records, plots_dir / "llr_block_size_lambda_metrics.png")
-    _plot_llr_heatmaps(records, plots_dir / "llr_block_size_lambda_heatmaps.png")
-    _plot_common_window(
-        reference,
-        records,
-        scaled_volumes,
-        "wavelet",
-        center,
-        display_vmax,
-        plots_dir / "wavelet_common_reference_window.png",
-    )
+    regularizers = {str(row["regularizer"]) for row in records}
+    if "wavelet" in regularizers:
+        _plot_metrics(records, "wavelet", plots_dir / "wavelet_metrics.png")
+        _plot_common_window(
+            reference,
+            records,
+            scaled_volumes,
+            "wavelet",
+            center,
+            display_vmax,
+            plots_dir / "wavelet_common_reference_window.png",
+        )
+    if "llr" in regularizers:
+        _plot_llr_metrics(records, plots_dir / "llr_block_size_lambda_metrics.png")
+        _plot_llr_heatmaps(records, plots_dir / "llr_block_size_lambda_heatmaps.png")
     for block_size in sorted(
         {
             int(row["block_size"])

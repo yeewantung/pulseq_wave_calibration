@@ -12,6 +12,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.mprage import prepare_retro_sensitivity_maps  # noqa: E402
+from wave_retro_lr.standard import DEFAULT_VIRTUAL_COILS  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -24,7 +25,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         Zero after sensitivity-map preparation succeeds.
     """
     args = _parser().parse_args(argv)
-    prepare_retro_sensitivity_maps(args.output)
+    prepare_retro_sensitivity_maps(args.output, virtual_coils=args.virtual_coils)
     return 0
 
 
@@ -38,6 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "output", type=Path, help="Dataset output root containing normal and retro folders."
     )
+    parser.add_argument("--virtual-coils", type=int, default=DEFAULT_VIRTUAL_COILS)
     return parser
 
 

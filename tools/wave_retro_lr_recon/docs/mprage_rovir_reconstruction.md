@@ -41,6 +41,13 @@ configuration file.
 ROVir writes only below `normal/rovir/` and leaves the standard normal branch
 unchanged.
 
+ROVir's canonical virtual-coil count is independent of the standard-PCA
+default. The combined retrospective launcher accepts `--rovir` without a
+standard Ncc override, but rejects `--rovir --virtual-coils N` and standard
+profile flags rather than treating them as ROVir settings. New standard-PCA
+work lives below `vccN/`; canonical ROVir continues to use root-level
+`normal/rovir/` and `retro/<case>/rovir/` contracts.
+
 ## Optional step: inspect the corrected ACS
 
 Use the same positional argument order as the normal and retrospective MPRAGE
@@ -171,8 +178,8 @@ normal/rovir/
 
 ## Optional retrospective ROVir branches
 
-After the canonical normal ROVir branch is complete, add ROVir siblings to the
-five default MPRAGE retrospective cases with:
+After the canonical normal ROVir branch is complete, add canonical ROVir
+retrospective siblings with:
 
 ```bash
 scripts/sample_mprage_retro_lr_recon.sh \
@@ -204,10 +211,11 @@ normal ROVir PSF. LR PSFs are resolution-matched evaluations of its validated
 phase-plane representation, so no PSF calibration or ecalib is rerun.
 
 The MPRAGE NIfTI collection synchronizes available standard and ROVir outputs
-idempotently. Standard and ROVir results remain separate branches even for the
-same case and reconstruction method, so the collection preserves direct
-standard-versus-ROVir comparisons. A partially populated ROVir set does not
-become a global `--require-retro` requirement.
+idempotently. Count-specific standard products appear below
+`nifti_collection/vccN/`, while canonical ROVir appears below
+`nifti_collection/rovir/`. They remain additive even for the same case and
+method. A partially populated ROVir set does not become a global
+`--require-retro` requirement.
 
 ## Failure handling
 

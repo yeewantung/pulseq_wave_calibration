@@ -123,7 +123,10 @@ class GreNiftiCollectionTests(unittest.TestCase):
             self.assertEqual(appended["case_branch_count"], 8)
             self.assertEqual(
                 appended["synchronization"]["added_case_groups"],
-                ["fista_r0:native_r3x3", "selected_wavelet:native_r3x3"],
+                [
+                    "legacy_vcc12:fista_r0:native_r3x3",
+                    "legacy_vcc12:selected_wavelet:native_r3x3",
+                ],
             )
             self.assertEqual(
                 len(appended["synchronization"]["retained_case_groups"]), 6
@@ -135,8 +138,8 @@ class GreNiftiCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "refusing to remove"):
                 build_gre_nifti_collection(source_root)
 
-    def test_require_retro_accepts_legacy_layout_but_rejects_started_r3x3(self) -> None:
-        """Keep old two-case retro roots valid while requiring a started R3x3."""
+    def test_require_retro_accepts_legacy_layout_and_asymmetric_r3x3(self) -> None:
+        """Keep legacy cases valid and allow one complete R3x3 branch."""
 
         with tempfile.TemporaryDirectory() as folder:
             source_root = Path(folder) / "reconstruction"
@@ -160,10 +163,16 @@ class GreNiftiCollectionTests(unittest.TestCase):
                 if path.is_file():
                     path.unlink()
             selected.rmdir()
-            with self.assertRaisesRegex(
-                (FileNotFoundError, ValueError), "native_r3x3|incomplete"
-            ):
-                build_gre_nifti_collection(source_root, require_retro=True)
+            asymmetric = build_gre_nifti_collection(
+                source_root, require_retro=True
+            )
+            self.assertIn(
+                ("fista_r0", "native_r3x3"),
+                {
+                    (entry["branch"], entry["geometry_id"])
+                    for entry in asymmetric["cases"]
+                },
+            )
 
     def test_incomplete_echo_part_and_masked_source_are_rejected(self) -> None:
         """Reject source drift, missing phase data, and masked sidecars."""

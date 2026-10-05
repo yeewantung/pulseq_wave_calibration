@@ -18,6 +18,39 @@ The sections below describe the fully validated MPRAGE workflow first. The GRE
 section then summarizes the corresponding three stages and highlights only the
 differences.
 
+## Current standard-PCA contract
+
+All new non-ROVir runs default to 24 virtual coils and accept an explicit
+`--virtual-coils N`. A run with count `N` is isolated below
+`OUTPUT_ROOT/vccN/{normal,retro}`; this includes an explicit Ncc=12 run. The
+historical root-level `normal/` and `retro/` trees are legacy VCC=12 products
+and are never overwritten, moved, or relabeled. Preparation rejects Ncc above
+the measured physical receive-coil count and records retained energy, PCA-basis
+identity, source and geometry provenance, and prepared-artifact hashes.
+
+The four main launchers accept mutually exclusive profiles: `--reg-full`
+(FISTA-r0 plus Wavelet), `--wavelet-only`, and `--fista-only`. Normal defaults
+to Wavelet-only; retrospective reconstruction defaults to FISTA-only. The
+reviewed MPRAGE Ncc=24 native-R3x1 sweep selected `lambda=3e-2`, so default
+VCC24 normal reconstruction uses `wavelet_selected_vcc24`. Explicit lambda
+overrides use `wavelet_candidate`. Counts other than 24 and the unswept MPRAGE
+retrospective cases retain their Ncc=12 values under
+`wavelet_transferred_vcc12`; GRE remains transferred until its separate sweep
+is reviewed. MPRAGE R1 rejects profiles containing Wavelet because no positive
+R1 value has been approved.
+
+The default MPRAGE retrospective batch is `native_r3x2`,
+`lr_y_1p5mm_r3x2`, and `native_r3x3`. LR-X and LR-XY remain explicit options
+but are not prepared by default. GRE keeps `native_r3x2`,
+`lin_low_resolution_r3x2`, and `native_r3x3`.
+
+There is exactly one `OUTPUT_ROOT/nifti_collection/`. It places complete
+count-specific products below `nifti_collection/vccN/` and canonical MPRAGE
+ROVir below `nifti_collection/rovir/`. Variants are additive, and normal and
+retro may expose different branches. Every new `vccN` collection entry is
+bound to preparation and branch-run hashes, basis, Ncc, source, geometry,
+method, lambda, and copied-file hashes.
+
 The provenance of the MPRAGE Wavelet defaults, including the synthetic
 pure-mask coarse-to-fine sweep, manual review gates, presentation artifacts,
 and the boundary between parameter selection and measured reconstruction, is
@@ -63,21 +96,27 @@ scripts/sample_mprage_normal_recon.sh \
     /path/to/matching_wave_mprage.seq
 ```
 
-The default MPRAGE normal run performs one BART `ecalib` with crop `0.6`. For
-R3x1 data it reconstructs both the unregularized FISTA control
-`fista_r0` (`-w -f -r 0`) and the selected Wavelet/FISTA branch
-`optimal_wavelet` (`-w -f -r 3.5e-2`). R1 data creates only `fista_r0`, because
-the five-case rerun did not select an R1 Wavelet value. The crop and R3
-Wavelet lambda can be overridden explicitly:
+The default MPRAGE normal run performs one BART `ecalib` with crop `0.6` and
+uses the Wavelet-only profile for R3x1. At the default Ncc=24 it reconstructs
+`wavelet_selected_vcc24` with the reviewed `lambda=3e-2`. Use `--reg-full` to
+add the unregularized `fista_r0` control or `--fista-only` for that control
+alone. R1 requires `--fista-only`. The crop, Ncc, and R3 Wavelet lambda can be
+overridden explicitly:
 
 ```bash
 scripts/sample_mprage_normal_recon.sh \
     /path/to/measured_wave_mprage.dat \
     /path/to/output_root \
     /path/to/matching_wave_mprage.seq \
+    --virtual-coils 24 \
+    --reg-full \
     --ecalib-crop 0.55 \
     --r3-lambda 1.8e-2
 ```
+
+An explicit `--r3-lambda` is stored under `wavelet_candidate` rather than the
+default selected or transferred branch. Run one candidate per approved output
+root; the software records it but does not rank or select a winner.
 
 Native and retrospective PSFs are evaluated directly on the requested PE grid
 from the two sequence-derived Wave trajectory displacements and the integrated
@@ -120,7 +159,7 @@ safety gates. If that fit also fails, the accepted hybrid uses sine-line `a/b`
 and upstream nine-point smooth `c`. This fallback is explicit in the manifest
 and coefficient plot. Other automatic-selection or fitting failures stop
 preparation. Rejected candidates are still written as labeled PNG and JSON
-diagnostics under `OUTPUT_ROOT/normal`; see
+diagnostics under `OUTPUT_ROOT/vccN/normal`; see
 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 Projection-space y/z selection is independent of the kx sine-line interval.
@@ -150,7 +189,7 @@ retry must pass the unchanged gates, explicit manual y bounds disable it, and
 any accepted retry is recorded in
 `processing_diagnostics.automatic_spatial_fallback`.
 
-Each new preparation writes these diagnostics under `OUTPUT_ROOT/normal`:
+Each new preparation writes these diagnostics under `OUTPUT_ROOT/vccN/normal`:
 
 - `PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png`, with fixed y limits
   `[-2*pi, 2*pi]`;
@@ -175,8 +214,8 @@ scripts/sample_mprage_normal_recon.sh \
 
 The validated BART v1.0 `ecalib` command itself has no `-g` option and remains
 `bart ecalib -m 1 -c ...`. Shared inputs and CSMs are stored under
-`normal/bart_inputs` and `normal/bart_output`; reconstructed arrays and NIfTIs
-are separated into `normal/{bart_output,nifti}/{fista_r0,optimal_wavelet}`.
+`vccN/normal/bart_inputs` and `vccN/normal/bart_output`; reconstructed arrays
+and NIfTIs are separated into `vccN/normal/{bart_output,nifti}/<branch>`.
 
 ### 2. Retrospective R3x2 and low-resolution reconstruction
 
@@ -189,11 +228,13 @@ scripts/sample_mprage_retro_lr_recon.sh \
     /path/to/matching_wave_mprage.seq
 ```
 
-The script reuses compatible normal inputs and native CSMs. If they are absent,
-it prepares them and runs ecalib once. It then reconstructs five sequential
-retrospective cases:
+The script reuses compatible normal inputs and native CSMs in the selected
+`vccN` tree. If absent, it prepares them and runs ecalib once. The default
+FISTA-only batch contains native R3x2, LR-Y R3x2, and native R3x3. The table
+also lists explicit compatibility cases and transferred VCC=12 Wavelet values
+available through `--wavelet-only` or `--reg-full`:
 
-| Case | Requested physical XYZ resolution | FISTA control | Selected Wavelet |
+| Case | Requested physical XYZ resolution | FISTA control | Transferred Wavelet |
 | --- | --- | --- | --- |
 | `native_r3x2` | source resolution | `-w -f -r 0` | `-w -f -r 3.5e-2` |
 | `lr_x_1p5mm_r3x2` | `1.5 x 1.0 x source-Z` mm | `-w -f -r 0` | `-w -f -r 2.5e-2` |
@@ -215,18 +256,14 @@ resolution.
 The retrospective script accepts the same `--psf-*` settings as the normal
 script. It uses CPU by default; append `-g` to run every Wave branch on GPU.
 Outputs are stored beneath
-`OUTPUT_ROOT/retro/<case>/{bart_output,nifti}/{fista_r0,optimal_wavelet}`.
+`OUTPUT_ROOT/vccN/retro/<case>/{bart_output,nifti}/<branch>`.
 
-Strict source and coefficient-processing metadata matching remains mandatory
-when preparing or replacing normal inputs. Retrospective preparation may also
-reuse an already materialized legacy normal input set when its TWIX and
-sequence identities match, its core CFL geometry is mutually consistent, and
-the retained PSF, trajectory, and coefficients are finite. This compatibility
-path does not refit coefficients, regenerate the PSF, modify the historical
-manifest, or relabel an older processing mode as the current `sine-line`
-default. It records the exact decision and validated artifact identities in
-`OUTPUT_ROOT/normal/NORMAL_INPUT_REUSE_ATTESTATION.json`. Manual fit overrides
-still require an exact metadata match, and source mismatches remain fatal.
+Strict source, coefficient-processing, Ncc, basis, and artifact-hash matching
+is mandatory when reusing normal inputs. Historical root-level VCC=12 inputs
+are not promoted into a new `vccN` tree. Within an existing count-specific
+tree, retrospective preparation reuses its hash-bound PSF and trajectory;
+manual fit overrides still require an exact metadata match, and source
+mismatches remain fatal.
 
 The older crop-first operation for a no-Wave dataset remains available as
 `wave_retro_lr.retrospective.synthesize_wave_from_no_wave_crop`. It is an
@@ -295,12 +332,11 @@ scripts/sample_mprage_nifti_collection.sh \
 ```
 
 Omit `--require-retro` to collect every currently available normal and
-retrospective reconstruction. With `--require-retro`, the four historical
-R3x2/LR cases must be complete for every discovered normal method; a complete
-method-matched ROVir case satisfies that requirement. A legacy root without
-`native_r3x3` remains valid; once a `retro/native_r3x3` directory exists, that
-case must also be complete. This script never runs k-space preparation,
-ecalib, or Wave reconstruction.
+retrospective reconstruction. For new `vccN` trees, `--require-retro` requires
+the reduced default cases but accepts any complete branch per case; normal and
+retro branch names need not match. Historical root-level layouts remain
+discoverable under their legacy requirements. This script never runs k-space
+preparation, ecalib, or Wave reconstruction.
 
 Discovery is directory-backed rather than case-list-backed. Standard
 `nifti/<branch>` and ROVir `rovir/nifti/<branch>` results are retained as
@@ -320,11 +356,11 @@ copies canonical NIfTIs byte-for-byte and creates whole-head-masked derivatives
 without modifying the scientific source files under `normal/nifti` and
 `retro/<case>/nifti`.
 
-The mask is estimated once from a normal ROVir magnitude when available
-(`rovir_optimal_wavelet`, then `rovir_fista_r0`), followed by standard
-`optimal_wavelet`, standard `fista_r0`, and the first other normal branch as a
-general fallback. It is applied identically to every selected reconstruction
-branch. The mask uses a high-confidence
+Each collection variant estimates its mask from its own normal magnitude;
+canonical ROVir and every `vccN` subtree remain independent. Within a variant,
+Wavelet is preferred over FISTA when present, followed by the first other
+normal branch. The mask is applied identically to that variant's selected
+branches. The mask uses a high-confidence
 head core with distance-limited low-threshold growth, optional physical
 opening, physical closing, the largest 26-connected 3D component, 3D hole
 filling, and optional physical dilation. BET is not used. The same normal mask
@@ -358,8 +394,9 @@ OUTPUT_ROOT/
 ```
 
 Here `<branch>` and `<case>` are discovered from the populated source tree;
-standard examples include `fista_r0`, `optimal_wavelet`, the four R3x2 cases,
-and `native_r3x3`.
+standard examples include `fista_r0`, `wavelet_selected_vcc24`,
+`wavelet_transferred_vcc12`, the reduced default cases, and explicitly
+requested legacy-compatible LR cases.
 
 ### Optional MPRAGE troubleshooting features
 
@@ -383,8 +420,8 @@ reuses the canonical ROVir transform, CSM, PSF, FISTA output, and manifest.
 ## GRE workflow
 
 GRE mirrors the same normal, retrospective, and collection stages. The main
-differences are multi-echo validation, a LIN-only low-resolution case, the
-branch name `selected_wavelet`, and the absence of head masking.
+differences are multi-echo validation, a LIN-only low-resolution case, and the
+absence of head masking.
 
 The adapter imports the reviewed upstream calibration implementation from the
 pinned read-only `external/wave-gre-flow-comp` submodule. Logical
@@ -412,7 +449,7 @@ echo-specific PSFs retain the extended readout required by the forward model.
 Normal manifests record the versioned crop and exact readout geometry.
 
 Normal GRE preparation writes the same two shared-coefficient diagnostics as
-MPRAGE under `OUTPUT_ROOT/normal`: the fixed `[-2*pi, 2*pi]`
+MPRAGE under `OUTPUT_ROOT/vccN/normal`: the fixed `[-2*pi, 2*pi]`
 `PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png` and the independently autoscaled
 `PSF_COEFFICIENTS_FULL_RANGE.png`. Retrospective preparation reuses this normal
 calibration and backfills both plots when compatible prepared inputs are
@@ -436,11 +473,18 @@ scripts/sample_gre_normal_recon.sh \
     -g
 ```
 
-Omit `-g` for CPU BART Wave. Every echo is reconstructed independently in both
-`fista_r0` (`-w -f -r 0`) and `selected_wavelet` (`-w -f -r 0.015`) branches.
-The shared Wavelet value comes from the hash-bound
+Omit `-g` for CPU BART Wave. By default every echo is reconstructed
+independently only in `wavelet_transferred_vcc12` at the shared lambda
+`0.015`. Use `--reg-full` to add `fista_r0` (`-w -f -r 0`) or
+`--fista-only` for the control alone. The shared Wavelet value comes from the hash-bound
 `wavelet_shared_echo_selection.json`. There is no joint-echo or inferred LLR
 reconstruction.
+
+After source review, one compact Ncc=24 candidate may be run per approved
+output root with `--wavelet-lambda VALUE`. The override is applied identically
+to every echo and is written under `wavelet_candidate`; the software does not
+rank or select candidates. Magnitude, phase, inter-echo scaling, and delta-B0
+behavior remain manual review requirements.
 
 The converter restores BART output using
 `amplitude = kspace_norm * sqrt(extended_RO * LIN * PAR)` and
@@ -461,8 +505,9 @@ scripts/sample_gre_retro_lr_recon.sh \
     -g
 ```
 
-This creates three retrospective cases, each with `fista_r0` and
-`selected_wavelet` branches and the same shared `0.015` lambda for every echo:
+This creates three retrospective cases using FISTA-r0 by default. If
+`--wavelet-only` or `--reg-full` is requested, every echo uses the same shared
+transferred `0.015` value:
 
 | Case | Matrix | Construction |
 | --- | --- | --- |
@@ -497,9 +542,9 @@ scripts/sample_gre_retro_r3x3_recon.sh \
     -g
 ```
 
-Completed echo/branch CFL pairs with a matching recorded CPU or GPU command
-are skipped. Missing echoes resume independently; a command mismatch or an
-incomplete recorded result fails instead of silently replacing accepted data.
+Completed branches with matching commands, preparation manifests, PCA basis,
+CSM, PSFs, k-space, finite outputs, NIfTIs, and hashes are reused. A mismatch
+or incomplete recorded result fails instead of replacing accepted data.
 The standard retrospective script invokes this focused implementation after
 the two established R3x2 cases.
 
@@ -516,11 +561,9 @@ scripts/sample_gre_nifti_collection.sh \
 
 Omit `--require-retro` to collect normal outputs plus any complete
 retrospective geometries already present. `--require-retro` remains compatible
-with a legacy root containing the two established retro cases; once a
-`retro/native_r3x3` directory exists, both R3x3 branches become mandatory.
-Every included geometry must contain
-both reconstruction branches and a magnitude/phase NIfTI and JSON pair for
-every echo. Before copying, the script validates conversion manifests, echo
+with legacy roots and accepts asymmetric complete branches. Every included
+branch must contain a magnitude/phase NIfTI and JSON pair for every echo.
+Before copying, the script validates conversion manifests, echo
 times, canonical RAS geometry, shared-Wavelet provenance, and echo-specific
 BART command records.
 
@@ -536,19 +579,17 @@ the quantitative complex `.npy` arrays.
 
 ```text
 OUTPUT_ROOT/nifti_collection/
-├── original_nifti/
-│   ├── fista_r0/
+├── vccN/
+│   ├── original_nifti/<branch>/
 │   │   ├── normal/
 │   │   └── retro/<case>/
-│   └── selected_wavelet/
-│       ├── normal/
-│       └── retro/<case>/
+│   └── manifest.json
 └── manifest.json
 ```
 
 GRE code and unit contracts are complete, but GRE output should not be
-described as real-data validated until every echo and both branches have been
-visually reviewed.
+described as real-data validated until every echo and requested branch has
+been visually reviewed.
 
 ## Environment
 

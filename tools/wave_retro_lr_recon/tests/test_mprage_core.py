@@ -1596,8 +1596,8 @@ class ManifestReuseTests(unittest.TestCase):
                 )
             )
 
-    def test_retro_legacy_reuse_attests_without_rewriting_manifest(self) -> None:
-        """Verify legacy core artifacts can be reused non-destructively.
+    def test_new_variant_does_not_reuse_or_rewrite_legacy_root_manifest(self) -> None:
+        """Verify historical root-level VCC=12 inputs remain untouched.
 
         Returns:
             None.
@@ -1646,39 +1646,19 @@ class ManifestReuseTests(unittest.TestCase):
             manifest_path = destination / "manifest.json"
             manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
             original_manifest = manifest_path.read_bytes()
-            with patch(
-                "wave_retro_lr.mprage._psf_processing_implementation_identity",
-                return_value={"files_sha256": {"current": "digest"}},
-            ):
-                reused = prepare_normal_mprage(
+            with self.assertRaisesRegex(ValueError, "Unknown section code"):
+                prepare_normal_mprage(
                     twix,
                     root / "output",
                     sequence,
                     allow_legacy_artifact_reuse=True,
                 )
-            self.assertEqual(reused, manifest)
             self.assertEqual(manifest_path.read_bytes(), original_manifest)
             attestation_path = (
                 destination.parent / NORMAL_REUSE_ATTESTATION_NAME
             )
-            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                attestation["status"],
-                "legacy_normal_inputs_accepted_for_retrospective_reuse",
-            )
-            self.assertEqual(
-                attestation["recorded_psf_coefficient_processing"], "smooth"
-            )
-            self.assertFalse(attestation["scientific_artifacts_modified"])
-            self.assertEqual(
-                attestation["missing_nonessential_diagnostic_artifacts"],
-                ["psf_coefficients_processing_input"],
-            )
-            self.assertIn(
-                "payload_sha256", attestation["core_artifacts"]["psf"]
-            )
-            with self.assertRaisesRegex(ValueError, "different sources, coil-calibration"):
-                prepare_normal_mprage(twix, root / "output", sequence)
+            self.assertFalse(attestation_path.exists())
+            self.assertTrue((root / "output" / "vcc24").is_dir())
 
     def test_legacy_default_sine_line_manifest_is_reusable(self) -> None:
         """Verify legacy default sine-line metadata passes strict hash checks.
@@ -1749,8 +1729,8 @@ class ManifestReuseTests(unittest.TestCase):
                 )
             )
 
-    def test_legacy_reuse_does_not_require_unrecorded_diagnostics(self) -> None:
-        """Verify absent legacy auxiliary CFLs do not block normal reuse.
+    def test_default_variant_ignores_legacy_unrecorded_diagnostics(self) -> None:
+        """Verify missing legacy diagnostics never affect the new VCC tree.
 
         Returns:
             None.
@@ -1813,29 +1793,23 @@ class ManifestReuseTests(unittest.TestCase):
             (destination / "manifest.json").write_text(
                 json.dumps(manifest), encoding="utf-8"
             )
-            with (
-                patch(
-                    "wave_retro_lr.mprage._psf_processing_implementation_identity",
-                    return_value=implementation,
-                ),
-                patch(
-                    "wave_retro_lr.mprage._ensure_r3x1_psf_coefficient_plot",
-                    return_value=None,
-                ),
-            ):
-                reused = prepare_normal_mprage(twix, root / "output", sequence)
-            self.assertEqual(reused, manifest)
+            with self.assertRaisesRegex(ValueError, "Unknown section code"):
+                prepare_normal_mprage(twix, root / "output", sequence)
             self.assertFalse(
                 (destination / "psf_coefficients_processing_input.hdr").exists()
             )
             self.assertFalse(
                 (destination / "psf_coefficient_c_branch_turns.hdr").exists()
             )
+            self.assertEqual(
+                json.loads((destination / "manifest.json").read_text(encoding="utf-8")),
+                manifest,
+            )
 
 
 class PreparationIntegrationTests(unittest.TestCase):
-    def test_mock_twix_preparation_writes_native_and_four_retro_contracts(self) -> None:
-        """Verify mocked raw preparation writes all required BART contracts.
+    def test_mock_vcc24_preparation_writes_native_and_four_retro_contracts(self) -> None:
+        """Verify mocked VCC24 preparation writes all required BART contracts.
 
         Returns:
             None.
@@ -1866,7 +1840,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                 Returns:
                     A finite complex image-stream tensor with R3x1 support.
                 """
-                image = torch.zeros((8, 16, 16, 12), dtype=torch.complex64)
+                image = torch.zeros((8, 16, 16, 24), dtype=torch.complex64)
                 image[:, (1, 4, 7, 10, 13), :, :] = 1
                 return image
 
@@ -1880,7 +1854,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                 Returns:
                     A finite five-set complex reference tensor.
                 """
-                return torch.ones((8, 4, 4, 5, 12), dtype=torch.complex64)
+                return torch.ones((8, 4, 4, 5, 24), dtype=torch.complex64)
 
             @staticmethod
             def _check_integrated_refscan_shape(reference, **kwargs):
@@ -1893,7 +1867,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                 Returns:
                     None.
                 """
-                if tuple(reference.shape) != (8, 4, 4, 5, 12):
+                if tuple(reference.shape) != (8, 4, 4, 5, 24):
                     raise ValueError("bad mock reference")
 
             @staticmethod
@@ -1908,9 +1882,9 @@ class PreparationIntegrationTests(unittest.TestCase):
                     Identity basis, singular values, and retained-energy arrays.
                 """
                 return (
-                    np.eye(12, dtype=np.complex64),
-                    np.ones(12, dtype=np.float64),
-                    np.ones(12, dtype=np.float64),
+                    np.eye(24, dtype=np.complex64),
+                    np.ones(24, dtype=np.float64),
+                    np.ones(24, dtype=np.float64),
                 )
 
             @staticmethod
@@ -2012,16 +1986,34 @@ class PreparationIntegrationTests(unittest.TestCase):
                     ),
                 ),
             ):
-                manifest = prepare_normal_mprage(twix, output, sequence)
-                diagnostic = output / "normal" / PSF_COEFFICIENT_PLOT_NAME
+                manifest = prepare_normal_mprage(
+                    twix, output, sequence, virtual_coils=24
+                )
+                diagnostic = output / "vcc24" / "normal" / PSF_COEFFICIENT_PLOT_NAME
                 self.assertTrue(diagnostic.is_file())
                 self.assertTrue(
-                    (output / "normal" / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME).is_file()
+                    (
+                        output
+                        / "vcc24"
+                        / "normal"
+                        / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME
+                    ).is_file()
                 )
                 diagnostic.unlink()
-                retro = prepare_retro_mprage(twix, output, sequence)
+                retro = prepare_retro_mprage(
+                    twix,
+                    output,
+                    sequence,
+                    virtual_coils=24,
+                    case_ids=(
+                        "native_r3x2",
+                        "lr_x_1p5mm_r3x2",
+                        "lr_y_1p5mm_r3x2",
+                        "lr_xy_1p25mm_r3x2",
+                    ),
+                )
 
-            normal = output / "normal" / "bart_inputs"
+            normal = output / "vcc24" / "normal" / "bart_inputs"
             self.assertEqual(manifest["sampling"]["name"], "R3x1")
             self.assertTrue(_uses_alias_free_coil_calibration(manifest))
             self.assertEqual(
@@ -2046,11 +2038,11 @@ class PreparationIntegrationTests(unittest.TestCase):
                 manifest["psf_calibration"][
                     "visual_assessment_plot_relative_to_output_root"
                 ],
-                f"normal/{PSF_COEFFICIENT_PLOT_NAME}",
+                f"vcc24/normal/{PSF_COEFFICIENT_PLOT_NAME}",
             )
             self.assertTrue(diagnostic.is_file())
-            self.assertEqual(read_shape(normal / "wave_kspace"), (8, 16, 16, 12, 1))
-            self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 12))
+            self.assertEqual(read_shape(normal / "wave_kspace"), (8, 16, 16, 24, 1))
+            self.assertEqual(read_shape(normal / "kspace_calib"), (4, 16, 16, 24))
             self.assertEqual(read_shape(normal / "psf"), (8, 16, 16, 1, 1))
             self.assertEqual(read_shape(normal / "psf_coefficients_raw"), (8, 3))
             self.assertEqual(
@@ -2068,7 +2060,13 @@ class PreparationIntegrationTests(unittest.TestCase):
                 shape = tuple(case["case"]["target_logical_matrix_ro_lin_par"])
                 self.assertEqual(shape[1] % 4, 0)
                 self.assertEqual(shape[2] % 4, 0)
-                case_inputs = output / "retro" / case["case_directory"] / "bart_inputs"
+                case_inputs = (
+                    output
+                    / "vcc24"
+                    / "retro"
+                    / case["case_directory"]
+                    / "bart_inputs"
+                )
                 self.assertEqual(
                     read_shape(case_inputs / "wave_kspace")[:3],
                     (8, shape[1], shape[2]),
@@ -2080,6 +2078,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                     twix,
                     output,
                     sequence,
+                    virtual_coils=24,
                     psf_coefficient_processing="sine-line",
                     psf_fit_kx_min=1,
                     psf_fit_kx_max=7,

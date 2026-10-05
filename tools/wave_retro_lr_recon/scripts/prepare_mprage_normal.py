@@ -12,6 +12,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.mprage import prepare_normal_mprage  # noqa: E402
+from wave_retro_lr.standard import DEFAULT_VIRTUAL_COILS  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -28,6 +29,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.twix,
         args.output,
         args.seq,
+        virtual_coils=args.virtual_coils,
         psf_coefficient_processing=args.psf_coefficient_processing,
         psf_fit_kx_min=args.psf_fit_kx_min,
         psf_fit_kx_max=args.psf_fit_kx_max,
@@ -52,6 +54,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("twix", type=Path, help="Wave-encoded Siemens TWIX file.")
     parser.add_argument("output", type=Path, help="User-selected dataset output root.")
     parser.add_argument("seq", type=Path, help="Matching integrated Wave-MPRAGE sequence.")
+    parser.add_argument(
+        "--virtual-coils",
+        type=int,
+        default=DEFAULT_VIRTUAL_COILS,
+        help="Standard-PCA channel count written below OUTPUT_ROOT/vccN.",
+    )
     parser.add_argument(
         "--psf-coefficient-processing",
         choices=("smooth", "sine-line"),

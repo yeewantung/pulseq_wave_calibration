@@ -375,6 +375,36 @@ def coarse_candidate_settings() -> list[dict[str, Any]]:
     return settings
 
 
+def wavelet_only_candidate_settings(
+    lambdas: Sequence[float],
+) -> list[dict[str, Any]]:
+    """Return one FISTA-r0 control followed by positive Wavelet candidates.
+
+    Args:
+        lambdas: Strictly increasing positive Wavelet regularization values.
+
+    Returns:
+        Deterministic candidate settings with no LLR entries.
+
+    Raises:
+        ValueError: If values are non-finite, non-positive, duplicated, or unsorted.
+    """
+    values = tuple(float(value) for value in lambdas)
+    if (
+        not values
+        or any(not math.isfinite(value) or value <= 0.0 for value in values)
+        or tuple(sorted(set(values))) != values
+    ):
+        raise ValueError("Wavelet lambdas must be unique, finite, positive, and increasing.")
+    return [
+        {"method": "fista_lambda0", "lambda": 0.0, "block_size": None},
+        *(
+            {"method": "wavelet", "lambda": value, "block_size": None}
+            for value in values
+        ),
+    ]
+
+
 def lambda_label(value: float) -> str:
     """Format a finite nonnegative lambda for deterministic path names.
 
@@ -766,7 +796,7 @@ def validate_config_document(config: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     format_version = config.get("format_version")
-    if format_version not in {1, 2} or config.get("workflow") != WORKFLOW_NAME:
+    if format_version not in {1, 2, 3} or config.get("workflow") != WORKFLOW_NAME:
         raise ValueError("Unsupported GRE sweep configuration schema.")
     geometry = config.get("geometry")
     if not isinstance(geometry, Mapping):
@@ -784,25 +814,40 @@ def validate_config_document(config: Mapping[str, Any]) -> dict[str, Any]:
     if config.get("runtime", {}).get("backend") != "gpu":
         raise ValueError("The approved GRE sweep backend is fixed to GPU.")
     sweep = config.get("sweep", {})
-    if tuple(float(v) for v in sweep.get("wavelet_lambdas", ())) != COARSE_LAMBDAS:
-        raise ValueError("The Wavelet lambda grid differs from the approved contract.")
-    if tuple(float(v) for v in sweep.get("llr_lambdas", ())) != COARSE_LAMBDAS:
-        raise ValueError("The LLR lambda grid differs from the approved contract.")
-    if tuple(int(v) for v in sweep.get("llr_blocks", ())) != LLR_BLOCK_SIZES:
-        raise ValueError("The LLR block list differs from the approved contract.")
+    if format_version == 3:
+        if sweep.get("mode") != "wavelet_only":
+            raise ValueError("Format-version 3 is restricted to a Wavelet-only sweep.")
+        wavelet_lambdas = tuple(float(v) for v in sweep.get("wavelet_lambdas", ()))
+        wavelet_only_candidate_settings(wavelet_lambdas)
+        if wavelet_lambdas[0] != 0.005 or wavelet_lambdas[-1] != 0.03:
+            raise ValueError("GRE Wavelet lambdas must span the approved [0.005, 0.03] range.")
+        if "llr_lambdas" in sweep or "llr_blocks" in sweep:
+            raise ValueError("Wavelet-only sweep configuration must not contain LLR settings.")
+    else:
+        wavelet_lambdas = COARSE_LAMBDAS
+        if tuple(float(v) for v in sweep.get("wavelet_lambdas", ())) != COARSE_LAMBDAS:
+            raise ValueError("The Wavelet lambda grid differs from the approved contract.")
+        if tuple(float(v) for v in sweep.get("llr_lambdas", ())) != COARSE_LAMBDAS:
+            raise ValueError("The LLR lambda grid differs from the approved contract.")
+        if tuple(int(v) for v in sweep.get("llr_blocks", ())) != LLR_BLOCK_SIZES:
+            raise ValueError("The LLR block list differs from the approved contract.")
     if config.get("sampling", {}).get("mask_kind") != PURE_CARTESIAN_IMAGE_LATTICE:
         raise ValueError("Historical ACS-union masks are forbidden.")
     if config.get("sampling", {}).get("residue_lin_par") != [2, 0]:
         raise ValueError("The approved GRE LIN/PAR sampling residue is [2, 0].")
     compression = config.get("coil_compression", {})
+    virtual_coils = compression.get("virtual_coils")
+    expected_virtual_coils = 24 if format_version == 3 else VIRTUAL_COILS
     if (
         compression.get("physical_coils") != 44
-        or compression.get("virtual_coils") != VIRTUAL_COILS
+        or virtual_coils != expected_virtual_coils
         or compression.get("covariance") != "trace_balanced_across_two_echoes"
         or int(compression.get("partition_chunk", 0)) < 1
         or int(compression.get("readout_step", 0)) < 1
     ):
-        raise ValueError("The shared 44-to-12 two-echo coil-compression contract changed.")
+        raise ValueError(
+            f"The shared 44-to-{expected_virtual_coils} two-echo coil-compression contract changed."
+        )
     csm = config.get("csm", {})
     if (
         csm.get("calibration_echo") != 1
@@ -860,6 +905,22 @@ def validate_config_document(config: Mapping[str, Any]) -> dict[str, Any]:
             ):
                 raise ValueError(f"reuse_manifests.{label} requires an absolute path and SHA-256.")
         active_cases = {NATIVE_R3X3_CASE_ID: native_r3x3_case()}
+    elif format_version == 3:
+        if config.get("case_ids") != ["native_r3x1"]:
+            raise ValueError("The one-shot Wavelet sweep is restricted to native_r3x1.")
+        reused_mask = config.get("reused_brain_mask")
+        if (
+            not isinstance(reused_mask, Mapping)
+            or not Path(str(reused_mask.get("path", ""))).expanduser().is_absolute()
+            or not _is_sha256(reused_mask.get("sha256"))
+        ):
+            raise ValueError("reused_brain_mask requires an absolute path and SHA-256.")
+        active_cases = {"native_r3x1": case_definitions()["native_r3x1"]}
+    settings = (
+        wavelet_only_candidate_settings(wavelet_lambdas)
+        if format_version == 3
+        else coarse_candidate_settings()
+    )
     return {
         "output_parent": str(output_parent),
         "run_name": run_name,
@@ -868,6 +929,9 @@ def validate_config_document(config: Mapping[str, Any]) -> dict[str, Any]:
         "case_ids": list(active_cases),
         "case_definitions": {key: value.to_json() for key, value in active_cases.items()},
         "masks": {key: build_case_mask(value)[1] for key, value in active_cases.items()},
-        "coarse_jobs_per_group": len(coarse_candidate_settings()),
-        "coarse_job_count": len(active_cases) * len(ECHO_IDS) * len(coarse_candidate_settings()),
+        "virtual_coils": int(virtual_coils),
+        "wavelet_lambdas": list(wavelet_lambdas),
+        "candidate_settings": settings,
+        "coarse_jobs_per_group": len(settings),
+        "coarse_job_count": len(active_cases) * len(ECHO_IDS) * len(settings),
     }

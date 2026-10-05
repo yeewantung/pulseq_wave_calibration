@@ -373,11 +373,18 @@ def _iter_source_chunks(image: Any, *, echo_index: int, partition_chunk: int) ->
         yield start, stop, np.transpose(cropped, (0, 2, 3, 1))
 
 
-def _coil_basis(image: Any, *, partition_chunk: int, readout_step: int) -> tuple[np.ndarray, dict[str, Any]]:
-    """Estimate one shared 44-to-12 basis from balanced echo covariances.
+def _coil_basis(
+    image: Any,
+    *,
+    virtual_coils: int,
+    partition_chunk: int,
+    readout_step: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Estimate one shared physical-to-virtual basis from balanced echo covariances.
 
     Args:
         image: Configured source mapVBVD image stream.
+        virtual_coils: Requested number of leading standard-PCA components.
         partition_chunk: Maximum PAR partitions per payload read.
         readout_step: Readout subsampling step used only for covariance estimation.
 
@@ -404,14 +411,14 @@ def _coil_basis(image: Any, *, partition_chunk: int, readout_step: int) -> tuple
     combined = 0.5 * (echo_covariances[0] + echo_covariances[1])
     eigenvalues, eigenvectors = np.linalg.eigh(combined)
     order = np.argsort(eigenvalues)[::-1]
-    basis = np.asarray(eigenvectors[:, order[:VIRTUAL_COILS]], dtype=np.complex64)
-    residual = float(np.max(np.abs(basis.conj().T @ basis - np.eye(VIRTUAL_COILS))))
+    basis = np.asarray(eigenvectors[:, order[:virtual_coils]], dtype=np.complex64)
+    residual = float(np.max(np.abs(basis.conj().T @ basis - np.eye(virtual_coils))))
     if residual > 1e-5:
         raise ValueError(f"Coil basis orthonormality residual is {residual:g}.")
-    retained = float(np.sum(eigenvalues[order[:VIRTUAL_COILS]]) / np.sum(eigenvalues))
+    retained = float(np.sum(eigenvalues[order[:virtual_coils]]) / np.sum(eigenvalues))
     return basis, {
         "physical_coils": 44,
-        "virtual_coils": VIRTUAL_COILS,
+        "virtual_coils": virtual_coils,
         "calibration_source": "both fully sampled echoes with trace-balanced covariance",
         "usable_rows_per_echo": echo_rows,
         "readout_step": readout_step,
@@ -445,8 +452,10 @@ def prepare_source(config: Mapping[str, Any], validated: Mapping[str, Any], root
     source_record = file_identity(source_path)
     _, _, image, twix_metadata = _open_source_twix(source_path)
     settings = config["coil_compression"]
+    virtual_coils = int(validated["virtual_coils"])
     basis, basis_metadata = _coil_basis(
         image,
+        virtual_coils=virtual_coils,
         partition_chunk=int(settings["partition_chunk"]),
         readout_step=int(settings["readout_step"]),
     )
@@ -457,7 +466,7 @@ def prepare_source(config: Mapping[str, Any], validated: Mapping[str, Any], root
         path = output / echo_id / "no_wave_kspace.npy"
         path.parent.mkdir(parents=True, exist_ok=True)
         target = np.lib.format.open_memmap(
-            path, mode="w+", dtype=np.complex64, shape=(*NATIVE_MATRIX, VIRTUAL_COILS)
+            path, mode="w+", dtype=np.complex64, shape=(*NATIVE_MATRIX, virtual_coils)
         )
         squared_norm = 0.0
         for start, stop, chunk in _iter_source_chunks(
@@ -478,7 +487,7 @@ def prepare_source(config: Mapping[str, Any], validated: Mapping[str, Any], root
                 "echo_id": echo_id,
                 "te_s": ECHO_TIMES_S[echo_index],
                 "path": str(path),
-                "shape": [*NATIVE_MATRIX, VIRTUAL_COILS],
+                "shape": [*NATIVE_MATRIX, virtual_coils],
                 "sha256": sha256_file(path),
                 "l2_norm": math.sqrt(squared_norm),
             }
@@ -738,19 +747,22 @@ def _require_complete(root: Path, operation: str) -> dict[str, Any]:
     return manifest
 
 
-def _stream_npy_to_cfl(source_path: Path, output_base: Path) -> dict[str, Any]:
+def _stream_npy_to_cfl(
+    source_path: Path, output_base: Path, *, virtual_coils: int
+) -> dict[str, Any]:
     """Export one RO/LIN/PAR/COIL complex64 NPY to a BART CFL pair.
 
     Args:
         source_path: Native no-Wave complex64 NPY file.
         output_base: Destination BART basename.
+        virtual_coils: Expected compressed coil dimension.
 
     Returns:
         Hash-bound BART CFL record.
     """
 
     source = np.load(source_path, mmap_mode="r", allow_pickle=False)
-    if source.shape != (*NATIVE_MATRIX, VIRTUAL_COILS) or source.dtype != np.complex64:
+    if source.shape != (*NATIVE_MATRIX, virtual_coils) or source.dtype != np.complex64:
         raise ValueError("Native no-Wave source has the wrong shape or dtype.")
     target = create_cfl(output_base, (*source.shape, 1))
     for start in range(0, source.shape[2], 4):
@@ -912,8 +924,11 @@ def prepare_csm(config: Mapping[str, Any], validated: Mapping[str, Any], root: P
     if reusable is not None:
         return reusable
     echo1 = Path(source["echoes"][0]["path"])
+    virtual_coils = int(validated["virtual_coils"])
     calibration_base = output / "native_echo-01_calibration_kspace"
-    calibration_record = _stream_npy_to_cfl(echo1, calibration_base)
+    calibration_record = _stream_npy_to_cfl(
+        echo1, calibration_base, virtual_coils=virtual_coils
+    )
     bart = shutil.which(str(config["runtime"]["bart"]))
     if bart is None:
         raise FileNotFoundError(f"BART executable not found: {config['runtime']['bart']}")
@@ -932,13 +947,13 @@ def prepare_csm(config: Mapping[str, Any], validated: Mapping[str, Any], root: P
         str(maps_base),
     ]
     run = _run_logged(command, output / "ecalib.log")
-    if read_shape(maps_base)[:5] != (*NATIVE_MATRIX, VIRTUAL_COILS, 1):
+    if read_shape(maps_base)[:5] != (*NATIVE_MATRIX, virtual_coils, 1):
         raise ValueError(f"ecalib maps have unexpected shape {read_shape(maps_base)}.")
     maps = open_cfl(maps_base)
     if not np.isfinite(maps).all():
         raise ValueError("ecalib maps contain non-finite values.")
     rss_squared = np.zeros(NATIVE_MATRIX, dtype=np.float32)
-    for coil in range(VIRTUAL_COILS):
+    for coil in range(virtual_coils):
         sensitivity = np.asarray(maps[:, :, :, coil, 0, ...]).squeeze()
         rss_squared += np.abs(sensitivity).astype(np.float32) ** 2
     rss = np.sqrt(rss_squared)
@@ -1111,7 +1126,9 @@ def prepare_references(config: Mapping[str, Any], validated: Mapping[str, Any], 
         return reusable
     workers = int(config["runtime"]["fft_workers"])
     records = {}
-    for case_id, case in case_definitions().items():
+    active_cases = case_definitions()
+    for case_id in validated["case_ids"]:
+        case = active_cases[case_id]
         maps_record = csm["lin_low_resolution"] if case_id == "lin_low_resolution_r3x2" else csm["native"]
         maps_base = Path(maps_record["base"])
         _, canonical_affine, geometry = _gre_nifti_geometry(config, case.matrix_ro_lin_par)
@@ -1465,6 +1482,80 @@ def approve_brain_mask(
             },
         }
     )
+    write_json_atomic(manifest_path, manifest)
+    return manifest
+
+
+def reuse_approved_brain_mask(
+    config: Mapping[str, Any], validated: Mapping[str, Any], root: Path
+) -> dict[str, Any]:
+    """Copy one hash-bound previously approved GRE mask into a new sweep.
+
+    Args:
+        config: Validated one-shot sweep configuration.
+        validated: Resolved configuration metadata.
+        root: Confirmed new experiment root.
+
+    Returns:
+        Completed local brain-mask manifest bound to the prior approval.
+
+    Raises:
+        ValueError: If the source approval, payload hash, geometry, or values differ.
+    """
+    import nibabel as nib
+
+    binding = config["reused_brain_mask"]
+    source_manifest_path = Path(str(binding["path"])).expanduser().resolve()
+    if (
+        not source_manifest_path.is_file()
+        or sha256_file(source_manifest_path) != binding["sha256"]
+    ):
+        raise ValueError("Pinned approved GRE brain-mask manifest changed or disappeared.")
+    source = load_json(source_manifest_path, "approved GRE brain-mask manifest")
+    if source.get("status") != "complete" or source.get("approved") is not True:
+        raise ValueError("Reused GRE brain-mask manifest is not explicitly approved.")
+    record = source.get("approved_mask")
+    if not isinstance(record, Mapping):
+        raise ValueError("Reused GRE brain-mask manifest has no approved logical mask.")
+    source_path = Path(str(record.get("path", ""))).expanduser().resolve()
+    if not source_path.is_file() or sha256_file(source_path) != record.get("sha256"):
+        raise ValueError("Reused approved GRE brain-mask payload changed or disappeared.")
+    image = nib.load(str(source_path))
+    values = np.asarray(image.dataobj)
+    if (
+        values.shape != NATIVE_MATRIX
+        or not np.isfinite(values).all()
+        or not np.all((values == 0) | (values == 1))
+        or not np.any(values)
+    ):
+        raise ValueError("Reused GRE brain mask has invalid geometry or values.")
+
+    output = root / "preparation" / "brain_mask"
+    manifest_path = output / "manifest.json"
+    reusable = _reuse_completed_operation(manifest_path, validated)
+    if reusable is not None:
+        return reusable
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output / "approved_brain_mask_native_logical.nii.gz"
+    shutil.copy2(source_path, destination)
+    manifest = {
+        "format_version": 1,
+        "status": "complete",
+        "operation": "brain_mask",
+        "created_utc": utc_now(),
+        "config_sha256": validated["config_sha256"],
+        "approved": True,
+        "approval": source.get("approval"),
+        "approved_mask": {
+            **file_identity(destination),
+            "array_space": "GRE logical RO/LIN/PAR",
+            "shape": list(values.shape),
+            "voxel_count": int(np.count_nonzero(values)),
+        },
+        "source_approved_manifest": file_identity(source_manifest_path),
+        "source_approved_mask": file_identity(source_path),
+        "reuse_policy": "byte-preserving copy of an already approved same-dataset GRE mask",
+    }
     write_json_atomic(manifest_path, manifest)
     return manifest
 
@@ -1875,11 +1966,18 @@ def prepare_cases(config: Mapping[str, Any], validated: Mapping[str, Any], root:
     if reusable is not None:
         return reusable
     masks_dir = root / "preparation" / "brain_mask" / "mapped_masks"
-    masks_dir.mkdir(parents=True, exist_ok=True)
     native_mask_path = Path(brain["approved_mask"]["path"])
-    lr_mask_record = _map_mask_to_lr(native_mask_path, masks_dir / "brain_mask_lin_low_resolution.nii.gz")
+    lr_mask_record = None
+    if "lin_low_resolution_r3x2" in validated["case_ids"]:
+        masks_dir.mkdir(parents=True, exist_ok=True)
+        lr_mask_record = _map_mask_to_lr(
+            native_mask_path, masks_dir / "brain_mask_lin_low_resolution.nii.gz"
+        )
     case_records = {}
-    for case_id, case in case_definitions().items():
+    active_cases = case_definitions()
+    virtual_coils = int(validated["virtual_coils"])
+    for case_id in validated["case_ids"]:
+        case = active_cases[case_id]
         pure_mask, mask_metadata = build_case_mask(case)
         validate_pure_cartesian_image_lattice(pure_mask, mask_metadata)
         case_echoes = {}
@@ -1896,12 +1994,18 @@ def prepare_cases(config: Mapping[str, Any], validated: Mapping[str, Any], root:
             wave_base = echo_dir / "wave_kspace"
             target = create_cfl(
                 wave_base,
-                (EXTENDED_READOUT, case.matrix_ro_lin_par[1], case.matrix_ro_lin_par[2], VIRTUAL_COILS, 1),
+                (
+                    EXTENDED_READOUT,
+                    case.matrix_ro_lin_par[1],
+                    case.matrix_ro_lin_par[2],
+                    virtual_coils,
+                    1,
+                ),
             )
             norm_squared = 0.0
             acquired_mismatch = 0
             outside_nonzero = 0
-            for coil in range(VIRTUAL_COILS):
+            for coil in range(virtual_coils):
                 full = synthesize_wave_from_no_wave_crop(
                     no_wave[..., coil],
                     psf,
@@ -1938,7 +2042,11 @@ def prepare_cases(config: Mapping[str, Any], validated: Mapping[str, Any], root:
                 "sampling_mask": {**mask_metadata, "path": str(mask_path), "file_sha256": sha256_file(mask_path)},
                 "bart_inputs": {"maps": maps_record, "psf": psf_record, "wave_kspace": wave_record},
                 "direct_fft_reference": references["cases"][case_id]["echoes"][echo_id],
-                "brain_mask": brain["approved_mask"] if case_id != "lin_low_resolution_r3x2" else lr_mask_record,
+                "brain_mask": (
+                    brain["approved_mask"]
+                    if case_id != "lin_low_resolution_r3x2"
+                    else lr_mask_record
+                ),
                 "provenance": provenance,
                 "calibration_samples_merged_into_wave_kspace": False,
                 "measured_wave_samples_used": False,
@@ -2330,7 +2438,7 @@ def run_sweep(
         raise FileNotFoundError(f"BART executable not found: {config['runtime']['bart']}")
     identity = _bart_identity(bart)
     settings_by_group = (
-        {key: coarse_candidate_settings() for key in cases}
+        {key: [dict(value) for value in validated["candidate_settings"]] for key in cases}
         if sweep == "coarse"
         else _fine_settings(root)
     )
@@ -3114,7 +3222,10 @@ def _data_consistency(
     error_squared = 0.0
     measured_squared = 0.0
     outside_nonzero = 0
-    for coil in range(VIRTUAL_COILS):
+    virtual_coils = int(maps.shape[3])
+    if measured.shape[3] != virtual_coils:
+        raise ValueError("GRE maps and measured Wave k-space coil counts differ.")
+    for coil in range(virtual_coils):
         sensitivity = np.asarray(maps[:, :, :, coil, 0, ...]).squeeze()
         coil_image = np.asarray(candidate * sensitivity, dtype=np.complex64)
         no_wave = centered_fftn(coil_image, axes=(0, 1, 2), workers=workers)
@@ -3976,6 +4087,7 @@ def build_parser() -> argparse.ArgumentParser:
             "prepare-csm",
             "prepare-references",
             "prepare-brain-mask",
+            "reuse-brain-mask",
             "approve-brain-mask",
             "prepare-cases",
             "prepare-reused-r3x3",
@@ -4039,6 +4151,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             root,
             source_manifest_path=args.brain_mask_source_manifest,
         )
+    elif args.operation == "reuse-brain-mask":
+        if config.get("format_version") != 3:
+            raise ValueError("reuse-brain-mask is restricted to one-shot Wavelet sweeps.")
+        result = reuse_approved_brain_mask(config, validated, root)
     elif args.operation in operation_functions:
         result = operation_functions[args.operation](config, validated, root)
     elif args.operation == "approve-brain-mask":

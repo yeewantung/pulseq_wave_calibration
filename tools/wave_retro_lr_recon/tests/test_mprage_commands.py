@@ -44,33 +44,39 @@ class SampleCommandTests(unittest.TestCase):
             None.
         """
         source = (SCRIPTS / "sample_mprage_normal_recon.sh").read_text(encoding="utf-8")
-        commands = [
-            line.strip()
-            for line in source.splitlines()
-            if line.strip().startswith("bart ")
-        ]
-        self.assertEqual(sum(line.startswith("bart ecalib -m 1 ") for line in commands), 1)
-        self.assertEqual(sum(line.startswith("bart wave -g ") for line in commands), 3)
-        self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 3)
+        self.assertIn("bart ecalib -m 1", source)
+        self.assertIn("command=(bart wave -g -w -f -r", source)
+        self.assertIn("command=(bart wave -w -f -r", source)
         self.assertIn('ECALIB_CROP="0.6"', source)
-        self.assertIn('R3_LAMBDA="3.5e-2"', source)
+        self.assertIn('R3_LAMBDA_TRANSFERRED_VCC12="3.5e-2"', source)
+        self.assertIn('R3_LAMBDA_SELECTED_VCC24="3e-2"', source)
+        self.assertIn('VIRTUAL_COILS=24', source)
+        self.assertIn('RECON_PROFILE="wavelet-only"', source)
+        self.assertIn('STANDARD_ROOT="$OUTPUT_ROOT/vcc$VIRTUAL_COILS"', source)
         self.assertIn("USE_GPU=false", source)
         self.assertIn("-g) USE_GPU=true; shift ;;", source)
         self.assertIn('PSF_COEFFICIENT_PROCESSING="sine-line"', source)
-        self.assertIn("--psf-coefficient-processing sine-line", source)
+        self.assertIn('--psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING"', source)
         self.assertIn('--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source)
         self.assertIn('--psf-fit-kx-max "$PSF_FIT_KX_MAX"', source)
         self.assertIn('--psf-fit-y-min "$PSF_FIT_Y_MIN"', source)
         self.assertIn('--psf-fit-y-max "$PSF_FIT_Y_MAX"', source)
         self.assertIn('--psf-fit-z-min "$PSF_FIT_Z_MIN"', source)
         self.assertIn('--psf-fit-z-max "$PSF_FIT_Z_MAX"', source)
-        self.assertEqual(sum(line.startswith("bart wave -g -w -f -r 0 ") for line in commands), 2)
-        self.assertEqual(sum(line.startswith("bart wave -w -f -r 0 ") for line in commands), 2)
-        self.assertIn('bart wave -g -w -f -r "$R3_LAMBDA" ', source)
-        self.assertIn('bart wave -w -f -r "$R3_LAMBDA" ', source)
         self.assertIn('ECALIB_RECORD="$BART_OUTPUT_ROOT/ecalib_command.txt"', source)
-        self.assertIn('$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"', source)
-        self.assertIn('$BART_OUTPUT_ROOT/optimal_wavelet/wave_command.txt"', source)
+        self.assertIn('run_branch fista_r0 fista 0', source)
+        self.assertIn(
+            'run_branch wavelet_selected_vcc24 wavelet "$R3_LAMBDA_SELECTED_VCC24"',
+            source,
+        )
+        self.assertIn(
+            'run_branch wavelet_transferred_vcc12 wavelet "$R3_LAMBDA_TRANSFERRED_VCC12"',
+            source,
+        )
+        self.assertIn('run_branch wavelet_candidate wavelet "$R3_LAMBDA"', source)
+        self.assertIn('elif [[ "$VIRTUAL_COILS" == 24 ]]', source)
+        self.assertIn("R3_LAMBDA_EXPLICIT=true", source)
+        self.assertIn("manage_standard_reconstruction.py", source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
         self.assertIn("PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png", source)
         self.assertIn("TROUBLESHOOTING.md", source)
@@ -82,36 +88,25 @@ class SampleCommandTests(unittest.TestCase):
             None.
         """
         source = (SCRIPTS / "sample_mprage_retro_lr_recon.sh").read_text(encoding="utf-8")
-        commands = [
-            line.strip()
-            for line in source.splitlines()
-            if line.strip().startswith("bart ")
-        ]
-        self.assertEqual(sum(line.startswith("bart ecalib -m 1 ") for line in commands), 1)
-        self.assertEqual(sum(line.startswith("bart wave -g ") for line in commands), 8)
-        self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 8)
+        self.assertIn("bart ecalib -m 1", source)
+        self.assertIn("command=(bart wave -g -w -f -r", source)
+        self.assertIn("command=(bart wave -w -f -r", source)
+        self.assertIn('VIRTUAL_COILS=24', source)
+        self.assertIn('RECON_PROFILE="fista-only"', source)
         self.assertIn("USE_GPU=false", source)
         self.assertIn("-g) USE_GPU=true; shift ;;", source)
         self.assertIn('PSF_COEFFICIENT_PROCESSING="sine-line"', source)
-        self.assertIn("--psf-coefficient-processing sine-line", source)
+        self.assertIn('--psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING"', source)
         self.assertIn('--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source)
         self.assertIn('--psf-fit-kx-max "$PSF_FIT_KX_MAX"', source)
         self.assertIn('--psf-fit-y-min "$PSF_FIT_Y_MIN"', source)
         self.assertIn('--psf-fit-y-max "$PSF_FIT_Y_MAX"', source)
         self.assertIn('--psf-fit-z-min "$PSF_FIT_Z_MIN"', source)
         self.assertIn('--psf-fit-z-max "$PSF_FIT_Z_MAX"', source)
-        self.assertEqual(sum(line.startswith("bart wave -g -w -f -r 0 ") for line in commands), 4)
-        self.assertEqual(sum(line.startswith("bart wave -w -f -r 0 ") for line in commands), 4)
-        self.assertEqual(sum("bart wave -g -w -f -r 3.5e-2 " in line for line in commands), 1)
-        self.assertEqual(sum("bart wave -w -f -r 3.5e-2 " in line for line in commands), 1)
-        self.assertEqual(sum("bart wave -g -w -f -r 2.5e-2 " in line for line in commands), 2)
-        self.assertEqual(sum("bart wave -w -f -r 2.5e-2 " in line for line in commands), 2)
-        self.assertEqual(sum("bart wave -g -w -f -r 2.2e-2 " in line for line in commands), 1)
-        self.assertEqual(sum("bart wave -w -f -r 2.2e-2 " in line for line in commands), 1)
         self.assertNotIn("bart ecalib -g", source)
-        self.assertEqual(source.count('wave_command.txt"'), 8)
-        self.assertEqual(source.count("bart_output/fista_r0/image_wave"), 20)
-        self.assertEqual(source.count("bart_output/optimal_wavelet/image_wave"), 20)
+        self.assertIn("for case_id in native_r3x2 lr_y_1p5mm_r3x2", source)
+        self.assertNotIn("for case_id in native_r3x2 lr_x_1p5mm_r3x2", source)
+        self.assertIn("wavelet_transferred_vcc12", source)
         self.assertNotIn("sample_mprage_normal_recon.sh", source)
         self.assertNotIn("build_mprage_nifti_collection.py", source)
         self.assertEqual(source.count("sample_mprage_retro_r3x3_recon.sh"), 1)
@@ -119,8 +114,7 @@ class SampleCommandTests(unittest.TestCase):
             'R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN"', source
         )
         self.assertIn('R3X3_ARGS+=(-g)', source)
-        self.assertIn("PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png", source)
-        self.assertIn("TROUBLESHOOTING.md", source)
+        self.assertIn("prepare_mprage_retro.py", source)
 
     def test_r3x3_script_is_independent_and_uses_locked_wavelet(self) -> None:
         """Verify the tracked R3x3 entry point runs only two explicit branches.
@@ -131,18 +125,16 @@ class SampleCommandTests(unittest.TestCase):
         source = (SCRIPTS / "sample_mprage_retro_r3x3_recon.sh").read_text(
             encoding="utf-8"
         )
-        commands = [
-            line.strip()
-            for line in source.splitlines()
-            if line.strip().startswith("bart ")
-        ]
         self.assertEqual(R3X3_WAVELET_LAMBDA, 0.045)
         self.assertIn('R3X3_LAMBDA="4.5e-2"', source)
-        self.assertEqual(sum(line.startswith("bart ecalib -m 1 ") for line in commands), 1)
-        self.assertEqual(sum(line.startswith("bart wave -g ") for line in commands), 2)
-        self.assertEqual(sum(line.startswith("bart wave -w ") for line in commands), 2)
-        self.assertEqual(sum("-r 0 " in line for line in commands), 2)
-        self.assertEqual(sum('-r "$R3X3_LAMBDA" ' in line for line in commands), 2)
+        self.assertIn("bart ecalib -m 1", source)
+        self.assertIn("command=(bart wave -g -w -f -r", source)
+        self.assertIn("command=(bart wave -w -f -r", source)
+        self.assertIn("run_branch fista_r0 fista 0", source)
+        self.assertIn(
+            'run_branch wavelet_transferred_vcc12 wavelet "$R3X3_LAMBDA"',
+            source,
+        )
         self.assertIn("prepare_mprage_retro_r3x3.py", source)
         self.assertNotIn("prepare_mprage_retro.py", source)
         self.assertNotIn("prepare_mprage_retro_maps.py", source)

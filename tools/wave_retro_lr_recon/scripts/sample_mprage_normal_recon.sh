@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare measured Wave-MPRAGE data, estimate one BART ESPIRiT map set, and
-# export the unregularized-FISTA control plus selected Wavelet reconstruction.
+# Prepare and resumably reconstruct one count-specific standard-PCA MPRAGE variant.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
+    echo "       [--reg-full | --wavelet-only | --fista-only] (default: --wavelet-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
@@ -18,8 +18,14 @@ OUTPUT_ROOT="${2%/}"
 SEQUENCE_FILE="$3"
 shift 3
 
+VIRTUAL_COILS=24
 ECALIB_CROP="0.6"
-R3_LAMBDA="3.5e-2"
+R3_LAMBDA_TRANSFERRED_VCC12="3.5e-2"
+R3_LAMBDA_SELECTED_VCC24="3e-2"
+R3_LAMBDA="$R3_LAMBDA_TRANSFERRED_VCC12"
+R3_LAMBDA_EXPLICIT=false
+RECON_PROFILE="wavelet-only"
+PROFILE_EXPLICIT=false
 USE_GPU=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
@@ -28,10 +34,24 @@ PSF_FIT_Y_MIN=""
 PSF_FIT_Y_MAX=""
 PSF_FIT_Z_MIN=""
 PSF_FIT_Z_MAX=""
+
+select_profile() {
+    [[ "$PROFILE_EXPLICIT" == false ]] || {
+        echo "Error: --reg-full, --wavelet-only, and --fista-only are mutually exclusive." >&2
+        exit 2
+    }
+    RECON_PROFILE="$1"
+    PROFILE_EXPLICIT=true
+}
+
 while (($#)); do
     case "$1" in
+        --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
-        --r3-lambda) R3_LAMBDA="$2"; shift 2 ;;
+        --r3-lambda) R3_LAMBDA="$2"; R3_LAMBDA_EXPLICIT=true; shift 2 ;;
+        --reg-full) select_profile reg-full; shift ;;
+        --wavelet-only) select_profile wavelet-only; shift ;;
+        --fista-only) select_profile fista-only; shift ;;
         --psf-coefficient-processing) PSF_COEFFICIENT_PROCESSING="$2"; shift 2 ;;
         --psf-fit-kx-min) PSF_FIT_KX_MIN="$2"; shift 2 ;;
         --psf-fit-kx-max) PSF_FIT_KX_MAX="$2"; shift 2 ;;
@@ -44,110 +64,110 @@ while (($#)); do
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
     esac
 done
+[[ "$VIRTUAL_COILS" =~ ^[1-9][0-9]*$ ]] || {
+    echo "Error: --virtual-coils must be a positive integer." >&2; exit 2;
+}
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BART_INPUTS="$OUTPUT_ROOT/normal/bart_inputs"
-BART_OUTPUT_ROOT="$OUTPUT_ROOT/normal/bart_output"
-NIFTI_OUTPUT_ROOT="$OUTPUT_ROOT/normal/nifti"
+STANDARD_ROOT="$OUTPUT_ROOT/vcc$VIRTUAL_COILS"
+BART_INPUTS="$STANDARD_ROOT/normal/bart_inputs"
+BART_OUTPUT_ROOT="$STANDARD_ROOT/normal/bart_output"
+NIFTI_OUTPUT_ROOT="$STANDARD_ROOT/normal/nifti"
 ECALIB_RECORD="$BART_OUTPUT_ROOT/ecalib_command.txt"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
-SPATIAL_ARGS=()
+PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
+if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
+    PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
+elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then
+    echo "Error: manual PSF kx fitting requires both bounds." >&2; exit 2
+fi
+if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" && -n "$PSF_FIT_KX_MIN" ]]; then
+    echo "Error: PSF kx bounds require sine-line processing." >&2; exit 2
+fi
 if [[ -n "$PSF_FIT_Y_MIN" && -n "$PSF_FIT_Y_MAX" ]]; then
-    SPATIAL_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")
+    PREP_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")
 elif [[ -n "$PSF_FIT_Y_MIN" || -n "$PSF_FIT_Y_MAX" ]]; then
     echo "Error: manual PSF y fitting requires both bounds." >&2; exit 2
 fi
 if [[ -n "$PSF_FIT_Z_MIN" && -n "$PSF_FIT_Z_MAX" ]]; then
-    SPATIAL_ARGS+=(--psf-fit-z-min "$PSF_FIT_Z_MIN" --psf-fit-z-max "$PSF_FIT_Z_MAX")
+    PREP_ARGS+=(--psf-fit-z-min "$PSF_FIT_Z_MIN" --psf-fit-z-max "$PSF_FIT_Z_MAX")
 elif [[ -n "$PSF_FIT_Z_MIN" || -n "$PSF_FIT_Z_MAX" ]]; then
     echo "Error: manual PSF z fitting requires both bounds." >&2; exit 2
 fi
+python "$SCRIPT_DIR/prepare_mprage_normal.py" "${PREP_ARGS[@]}"
 
-# Sine-line processing selects its range automatically by default. Providing
-# both bounds is a reproducible manual override; smooth remains available.
-if [[ "$PSF_COEFFICIENT_PROCESSING" == "smooth" ]]; then
-    [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]] || { echo "Error: PSF kx bounds require sine-line processing." >&2; exit 2; }
-    python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing smooth "${SPATIAL_ARGS[@]}"
-elif [[ "$PSF_COEFFICIENT_PROCESSING" == "sine-line" ]]; then
-    if [[ -z "$PSF_FIT_KX_MIN" && -z "$PSF_FIT_KX_MAX" ]]; then
-        python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line "${SPATIAL_ARGS[@]}"
-    elif [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
-        python "$SCRIPT_DIR/prepare_mprage_normal.py" "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --psf-coefficient-processing sine-line --psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX" "${SPATIAL_ARGS[@]}"
-    else
-        echo "Error: manual sine-line processing requires both PSF kx bounds; omit both for automatic selection." >&2
-        exit 2
-    fi
-else
-    echo "Error: PSF coefficient processing must be smooth or sine-line." >&2
+SAMPLING_CLASS="$(<"$BART_INPUTS/sampling_class.txt")"
+if [[ "$SAMPLING_CLASS" == "R1" && "$RECON_PROFILE" != "fista-only" ]]; then
+    echo "Error: MPRAGE R1 has no approved positive Wavelet parameter; use --fista-only." >&2
     exit 2
 fi
-mkdir -p "$BART_OUTPUT_ROOT" "$NIFTI_OUTPUT_ROOT"
+[[ "$SAMPLING_CLASS" == "R1" || "$SAMPLING_CLASS" == "R3x1" ]] || {
+    echo "Error: unsupported prepared sampling class $SAMPLING_CLASS" >&2; exit 2;
+}
 
-# Estimate one sensitivity-map set from the integrated ACS k-space. BART
-# ecalib has no -g option; Wave uses CPU unless the user explicitly passes -g.
+mkdir -p "$BART_OUTPUT_ROOT"
 printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
 EXPECTED_ECALIB_COMMAND="${EXPECTED_ECALIB_COMMAND% }"
 if [[ -f "$BART_OUTPUT_ROOT/coil_sens.hdr" && -f "$BART_OUTPUT_ROOT/coil_sens.cfl" ]]; then
     [[ -f "$ECALIB_RECORD" ]] || { echo "Error: existing CSM has no command record." >&2; exit 2; }
-    [[ "$(<"$ECALIB_RECORD")" == "$EXPECTED_ECALIB_COMMAND" ]] || { echo "Error: existing CSM was generated with a different ecalib command." >&2; exit 2; }
-    echo "Reusing recorded ecalib result: $BART_OUTPUT_ROOT/coil_sens"
+    [[ "$(<"$ECALIB_RECORD")" == "$EXPECTED_ECALIB_COMMAND" ]] || { echo "Error: existing CSM used a different ecalib command." >&2; exit 2; }
 elif [[ -e "$BART_OUTPUT_ROOT/coil_sens.hdr" || -e "$BART_OUTPUT_ROOT/coil_sens.cfl" || -e "$ECALIB_RECORD" ]]; then
-    echo "Error: incomplete CSM or ecalib command record in $BART_OUTPUT_ROOT" >&2
-    exit 2
+    echo "Error: incomplete CSM or ecalib command record in $BART_OUTPUT_ROOT" >&2; exit 2
 else
     bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
     printf '%s\n' "$EXPECTED_ECALIB_COMMAND" > "$ECALIB_RECORD"
 fi
 
-SAMPLING_CLASS="$(<"$BART_INPUTS/sampling_class.txt")"
-if [[ "$SAMPLING_CLASS" == "R3x1" ]]; then
-    # Unregularized FISTA is retained as the case-matched ablation control.
-    mkdir -p "$BART_OUTPUT_ROOT/fista_r0" "$NIFTI_OUTPUT_ROOT/fista_r0"
+run_branch() {
+    local branch="$1" method="$2" lambda_value="$3" suffix="$4"
+    local branch_root="$BART_OUTPUT_ROOT/$branch"
+    local nifti_root="$NIFTI_OUTPUT_ROOT/$branch"
+    local image="$branch_root/image_wave"
+    local command_record="$branch_root/wave_command.txt"
+    local run_manifest="$branch_root/reconstruction_manifest.json"
+    local expected status
+    local -a command state_args
     if [[ "$USE_GPU" == true ]]; then
-        bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
-        printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
+        command=(bart wave -g -w -f -r "$lambda_value" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$image")
     else
-        bart wave -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
-        printf -v WAVE_COMMAND '%q ' bart wave -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
+        command=(bart wave -w -f -r "$lambda_value" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$image")
     fi
-    printf '%s\n' "${WAVE_COMMAND% }" > "$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"
-    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/fista_r0" --suffix BARTWaveMPRAGENormalFISTAR0
+    printf -v expected '%q ' "${command[@]}"; expected="${expected% }"
+    state_args=(--run-manifest "$run_manifest" --prepared-manifest "$BART_INPUTS/manifest.json" --normal-manifest "$BART_INPUTS/manifest.json" --profile "$RECON_PROFILE" --case normal --branch "$branch" --method "$method" --regularization "$lambda_value" --maps "$BART_OUTPUT_ROOT/coil_sens" --psf "$BART_INPUTS/psf" --kspace "$BART_INPUTS/wave_kspace" --image "$image" --command-record "$command_record" --expected-command "$expected" --nifti-directory "$nifti_root")
+    status="$(python "$SCRIPT_DIR/manage_standard_reconstruction.py" status "${state_args[@]}")"
+    if [[ "$status" == "complete" ]]; then
+        echo "Reusing completed $branch reconstruction: $run_manifest"; return
+    fi
+    if [[ "$status" == "run" ]]; then
+        mkdir -p "$branch_root"
+        "${command[@]}"
+        printf '%s\n' "$expected" > "$command_record"
+    fi
+    if [[ "$status" == "run" || "$status" == "convert" ]]; then
+        mkdir -p "$nifti_root"
+        python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$image" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$nifti_root" --suffix "$suffix"
+    fi
+    python "$SCRIPT_DIR/manage_standard_reconstruction.py" record "${state_args[@]}" >/dev/null
+}
 
-    # The selected pure-lattice rerun value is the default positive Wavelet arm.
-    mkdir -p "$BART_OUTPUT_ROOT/optimal_wavelet" "$NIFTI_OUTPUT_ROOT/optimal_wavelet"
-    if [[ "$USE_GPU" == true ]]; then
-        bart wave -g -w -f -r "$R3_LAMBDA" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave"
-        printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r "$R3_LAMBDA" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave"
+if [[ "$RECON_PROFILE" == "reg-full" || "$RECON_PROFILE" == "fista-only" ]]; then
+    run_branch fista_r0 fista 0 BARTWaveMPRAGENormalFISTAR0
+fi
+if [[ "$RECON_PROFILE" == "reg-full" || "$RECON_PROFILE" == "wavelet-only" ]]; then
+    if [[ "$R3_LAMBDA_EXPLICIT" == true ]]; then
+        run_branch wavelet_candidate wavelet "$R3_LAMBDA" BARTWaveMPRAGENormalWaveletCandidate
+    elif [[ "$VIRTUAL_COILS" == 24 ]]; then
+        run_branch wavelet_selected_vcc24 wavelet "$R3_LAMBDA_SELECTED_VCC24" BARTWaveMPRAGENormalWaveletSelectedVCC24
     else
-        bart wave -w -f -r "$R3_LAMBDA" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave"
-        printf -v WAVE_COMMAND '%q ' bart wave -w -f -r "$R3_LAMBDA" -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave"
+        run_branch wavelet_transferred_vcc12 wavelet "$R3_LAMBDA_TRANSFERRED_VCC12" BARTWaveMPRAGENormalWaveletTransferredFromVCC12
     fi
-    printf '%s\n' "${WAVE_COMMAND% }" > "$BART_OUTPUT_ROOT/optimal_wavelet/wave_command.txt"
-    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/optimal_wavelet/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/optimal_wavelet" --suffix BARTWaveMPRAGENormalOptimalWavelet
-elif [[ "$SAMPLING_CLASS" == "R1" ]]; then
-    # No R1 Wavelet optimum was selected; do not transfer the R3x1 lambda.
-    mkdir -p "$BART_OUTPUT_ROOT/fista_r0" "$NIFTI_OUTPUT_ROOT/fista_r0"
-    if [[ "$USE_GPU" == true ]]; then
-        bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
-        printf -v WAVE_COMMAND '%q ' bart wave -g -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
-    else
-        bart wave -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
-        printf -v WAVE_COMMAND '%q ' bart wave -w -f -r 0 -i 100 -t 1e-6 "$BART_OUTPUT_ROOT/coil_sens" "$BART_INPUTS/psf" "$BART_INPUTS/wave_kspace" "$BART_OUTPUT_ROOT/fista_r0/image_wave"
-    fi
-    printf '%s\n' "${WAVE_COMMAND% }" > "$BART_OUTPUT_ROOT/fista_r0/wave_command.txt"
-    python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$BART_OUTPUT_ROOT/fista_r0/image_wave" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT_ROOT/fista_r0" --suffix BARTWaveMPRAGENormalFISTAR0
-else
-    echo "Error: unsupported prepared sampling class $SAMPLING_CLASS" >&2
-    exit 2
 fi
 
-echo "Normal MPRAGE reconstruction complete: $OUTPUT_ROOT/normal"
-if [[ -f "$OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then
-    echo "PSF visual-assessment plot: $OUTPUT_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
-    echo "PSF full-range plot: $OUTPUT_ROOT/normal/PSF_COEFFICIENTS_FULL_RANGE.png"
-    echo "PSF plane comparison: $OUTPUT_ROOT/normal/PSF_PLANE_COMPARISON.png"
-    echo "For unexpected reconstruction artifacts, review that plot and tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
+echo "Normal MPRAGE reconstruction complete: $STANDARD_ROOT/normal ($RECON_PROFILE)"
+if [[ -f "$STANDARD_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png" ]]; then
+    echo "PSF visual-assessment plot: $STANDARD_ROOT/normal/PSF_COEFFICIENTS_VISUAL_ASSESSMENT.png"
+    echo "For unexpected reconstruction artifacts, review tools/wave_retro_lr_recon/TROUBLESHOOTING.md."
 fi

@@ -149,6 +149,16 @@ class DatasetManifestTests(unittest.TestCase):
 
         validate_dataset_manifest(payload)
 
+    def test_pure_cartesian_image_lattice_is_supported(self) -> None:
+        """Allow pure post-Wave sampling while keeping calibration separate."""
+        payload = valid_payload()
+        payload["sampling"]["synthetic_wave_mask_kind"] = (
+            "pure_cartesian_image_lattice"
+        )
+        payload["sampling"]["synthetic_wave_acceleration_pe1_pe2"] = [3, 1]
+
+        validate_dataset_manifest(payload)
+
     def test_disabled_dicom_rejects_dicom_ranking_and_tokens(self) -> None:
         payload = valid_payload()
         payload["inputs"]["dicom"]["enabled"] = False

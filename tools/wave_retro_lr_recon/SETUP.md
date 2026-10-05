@@ -234,6 +234,17 @@ mean that the GPU is available only inside a scheduled allocation.
 
 After setup, review the dataset-independent commands in `README.md` or run:
 
+New standard-PCA commands default to Ncc=24 and write only below
+`OUTPUT_ROOT/vcc24`. Use `--virtual-coils N` for another isolated `vccN` tree.
+Normal launchers default to `--wavelet-only`; retrospective launchers default
+to `--fista-only`; `--reg-full` requests both branches. These flags are
+mutually exclusive. Historical root-level VCC=12 `normal/` and `retro/` trees
+are read-only legacy products for this workflow.
+
+Collection commands still receive the top-level `OUTPUT_ROOT`. They discover
+complete `vccN` variants below the one `nifti_collection/vccN/`; MPRAGE
+canonical ROVir is collected separately below `nifti_collection/rovir/`.
+
 ```bash
 scripts/sample_gre_normal_recon.sh --help
 scripts/sample_gre_retro_lr_recon.sh --help

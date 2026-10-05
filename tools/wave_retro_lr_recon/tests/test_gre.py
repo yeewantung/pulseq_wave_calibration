@@ -538,8 +538,8 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
             with self.assertRaisesRegex(FileExistsError, "unexpected entries"):
                 _validate_recoverable_retro_directory(directory, 1)
 
-    def test_native_r3x3_preparation_preserves_every_echo_and_reuses_psfs(self) -> None:
-        """Build exact same-grid multi-echo data with separate linked PSFs."""
+    def test_new_default_does_not_reuse_or_relabel_legacy_root_inputs(self) -> None:
+        """Keep historical root-level VCC=12 GRE inputs byte-identical."""
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -610,49 +610,15 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
             )
             historical_manifest_bytes = normal_manifest_path.read_bytes()
 
-            reused = prepare_normal_gre(
-                twix, root, sequence, allow_legacy_artifact_reuse=True
-            )
-            self.assertEqual(reused, normal)
-            self.assertEqual(normal_manifest_path.read_bytes(), historical_manifest_bytes)
-            attestation = root / "normal" / "NORMAL_INPUT_REUSE_ATTESTATION.json"
-            self.assertTrue(attestation.is_file())
-            first_attestation = attestation.read_bytes()
-
-            manifest = prepare_retro_gre_r3x3(twix, root, sequence)
-            resumed = prepare_retro_gre_r3x3(twix, root, sequence)
-
-            self.assertEqual(manifest, resumed)
-            self.assertEqual(attestation.read_bytes(), first_attestation)
-            self.assertEqual(normal_manifest_path.read_bytes(), historical_manifest_bytes)
-            self.assertEqual(manifest["case"]["case_id"], "native_r3x3")
-            self.assertEqual(manifest["case"]["residue_lin_par"], [2, 0])
-            self.assertEqual(
-                manifest["sampling"]["acquired_coordinate_count"], 96
-            )
-            self.assertTrue(
-                manifest["source_subset_validation"]["target_is_exact_source_subset"]
-            )
-            self.assertFalse(manifest["calibration_kspace_included"])
-            self.assertEqual(len(manifest["echoes"]), 2)
-            self.assertTrue(
-                all(
-                    record["acquired_samples_equal_source_bitwise"]
-                    and record["unacquired_samples_are_exact_zero"]
-                    for record in manifest["sampling_validation_by_echo"]
+            with self.assertRaisesRegex(ValueError, "Unknown section code"):
+                prepare_normal_gre(
+                    twix, root, sequence, allow_legacy_artifact_reuse=True
                 )
+            self.assertEqual(normal_manifest_path.read_bytes(), historical_manifest_bytes)
+            self.assertFalse(
+                (root / "normal" / "NORMAL_INPUT_REUSE_ATTESTATION.json").exists()
             )
-            case_inputs = root / "retro" / "native_r3x3" / "bart_inputs"
-            for echo_number in (1, 2):
-                echo_label = f"echo-{echo_number:02d}"
-                self.assertTrue((case_inputs / f"psf_{echo_label}.hdr").is_symlink())
-                source = np.asarray(open_cfl(inputs / f"wave_kspace_{echo_label}"))
-                target = np.asarray(open_cfl(case_inputs / f"wave_kspace_{echo_label}"))
-                target_mask = np.load(case_inputs / "sampling_mask.npy", allow_pickle=False)
-                np.testing.assert_array_equal(
-                    target[:, target_mask, ...], source[:, target_mask, ...]
-                )
-                self.assertEqual(np.count_nonzero(target[:, ~target_mask, ...]), 0)
+            self.assertTrue((root / "vcc24").is_dir())
 
     def test_fista_and_wavelet_command_construction(self) -> None:
         """Build explicit 100-iteration FISTA-r0 and selected Wavelet commands."""
@@ -767,25 +733,28 @@ class GreSampleInterfaceTests(unittest.TestCase):
             self.assertIn("bart wave -w -f -r", source)
             self.assertIn("wave_command.txt", source)
             self.assertIn('PSF_COEFFICIENT_PROCESSING="sine-line"', source)
-            ecalib_commands = [
-                line.strip() for line in source.splitlines() if line.strip().startswith("bart ecalib ")
-            ]
-            self.assertEqual(len(ecalib_commands), 1)
+            self.assertIn("bart ecalib -m 1", source)
+            self.assertIn('VIRTUAL_COILS=24', source)
+            self.assertIn('STANDARD_ROOT="$OUTPUT_ROOT/vcc$VIRTUAL_COILS"', source)
         normal_source = normal.read_text(encoding="utf-8")
         retro_source = retro.read_text(encoding="utf-8")
         r3x3_source = r3x3.read_text(encoding="utf-8")
         for source in (normal_source, retro_source, r3x3_source):
             self.assertIn('GRE_SHARED_WAVELET_LAMBDA="0.015"', source)
+            self.assertIn("wavelet_transferred_vcc12", source)
             self.assertNotIn("ECHO1_LAMBDA", source)
             self.assertNotIn("ECHO2_LAMBDA", source)
             self.assertIn("ECHO_COUNT", source)
-            self.assertIn("echo_number <= ECHO_COUNT", source)
+            self.assertIn("echo_number<=ECHO_COUNT", source)
             self.assertIn("psf_$echo_label", source)
             self.assertIn("wave_kspace_$echo_label", source)
             self.assertIn("conversion_args+=(--image", source)
+        self.assertIn("--wavelet-lambda", normal_source)
+        self.assertIn("GRE_WAVELET_LAMBDA_EXPLICIT=true", normal_source)
+        self.assertIn("run_branch wavelet_candidate wavelet", normal_source)
         self.assertNotIn("-l -v", normal_source + retro_source)
         self.assertEqual(retro_source.count("sample_gre_retro_r3x3_recon.sh"), 1)
-        self.assertIn("Skipping completed $branch/$echo_label", r3x3_source)
+        self.assertIn("manage_standard_reconstruction.py", r3x3_source)
         self.assertNotIn("native_r3x2", r3x3_source)
 
     def test_gre_preparation_defaults_to_automatic_sine_line(self) -> None:

@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-09-29, America/New_York
+Updated: 2026-10-05, America/New_York
 
 For measured MPRAGE/GRE implementation, native-R3x3 support, the optional
 MPRAGE ROVir workflow, and the additive standard-plus-ROVir NIfTI collection,
@@ -18,6 +18,33 @@ the measured-data tool, read
 `docs/synthetic_mprage_regularization_pipeline.md`.
 
 ## Immediate next action
+
+The standard-PCA virtual-coil and reconstruction-profile redesign is now
+implemented in `wave_retro_lr_recon` and awaits source review before any
+production run. Read
+`../wave_retro_lr_recon/docs/virtual_coil_reconstruction_redesign_plan.md`
+for the contract. The standard default is Ncc=24 with an explicit
+`--virtual-coils N` override; every new count is an isolated `vccN` product.
+Normal defaults to Wavelet-only, retrospective reconstruction defaults to
+FISTA-only, and the MPRAGE default retrospective set is native R3x2, LR-Y
+R3x2, and native R3x3. One existing `nifti_collection/` remains the only
+collection root: it adds standard products below `vccN/` and canonical ROVir
+products below `rovir/`. Historical root-level VCC=12 products remain
+untouched and readable.
+
+The Ncc=12 manifest audit found retained ACS energy below 90% in most reviewed
+datasets, with a combined range of 0.748-0.922 and mean 0.872. This supports
+the conservative Ncc=24 choice but does not by itself establish image quality.
+The compact MPRAGE Ncc=24 native-R3x1 sweep is complete. User review selected
+Wavelet `lambda=3e-2`: it has the lowest brain NRMSE (`0.0280408`), is within
+`5.15e-5` of the best 3D SSIM, and showed no adverse fixed-window visual change
+against the `2.5e-2`/`3.5e-2` neighbors. The metric-provenance and CSV hashes
+are `f4f199eae91077b25f742249912da4800a57198b4d742ce5847e01dceb601b78`
+and `ca5ea4689cd947e0e989d808bd73ae0f4f812b73b4871a6eb69d0c783bcc80f8`.
+The default measured MPRAGE VCC24 normal launcher now records this result under
+`wavelet_selected_vcc24`; unswept retrospective cases retain their historical
+transferred values. The GRE/SWI `1.5e-2` choice still requires its separate
+Ncc=24 sweep and explicit review.
 
 The corrected pure-image-lattice regularization rerun and explicit manual
 visual/metric selection are complete. The approved Wavelet lambdas are

@@ -24,8 +24,8 @@ from wave_retro_lr.nifti_collection import (  # noqa: E402
 
 
 class NiftiCollectionTests(unittest.TestCase):
-    def test_require_retro_accepts_legacy_layout_and_rejects_partial_r3x3(self) -> None:
-        """Accept four-case roots while requiring a started R3x3 case to finish.
+    def test_require_retro_accepts_legacy_layout_and_asymmetric_r3x3(self) -> None:
+        """Accept required legacy cases plus one complete R3x3 branch.
 
         Returns:
             None.
@@ -44,10 +44,11 @@ class NiftiCollectionTests(unittest.TestCase):
                 (32, 32, 32),
                 (1.0, 1.0, 1.0),
             )
-            with self.assertRaisesRegex(
-                FileNotFoundError, "optimal_wavelet.*native_r3x3"
-            ):
-                build_mprage_nifti_collection(root, require_retro=True)
+            asymmetric = build_mprage_nifti_collection(root, require_retro=True)
+            self.assertIn(
+                ("fista_r0", "native_r3x3"),
+                {(entry["branch"], entry["case"]) for entry in asymmetric["cases"]},
+            )
 
     def test_complete_collection_preserves_originals_and_masks_every_grid(self) -> None:
         """Verify byte copies, mask provenance, and physical LR mask mapping.
@@ -254,7 +255,10 @@ class NiftiCollectionTests(unittest.TestCase):
             self.assertIn(("optimal_wavelet", "native_r3x3"), groups)
             self.assertEqual(
                 synchronized["synchronization"]["added_case_groups"],
-                ["fista_r0:native_r3x3", "optimal_wavelet:native_r3x3"],
+                [
+                    "legacy_vcc12:fista_r0:native_r3x3",
+                    "legacy_vcc12:optimal_wavelet:native_r3x3",
+                ],
             )
             self.assertEqual(
                 len(synchronized["synchronization"]["retained_case_groups"]), 4
@@ -304,19 +308,30 @@ class NiftiCollectionTests(unittest.TestCase):
                 (32, 32, 32),
                 (1.0, 1.0, 1.0),
             )
+            rovir_manifest = root / "normal" / "rovir" / "manifest.json"
+            rovir_manifest.write_text(
+                json.dumps({"status": "canonical_rovir_complete"}) + "\n",
+                encoding="utf-8",
+            )
             manifest = build_mprage_nifti_collection(root, require_retro=True)
-            groups = {(entry["branch"], entry["case"]) for entry in manifest["cases"]}
-            self.assertIn(("rovir_fista_r0", "normal"), groups)
-            self.assertIn(("rovir_fista_r0", "native_r3x2"), groups)
-            self.assertNotIn(("rovir_fista_r0", "lr_x_1p5mm_r3x2"), groups)
-            self.assertIn(("fista_r0", "normal"), groups)
-            self.assertIn(("fista_r0", "native_r3x2"), groups)
-            self.assertIn(("fista_r0", "lr_x_1p5mm_r3x2"), groups)
-            self.assertIn(("optimal_wavelet", "normal"), groups)
-            self.assertIn(("optimal_wavelet", "native_r3x2"), groups)
-            self.assertIn(("rovir_optimal_wavelet", "native_r3x2"), groups)
+            groups = {
+                (entry["collection_id"], entry["branch"], entry["case"])
+                for entry in manifest["cases"]
+            }
+            self.assertIn(("rovir", "fista_r0", "normal"), groups)
+            self.assertIn(("rovir", "fista_r0", "native_r3x2"), groups)
+            self.assertNotIn(("rovir", "fista_r0", "lr_x_1p5mm_r3x2"), groups)
+            self.assertIn(("legacy_vcc12", "fista_r0", "normal"), groups)
+            self.assertIn(("legacy_vcc12", "fista_r0", "native_r3x2"), groups)
+            self.assertIn(("legacy_vcc12", "fista_r0", "lr_x_1p5mm_r3x2"), groups)
+            self.assertIn(("legacy_vcc12", "optimal_wavelet", "normal"), groups)
+            self.assertIn(("legacy_vcc12", "optimal_wavelet", "native_r3x2"), groups)
+            self.assertIn(("rovir", "optimal_wavelet", "native_r3x2"), groups)
             self.assertEqual(len(groups), 13)
-            self.assertEqual(manifest["head_mask"]["source_branch"], "rovir_fista_r0")
+            rovir_variant = next(
+                item for item in manifest["variants"] if item["collection_id"] == "rovir"
+            )
+            self.assertEqual(rovir_variant["head_mask"]["source_branch"], "fista_r0")
             self.assertEqual(
                 manifest["synchronization"]["rovir_replacements"],
                 [],
@@ -324,9 +339,9 @@ class NiftiCollectionTests(unittest.TestCase):
             self.assertEqual(
                 manifest["synchronization"]["added_case_groups"],
                 [
-                    "rovir_fista_r0:native_r3x2",
-                    "rovir_fista_r0:normal",
-                    "rovir_optimal_wavelet:native_r3x2",
+                    "rovir:fista_r0:native_r3x2",
+                    "rovir:fista_r0:normal",
+                    "rovir:optimal_wavelet:native_r3x2",
                 ],
             )
             self.assertEqual(

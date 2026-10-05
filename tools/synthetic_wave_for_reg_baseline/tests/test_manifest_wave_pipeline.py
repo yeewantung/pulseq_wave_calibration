@@ -246,6 +246,89 @@ class ManifestBartExportTests(unittest.TestCase):
             resumed = export_bart_inputs(resumed_args)
             self.assertEqual(resumed["status"], "manifest_bart_inputs_ready")
 
+    def test_one_shot_export_requires_operator_gate_and_writes_pure_lattice(self) -> None:
+        """Bind one-shot export to the operator gate and exclude ACS coordinates."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path, _ = _write_fixture(root)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["sampling"]["synthetic_wave_mask_kind"] = (
+                "pure_cartesian_image_lattice"
+            )
+            payload["sampling"]["synthetic_wave_acceleration_pe1_pe2"] = [3, 1]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            dataset = load_dataset_manifest(path)
+            inspection = json.loads(dataset.inspection_report.read_text(encoding="utf-8"))
+            inspection["dataset_manifest"]["sha256"] = dataset.sha256
+            dataset.inspection_report.write_text(json.dumps(inspection), encoding="utf-8")
+
+            synthesis_dir = dataset.output_path("wave_synthesis_dir")
+            synthesis_dir.mkdir(parents=True)
+            full_wave = np.ones((8, 6, 5, 2), dtype=np.complex64)
+            full_wave_path = synthesis_dir / "full_wave_kspace.npy"
+            np.save(full_wave_path, full_wave)
+            psf = np.ones((8, 6, 5, 1, 1), dtype=np.complex64)
+            psf_base = synthesis_dir / "bart_inputs" / "psf"
+            _write_bart(psf_base, psf)
+            synthesis_manifest_path = synthesis_dir / "manifest.json"
+            synthesis_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "status": "awaiting_visual_review_before_mask_and_bart",
+                        "dataset_manifest": {"sha256": dataset.sha256},
+                        "full_wave_kspace": {
+                            "path": str(full_wave_path),
+                            "shape": [8, 6, 5, 2],
+                            "dtype": "complex64",
+                            "sampling_mask_applied": False,
+                        },
+                        "psf": {
+                            "bart_base": str(psf_base),
+                            "bart_shape": [8, 6, 5, 1, 1],
+                            "logical_sha256": logical_array_sha256(psf),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            operator_path = (
+                dataset.output_root
+                / "evaluation"
+                / "full_sampling_wave_operator_validation"
+                / "operator_validation_manifest.json"
+            )
+            operator_path.parent.mkdir(parents=True)
+            operator_path.write_text(
+                json.dumps(
+                    {
+                        "status": "passed",
+                        "dataset_manifest": {"sha256": dataset.sha256},
+                        "synthesis_manifest": {
+                            "sha256": sha256_file(synthesis_manifest_path)
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = export_parser().parse_args(
+                ["--dataset-manifest", str(path), "--one-shot-sweep"]
+            )
+
+            result = export_bart_inputs(args)
+
+            mask = np.load(dataset.output_path("bart_export_dir") / "sampling_mask.npy")
+            expected = np.zeros((6, 5), dtype=bool)
+            expected[[1, 4], :] = True
+            np.testing.assert_array_equal(mask, expected)
+            self.assertEqual(result["sampling_mask"]["mask_kind"], "pure_cartesian_image_lattice")
+            nested = json.loads(
+                (dataset.output_path("bart_export_dir") / "bart_inputs" / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertFalse(nested["visual_review"]["approved"])
+            self.assertTrue(nested["visual_review"]["one_shot_sweep"])
+
 
 class ManifestCalibrationExportTests(unittest.TestCase):
     def test_uses_measured_r1_image_acs_without_interpolation(self) -> None:

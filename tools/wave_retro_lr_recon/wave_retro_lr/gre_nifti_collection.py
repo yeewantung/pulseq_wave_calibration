@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -16,6 +17,11 @@ import numpy as np
 
 from .bart_io import sha256_file
 from .gre import resolve_gre_wavelet_lambda
+from .reconstruction_state import validate_completed_reconstruction_manifest
+from .standard import (
+    validate_prepared_artifact_records,
+    validate_standard_pca_manifest,
+)
 
 
 COLLECTION_BUILDER = "wave_retro_lr.gre_nifti_collection"
@@ -69,9 +75,16 @@ def build_gre_nifti_collection(
     destination = source_root / "nifti_collection"
     previous_manifest = _validate_existing_collection(destination)
 
-    sources = _discover_sources(source_root, require_retro=require_retro)
-    synchronization = _collection_synchronization(previous_manifest, sources)
-    missing_previous = synchronization["no_longer_discovered_case_groups"]
+    variants = _discover_collection_variants(
+        source_root, require_retro=require_retro
+    )
+    discovered_groups = {
+        f"{variant['collection_id']}:{record['branch']}:{record['geometry_id']}"
+        for variant in variants
+        for record in variant["sources"]
+    }
+    previous_groups = _previous_variant_groups(previous_manifest)
+    missing_previous = sorted(previous_groups - discovered_groups)
     if missing_previous:
         raise FileNotFoundError(
             "Previously collected GRE reconstruction groups are no longer "
@@ -82,8 +95,86 @@ def build_gre_nifti_collection(
         tempfile.mkdtemp(prefix=".nifti_collection-", dir=source_root)
     )
     try:
-        manifest = _materialize_collection(staging, source_root, destination, sources)
-        manifest["synchronization"] = synchronization
+        variant_records: list[dict[str, Any]] = []
+        flattened_cases: list[dict[str, Any]] = []
+        for variant in variants:
+            relative = Path(variant["collection_relative"])
+            target = staging / relative
+            target.mkdir(parents=True, exist_ok=True)
+            subtree = _materialize_collection(
+                target,
+                source_root,
+                destination / relative,
+                variant["sources"],
+            )
+            subtree["collection_id"] = variant["collection_id"]
+            subtree["source_contract"] = variant["source_contract"]
+            for case in subtree["cases"]:
+                case["collection_id"] = variant["collection_id"]
+                key = f"{case['branch']}:{case['geometry_id']}"
+                if key in variant["run_manifests"]:
+                    case["reconstruction_manifest"] = variant["run_manifests"][key]
+                flattened_cases.append(case)
+            if relative != Path("."):
+                subtree_manifest = target / "manifest.json"
+                _write_json(subtree_manifest, subtree)
+                subtree_record = {
+                    "path": str(subtree_manifest.relative_to(staging)),
+                    "sha256": sha256_file(subtree_manifest),
+                }
+            else:
+                subtree_record = None
+            variant_records.append(
+                {
+                    "collection_id": variant["collection_id"],
+                    "kind": variant["kind"],
+                    "collection_relative": str(relative),
+                    "source_contract": variant["source_contract"],
+                    "subtree_manifest": subtree_record,
+                    "case_groups": sorted(
+                        f"{record['branch']}:{record['geometry_id']}"
+                        for record in variant["sources"]
+                    ),
+                }
+            )
+        owned_files = {
+            str(path.relative_to(staging)): sha256_file(path)
+            for path in sorted(staging.rglob("*"))
+            if path.is_file()
+        }
+        manifest = {
+            "format_version": 2,
+            "builder": COLLECTION_BUILDER,
+            "status": "complete",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "source_output_root": str(source_root),
+            "collection_directory": str(destination),
+            "collection_layout": "one top-level collection with legacy and vccN variants",
+            "variants": variant_records,
+            "cases": flattened_cases,
+            "case_branch_count": len(flattened_cases),
+            "nifti_count": sum(
+                len(record["files"]) for record in flattened_cases
+            ),
+            "owned_files": owned_files,
+            "synchronization": {
+                "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
+                "previous_case_groups": sorted(previous_groups),
+                "discovered_case_groups": sorted(discovered_groups),
+                "retained_case_groups": sorted(previous_groups & discovered_groups),
+                "added_case_groups": sorted(discovered_groups - previous_groups),
+                "no_longer_discovered_case_groups": missing_previous,
+            },
+            "scientific_scope": {
+                "canonical_reconstruction_outputs_modified": False,
+                "nifti_and_sidecars_copied_byte_for_byte": True,
+                "magnitude_and_wrapped_phase_included": True,
+                "all_echoes_retained": True,
+                "masking_applied": False,
+                "masked_derivatives_generated": False,
+                "standard_variants_are_additive": True,
+            },
+        }
         _write_json(staging / "manifest.json", manifest)
         _replace_owned_collection(staging, destination)
     except Exception:
@@ -91,6 +182,155 @@ def build_gre_nifti_collection(
             shutil.rmtree(staging)
         raise
     return manifest
+
+
+def _discover_collection_variants(
+    root: Path, *, require_retro: bool
+) -> list[dict[str, Any]]:
+    """Discover legacy and immutable count-specific GRE source trees.
+
+    Args:
+        root: User-selected top-level reconstruction root.
+        require_retro: Whether every standard source tree must contain all
+            three default retrospective geometries.
+
+    Returns:
+        Ordered collection-variant records.
+    """
+
+    variants: list[dict[str, Any]] = []
+    legacy_manifest = root / "normal" / "bart_inputs" / "manifest.json"
+    if (root / "normal" / "nifti").is_dir():
+        source_manifest = (
+            {
+                "source_manifest": str(legacy_manifest.relative_to(root)),
+                "source_manifest_sha256": sha256_file(legacy_manifest),
+            }
+            if legacy_manifest.is_file()
+            else {
+                "source_manifest": None,
+                "source_manifest_sha256": None,
+                "legacy_manifest_unavailable": True,
+            }
+        )
+        variants.append(
+            {
+                "collection_id": "legacy_vcc12",
+                "kind": "legacy_standard_pca",
+                "collection_relative": Path("."),
+                "sources": _discover_sources(root, require_retro=require_retro),
+                "run_manifests": {},
+                "source_contract": {
+                    "historical_root_level_vcc12": True,
+                    **source_manifest,
+                    "relabeled_or_modified": False,
+                },
+            }
+        )
+    count_variants = []
+    for directory in root.iterdir():
+        match = re.fullmatch(r"vcc([1-9][0-9]*)", directory.name)
+        if match is not None and directory.is_dir():
+            count_variants.append((int(match.group(1)), directory))
+    for count, directory in sorted(count_variants):
+        normal_manifest = directory / "normal" / "bart_inputs" / "manifest.json"
+        if not normal_manifest.is_file() or not (directory / "normal" / "nifti").is_dir():
+            continue
+        payload = _load_json(normal_manifest)
+        compression = validate_standard_pca_manifest(
+            payload, count, variant_name=directory.name
+        )
+        validate_prepared_artifact_records(
+            normal_manifest.parent, payload.get("output_artifacts", {})
+        )
+        sources = _discover_sources(directory, require_retro=require_retro)
+        run_manifests = _validate_standard_run_manifests(directory, sources, count)
+        variants.append(
+            {
+                "collection_id": directory.name,
+                "kind": "standard_pca",
+                "collection_relative": Path(directory.name),
+                "sources": sources,
+                "run_manifests": run_manifests,
+                "source_contract": {
+                    "virtual_coils": count,
+                    "physical_coils": int(compression["physical_coils"]),
+                    "retained_energy": float(compression["retained_energy"]),
+                    "compression_basis": dict(compression["basis"]),
+                    "geometry": payload.get("geometry"),
+                    "source": payload.get("source"),
+                    "source_manifest": str(normal_manifest.relative_to(root)),
+                    "source_manifest_sha256": sha256_file(normal_manifest),
+                },
+            }
+        )
+    if not variants:
+        raise FileNotFoundError(
+            f"No complete legacy or vccN GRE outputs found in {root}."
+        )
+    return variants
+
+
+def _validate_standard_run_manifests(
+    variant_root: Path,
+    sources: Sequence[Mapping[str, Any]],
+    virtual_coils: int,
+) -> dict[str, dict[str, Any]]:
+    """Validate exact branch provenance for a GRE ``vccN`` source tree.
+
+    Args:
+        variant_root: Count-specific reconstruction root.
+        sources: Validated collection source records.
+        virtual_coils: Expected standard-PCA channel count.
+
+    Returns:
+        Run-manifest identities keyed by branch and geometry.
+    """
+
+    records: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        branch = str(source["branch"])
+        geometry = str(source["geometry_id"])
+        case_location = Path(source["case_location"])
+        path = (
+            variant_root / case_location / "bart_output" / branch / "reconstruction_manifest.json"
+        )
+        manifest = validate_completed_reconstruction_manifest(path)
+        request = manifest["request"]
+        expected_case = "normal" if case_location == Path("normal") else geometry
+        if (
+            int(request.get("virtual_coils", 0)) != virtual_coils
+            or request.get("case") != expected_case
+            or request.get("branch") != branch
+        ):
+            raise ValueError(f"GRE reconstruction manifest identity mismatch: {path}")
+        records[f"{branch}:{geometry}"] = {
+            "path": str(path.relative_to(variant_root)),
+            "sha256": sha256_file(path),
+            "profile": request["profile"],
+            "method": request["method"],
+            "lambda": request["regularization"],
+            "prepared_manifest_sha256": request["prepared_manifest"]["sha256"],
+        }
+    return records
+
+
+def _previous_variant_groups(manifest: Mapping[str, Any] | None) -> set[str]:
+    """Read stable group IDs from current or legacy GRE collections.
+
+    Args:
+        manifest: Validated prior collection manifest, if present.
+
+    Returns:
+        Variant/branch/geometry identifiers.
+    """
+
+    if manifest is None:
+        return set()
+    return {
+        f"{case.get('collection_id', 'legacy_vcc12')}:{case['branch']}:{case['geometry_id']}"
+        for case in manifest.get("cases", [])
+    }
 
 
 def _discover_sources(
@@ -113,9 +353,14 @@ def _discover_sources(
 
     records: list[dict[str, Any]] = []
     for geometry_id, case_location in CASE_LOCATIONS:
+        nifti_root = source_root / case_location / "nifti"
+        branch_names = set(RECONSTRUCTION_BRANCHES)
+        if nifti_root.is_dir():
+            branch_names.update(
+                path.name for path in nifti_root.iterdir() if path.is_dir()
+            )
         branch_directories = {
-            branch: source_root / case_location / "nifti" / branch
-            for branch in RECONSTRUCTION_BRANCHES
+            branch: nifti_root / branch for branch in sorted(branch_names)
         }
         availability = {
             branch: (directory / "conversion_manifest.json").is_file()
@@ -135,12 +380,11 @@ def _discover_sources(
                     f"No GRE NIfTI outputs found for required geometry {geometry_id}."
                 )
             continue
-        if not all(availability.values()):
-            raise ValueError(
-                f"GRE geometry {geometry_id} is incomplete across reconstruction branches."
-            )
         for branch, directory in branch_directories.items():
-            records.append(_validate_branch(directory, geometry_id, branch, case_location))
+            if availability[branch]:
+                records.append(
+                    _validate_branch(directory, geometry_id, branch, case_location)
+                )
     reference_echo_count = records[0]["echo_count"]
     reference_echo_times = records[0]["echo_times_s"]
     if any(

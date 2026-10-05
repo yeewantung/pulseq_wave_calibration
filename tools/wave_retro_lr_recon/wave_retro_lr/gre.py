@@ -28,11 +28,24 @@ from .retrospective import (
     validate_same_grid_masked_wave,
 )
 from .sampling import pure_cartesian_image_lattice_mask, validate_pure_cartesian_image_lattice
+from .standard import (
+    DEFAULT_VIRTUAL_COILS,
+    prepared_artifact_records,
+    retained_energy_diagnostics,
+    standard_variant_name,
+    standard_variant_root,
+    validate_prepared_artifact_records,
+    validate_standard_pca_manifest,
+    validate_virtual_coils,
+    write_pca_basis,
+)
 
 NATIVE_MATRIX_RO_LIN_PAR = (250, 250, 72)
 NATIVE_FOV_MM_RO_LIN_PAR = (220.0, 220.0, 180.0)
 EXTENDED_READOUT = 1000
-VIRTUAL_COILS = 12
+# Retained as a public compatibility alias; standard preparation now defaults
+# to the shared configurable count.
+VIRTUAL_COILS = DEFAULT_VIRTUAL_COILS
 LOW_RESOLUTION_LIN_BOUNDS = (51, 199)
 LOW_RESOLUTION_LIN_MM = 1.5
 WAVELET_SELECTION_BASENAME = "wavelet_shared_echo_selection.json"
@@ -1041,7 +1054,13 @@ def _validate_recoverable_retro_directory(
         )
 
 
-def _source_matches(existing: Mapping[str, Any], twix: Path, sequence: Path, settings: Mapping[str, Any]) -> bool:
+def _source_matches(
+    existing: Mapping[str, Any],
+    twix: Path,
+    sequence: Path,
+    settings: Mapping[str, Any],
+    virtual_coils: int | None = None,
+) -> bool:
     """Check whether a native manifest can be safely reused.
 
     Args:
@@ -1068,6 +1087,17 @@ def _source_matches(existing: Mapping[str, Any], twix: Path, sequence: Path, set
         and existing.get("wavelet_selection")
         == gre_wavelet_selection_provenance("native_r3x1", echo_count)
         and _uses_alias_free_coil_calibration(existing)
+        and (
+            virtual_coils is None
+            or (
+                existing.get("standard_pca_variant")
+                == standard_variant_name(virtual_coils)
+                and int(
+                    existing.get("coil_compression", {}).get("virtual_coils", 0)
+                )
+                == virtual_coils
+            )
+        )
     )
 
 
@@ -1076,6 +1106,7 @@ def _normal_manifest_matches_reusable_artifact(
     twix: Path,
     sequence: Path,
     settings: Mapping[str, Any],
+    virtual_coils: int | None = None,
 ) -> bool:
     """Check whether legacy GRE normal artifacts may be reused unchanged.
 
@@ -1106,6 +1137,17 @@ def _normal_manifest_matches_reusable_artifact(
         or not echoes
         or [item.get("echo") for item in echoes]
         != list(range(1, len(echoes) + 1))
+        or (
+            virtual_coils is not None
+            and (
+                manifest.get("standard_pca_variant")
+                != standard_variant_name(virtual_coils)
+                or int(
+                    manifest.get("coil_compression", {}).get("virtual_coils", 0)
+                )
+                != virtual_coils
+            )
+        )
     ):
         return False
     if settings.get("requested_fit_kx_range") is not None:
@@ -1646,6 +1688,7 @@ def prepare_normal_gre(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
@@ -1658,6 +1701,8 @@ def prepare_normal_gre(
         twix: Measured Wave-GRE TWIX file.
         output_root: Exact user-selected output root.
         sequence: Matching integrated Wave-GRE Pulseq file.
+        virtual_coils: Positive standard-PCA channel count. Every count writes
+            to an immutable ``vccN`` source tree.
         psf_coefficient_processing: Shared ``sine-line`` mode by default, or
             explicit ``smooth`` processing.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
@@ -1675,15 +1720,19 @@ def prepare_normal_gre(
 
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
     settings = _normalize_psf_settings(psf_coefficient_processing, psf_fit_kx_min, psf_fit_kx_max)
-    destination = Path(output_root).expanduser().resolve() / NORMAL_INPUT_RELATIVE
+    variant_name = standard_variant_name(virtual_coils)
+    destination = standard_variant_root(output_root, virtual_coils) / NORMAL_INPUT_RELATIVE
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
-        exact_match = _source_matches(existing, twix_path, sequence_path, settings)
+        exact_match = _source_matches(
+            existing, twix_path, sequence_path, settings, virtual_coils
+        )
         artifact_match = allow_legacy_artifact_reuse and (
             _normal_manifest_matches_reusable_artifact(
-                existing, twix_path, sequence_path, settings
+                existing, twix_path, sequence_path, settings, virtual_coils
             )
         )
         if not exact_match and not artifact_match:
@@ -1691,6 +1740,12 @@ def prepare_normal_gre(
                 "Existing normal GRE inputs use different sources, coil-calibration "
                 "processing, or PSF settings."
             )
+        validate_standard_pca_manifest(
+            existing, virtual_coils, variant_name=variant_name
+        )
+        validate_prepared_artifact_records(
+            destination, existing.get("output_artifacts", {})
+        )
         if artifact_match and not exact_match:
             artifact_records, missing_artifacts = _normal_core_artifact_records(
                 destination, existing
@@ -1827,8 +1882,9 @@ def prepare_normal_gre(
         nsets=int(cfg["Nsets"]),
     )
     physical_coils = int(reference.shape[-1])
-    if reference.shape[0] != EXTENDED_READOUT or physical_coils < VIRTUAL_COILS:
-        raise ValueError("GRE refscan readout or physical coil count is incompatible.")
+    if reference.shape[0] != EXTENDED_READOUT:
+        raise ValueError("GRE refscan readout is incompatible.")
+    validate_virtual_coils(virtual_coils, physical_coils)
     # The set-4 integrated ACS determines one coil basis and one native map input.
     nacs = int(cfg["Nacs"])
     os_factor = int(cfg["os_factor"])
@@ -1853,13 +1909,16 @@ def prepare_normal_gre(
             f"{tuple(integrated_acs.shape)}."
         )
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
-        integrated_acs, ncc=VIRTUAL_COILS, acs=nacs
+        integrated_acs, ncc=virtual_coils, acs=nacs
+    )
+    basis_identity = write_pca_basis(
+        destination / "coil_compression_basis.npy", basis
     )
     image = native._normalize_gre_image_data(native.load_img(str(twix_path)), cfg)
     if int(image.shape[-1]) != physical_coils:
         raise ValueError("GRE image and integrated refscan coil counts disagree.")
     compressed_compact = torch.empty(
-        (*image.shape[:-1], VIRTUAL_COILS), dtype=torch.complex64
+        (*image.shape[:-1], virtual_coils), dtype=torch.complex64
     )
     for echo_index in range(echo_count):
         compressed_compact[:, :, :, echo_index, :] = native.apply_cc_coillast_torch(
@@ -1870,7 +1929,7 @@ def prepare_normal_gre(
         compressed_compact,
         source_mask,
         echo_count=echo_count,
-        coil_count=VIRTUAL_COILS,
+        coil_count=virtual_coils,
         matrix_ro_lin_par=native_matrix,
     )
     del compressed_compact
@@ -1882,12 +1941,14 @@ def prepare_normal_gre(
         native_matrix[0],
         nacs,
         nacs,
-        VIRTUAL_COILS,
+        virtual_coils,
     ):
         raise ValueError("Compressed GRE ACS has an unexpected shape.")
     if not torch.isfinite(compressed).all() or not torch.isfinite(compressed_acs).all():
         raise ValueError("Compressed GRE image or ACS contains non-finite values.")
-    calibration = torch.zeros((*native_matrix, VIRTUAL_COILS), dtype=torch.complex64)
+    calibration = torch.zeros(
+        (*native_matrix, virtual_coils), dtype=torch.complex64
+    )
     lin_start = native_matrix[1] // 2 - nacs // 2
     par_start = native_matrix[2] // 2 - nacs // 2
     calibration[:, lin_start : lin_start + nacs, par_start : par_start + nacs, :] = compressed_acs
@@ -1977,9 +2038,19 @@ def prepare_normal_gre(
 
     native_geometry = cases["native_r3x1"].to_json()
     native_geometry["readout_oversampling_factor"] = os_factor
+    energy = retained_energy_diagnostics(retained_energy, virtual_coils)
+    cfl_names = ["kspace_calib"]
+    for echo in echo_records:
+        cfl_names.extend((str(echo["wave_kspace"]), str(echo["psf"])))
+    file_names = ["coil_compression_basis.npy", "sampling_mask.npy", "shared_psf_coefficients.npz"]
+    file_names.extend(str(echo["sequence_trajectory"]) for echo in echo_records)
+    output_artifacts = prepared_artifact_records(
+        destination, cfl_names, file_names
+    )
     manifest = {
-        "format_version": 3,
+        "format_version": 4,
         "status": "measured_multi_echo_wave_gre_bart_inputs_ready",
+        "standard_pca_variant": variant_name,
         "echo_count": echo_count,
         "source": {
             "twix": _file_identity(twix_path),
@@ -1991,10 +2062,14 @@ def prepare_normal_gre(
         "sampling": {**twix_metadata["sampling"], "path": str(mask_path)},
         "coil_compression": {
             "physical_coils": physical_coils,
-            "virtual_coils": VIRTUAL_COILS,
+            "virtual_coils": virtual_coils,
             "basis_source": "one integrated set-4 ACS shared across all echoes",
-            "retained_energy": float(retained_energy[VIRTUAL_COILS - 1]),
-            "leading_singular_values": [float(value) for value in singular_values[:VIRTUAL_COILS]],
+            "basis": basis_identity,
+            "retained_energy": energy["selected"],
+            "retained_energy_diagnostics": energy,
+            "leading_singular_values": [
+                float(value) for value in singular_values[:virtual_coils]
+            ],
             "readout_oversampling_removal": {
                 **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
                 "oversampling_factor": os_factor,
@@ -2033,6 +2108,7 @@ def prepare_normal_gre(
             "interpolation": False,
         },
         "echoes": echo_records,
+        "output_artifacts": output_artifacts,
         "prepared_at_utc": _utc_now(),
     }
     _write_json(manifest_path, manifest)
@@ -2070,6 +2146,7 @@ def prepare_retro_gre(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
@@ -2080,6 +2157,7 @@ def prepare_retro_gre(
         twix: Measured native R3x1 Wave-GRE TWIX file.
         output_root: Exact user-selected output root.
         sequence: Matching integrated Pulseq file.
+        virtual_coils: Positive standard-PCA channel count.
         psf_coefficient_processing: Shared ``sine-line`` mode by default, or
             explicit ``smooth`` processing.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
@@ -2089,11 +2167,14 @@ def prepare_retro_gre(
         Native-R3x2 and LIN-low-resolution-R3x2 manifests.
     """
 
-    root = Path(output_root).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
+    variant_name = standard_variant_name(virtual_coils)
+    root = standard_variant_root(output_root, virtual_coils)
     normal = prepare_normal_gre(
         twix,
-        root,
+        output_root,
         sequence,
+        virtual_coils=virtual_coils,
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
@@ -2144,6 +2225,18 @@ def prepare_retro_gre(
                 case_id, echo_count
             ):
                 raise ValueError(f"Existing retrospective GRE selection provenance differs: {inputs}")
+            if (
+                existing.get("standard_pca_variant") != variant_name
+                or int(existing.get("virtual_coils", 0)) != virtual_coils
+                or existing.get("source_normal_manifest_identity", {}).get("sha256")
+                != sha256_file(normal_inputs / "manifest.json")
+            ):
+                raise ValueError(
+                    f"Existing retrospective GRE coil provenance differs: {inputs}"
+                )
+            validate_prepared_artifact_records(
+                inputs, existing.get("output_artifacts", {})
+            )
             existing["output_orientation"] = {
                 "logical_axis_roles": list(GRE_LOGICAL_AXIS_ROLES),
                 "validated_array_axis_flips": list(GRE_BART_ARRAY_AXIS_FLIPS),
@@ -2187,9 +2280,15 @@ def prepare_retro_gre(
                 }
             )
         manifest = {
-            "format_version": 1,
+            "format_version": 2,
             "status": "direct_measured_wave_gre_crop_bart_inputs_ready",
+            "standard_pca_variant": variant_name,
+            "virtual_coils": virtual_coils,
             "source_normal_manifest": str(normal_inputs / "manifest.json"),
+            "source_normal_manifest_identity": {
+                "path": str(normal_inputs / "manifest.json"),
+                "sha256": sha256_file(normal_inputs / "manifest.json"),
+            },
             "case": case.to_json(),
             "operator": (
                 "direct half-open LIN/PAR crop of measured Wave k-space with "
@@ -2222,15 +2321,23 @@ def prepare_retro_gre(
                 "interpolation": False,
             },
             "echoes": echo_records,
-            "prepared_at_utc": _utc_now(),
         }
+        artifact_names: list[str] = []
+        for echo in echo_records:
+            artifact_names.extend((str(echo["wave_kspace"]), str(echo["psf"])))
+        manifest["output_artifacts"] = prepared_artifact_records(
+            inputs, artifact_names, ("sampling_mask.npy",)
+        )
+        manifest["prepared_at_utc"] = _utc_now()
         _write_json(manifest_path, manifest)
         results.append(manifest)
     _write_json(
         root / RETRO_RELATIVE / "manifest.json",
         {
-            "format_version": 1,
+            "format_version": 2,
             "status": "measured_multi_echo_gre_retro_cases_ready",
+            "standard_pca_variant": variant_name,
+            "virtual_coils": virtual_coils,
             "echo_count": echo_count,
             "source_normal_manifest": str(normal_inputs / "manifest.json"),
             "cases": ["native_r3x2", "lin_low_resolution_r3x2"],
@@ -2298,6 +2405,7 @@ def prepare_retro_gre_r3x3(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
@@ -2313,6 +2421,7 @@ def prepare_retro_gre_r3x3(
         twix: Measured regular-R3x1 Wave-GRE TWIX file.
         output_root: Reconstruction root containing or receiving normal inputs.
         sequence: Matching integrated Wave-GRE Pulseq sequence.
+        virtual_coils: Positive standard-PCA channel count.
         psf_coefficient_processing: Existing normal PSF processing contract.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
@@ -2325,11 +2434,14 @@ def prepare_retro_gre_r3x3(
         FileExistsError: If incompatible existing or partial case inputs are found.
     """
 
-    root = Path(output_root).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
+    variant_name = standard_variant_name(virtual_coils)
+    root = standard_variant_root(output_root, virtual_coils)
     normal = prepare_normal_gre(
         twix,
-        root,
+        output_root,
         sequence,
+        virtual_coils=virtual_coils,
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
@@ -2380,6 +2492,10 @@ def prepare_retro_gre_r3x3(
     manifest_path = inputs / "manifest.json"
     if manifest_path.is_file():
         existing = _load_json(manifest_path)
+        source_normal_identity = existing.get(
+            "source_normal_manifest_identity",
+            existing.get("source_normal_manifest", {}),
+        )
         if (
             existing.get("source") != normal.get("source")
             or existing.get("case") != case.to_json()
@@ -2387,6 +2503,11 @@ def prepare_retro_gre_r3x3(
             != sampling["logical_sha256"]
             or existing.get("wavelet_selection") != selection
             or int(existing.get("echo_count", 0)) != echo_count
+            or existing.get("standard_pca_variant") != variant_name
+            or int(existing.get("virtual_coils", 0)) != virtual_coils
+            or not isinstance(source_normal_identity, Mapping)
+            or source_normal_identity.get("sha256")
+            != sha256_file(normal_inputs / "manifest.json")
         ):
             raise ValueError(f"Existing native GRE R3x3 inputs are incompatible: {inputs}")
         recorded_attestation = existing.get("normal_reuse_attestation")
@@ -2404,6 +2525,9 @@ def prepare_retro_gre_r3x3(
         validate_pure_cartesian_image_lattice(mask, existing["sampling"])
         _validate_gre_r3x3_case_inputs(
             normal_inputs, inputs, normal_echoes, np.asarray(mask, dtype=bool)
+        )
+        validate_prepared_artifact_records(
+            inputs, existing.get("output_artifacts", {})
         )
         print(f"Reusing compatible native GRE R3x3 BART inputs: {inputs}")
         return existing
@@ -2468,10 +2592,13 @@ def prepare_retro_gre_r3x3(
         )
 
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "status": "direct_measured_multi_echo_wave_gre_r3x3_bart_inputs_ready",
+        "standard_pca_variant": variant_name,
+        "virtual_coils": virtual_coils,
         "source": normal["source"],
-        "source_normal_manifest": {
+        "source_normal_manifest": str(normal_inputs / "manifest.json"),
+        "source_normal_manifest_identity": {
             "path": str(normal_inputs / "manifest.json"),
             "sha256": sha256_file(normal_inputs / "manifest.json"),
         },
@@ -2511,8 +2638,14 @@ def prepare_retro_gre_r3x3(
             "stored_coordinate_system": "canonical RAS",
             "interpolation": False,
         },
-        "prepared_at_utc": _utc_now(),
     }
+    artifact_names = []
+    for echo in echo_records:
+        artifact_names.extend((str(echo["wave_kspace"]), str(echo["psf"])))
+    manifest["output_artifacts"] = prepared_artifact_records(
+        inputs, artifact_names, ("sampling_mask.npy",)
+    )
+    manifest["prepared_at_utc"] = _utc_now()
     _write_json(manifest_path, manifest)
     print(
         f"Prepared {R3X3_CASE_ID}: logical={case.matrix_ro_lin_par}, "
@@ -2521,18 +2654,24 @@ def prepare_retro_gre_r3x3(
     return manifest
 
 
-def prepare_retro_gre_sensitivity_maps(output_root: str | Path) -> None:
+def prepare_retro_gre_sensitivity_maps(
+    output_root: str | Path,
+    *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
+) -> None:
     """Create only the LIN-low-resolution maps from one native ecalib result.
 
     Args:
         output_root: User-selected GRE output root containing prepared cases.
+        virtual_coils: Positive standard-PCA channel count selecting ``vccN``.
 
     Returns:
         None. Native maps are not duplicated; LR maps are Fourier-resampled and
         coil-RSS normalized.
     """
 
-    root = Path(output_root).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
+    root = standard_variant_root(output_root, virtual_coils)
     source = root / NORMAL_OUTPUT_RELATIVE / "coil_sens"
     read_shape(source)
     inputs = root / RETRO_RELATIVE / "lin_low_resolution_r3x2" / "bart_inputs"

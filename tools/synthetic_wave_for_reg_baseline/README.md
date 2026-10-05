@@ -4,6 +4,37 @@ This directory contains the R3 presentation-optimization, R1 parameter-
 refinement, and cross-dataset transfer workflow for synthetic Wave-MPRAGE
 reconstruction.
 
+## One-command Ncc=24 Wavelet reassessment
+
+Two one-command launchers run native-R3x1 preparation, GPU reconstruction,
+resumable positive-lambda Wavelet candidates, and a FISTA-r0 control without
+LLR:
+
+```bash
+scripts/run_mprage_vcc24_wavelet_sweep.local.sh
+scripts/run_gre_vcc24_wavelet_sweep.local.sh
+```
+
+Copy the matching `.example.sh` launchers and keep inputs/output roots in the
+ignored local files. MPRAGE spans `0.01` through `0.05`; GRE spans `0.005`
+through `0.03` with one lambda shared across both echoes. GRE exports
+magnitude/phase and evaluates inter-echo scaling and delta-B0. Neither launcher
+records or selects a winner.
+
+The MPRAGE launcher additionally requires a previously approved same-subject
+metrics-only brain-mask manifest. It recomputes the direct-FFT RSS reference
+from the current VCC24 fully sampled source; it does not reuse VCC12 reference
+intensities. Curves, the metric CSV, common-window figures, and exact provenance
+are written below `evaluation/native_r3x1_wavelet_sweep/`. After reconstruction
+has already completed, pass `--evaluate-only` to the tracked launcher to create
+only this evaluation package. Per-metric leaders are descriptive and never
+constitute an automatic lambda selection.
+
+User review selected MPRAGE VCC24 `lambda=3e-2`. It led brain NRMSE and was
+effectively tied across the `2.5e-2` to `3.5e-2` quantitative/visual plateau.
+This manual decision is consumed only by the measured MPRAGE VCC24 native-R3x1
+normal launcher; it is not extrapolated to retrospective cases or GRE.
+
 ## Two-echo synthetic-Wave GRE regularization sweep
 
 `gre_synthetic_wave_sweep.py` is the stage-oriented experiment entry point for

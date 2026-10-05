@@ -185,9 +185,13 @@ def validate_dataset_manifest(payload: Mapping[str, Any]) -> None:
                     )
     else:
         errors.append("sampling.synthetic_wave_residue_pe1_pe2 must contain exactly 2 values")
-    if sampling.get("synthetic_wave_mask_kind") != "cartesian_with_full_pe1_acs":
+    if sampling.get("synthetic_wave_mask_kind") not in {
+        "cartesian_with_full_pe1_acs",
+        "pure_cartesian_image_lattice",
+    }:
         errors.append(
-            "sampling.synthetic_wave_mask_kind must be 'cartesian_with_full_pe1_acs'"
+            "sampling.synthetic_wave_mask_kind must be "
+            "'cartesian_with_full_pe1_acs' or 'pure_cartesian_image_lattice'"
         )
     acs_start = sampling.get("synthetic_wave_acs_pe1_start")
     acs_stop = sampling.get("synthetic_wave_acs_pe1_stop_exclusive")

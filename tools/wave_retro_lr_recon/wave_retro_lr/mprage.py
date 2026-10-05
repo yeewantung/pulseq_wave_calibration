@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -48,6 +48,17 @@ from .sampling import (
     pure_cartesian_image_lattice_mask,
     validate_pure_cartesian_image_lattice,
 )
+from .standard import (
+    DEFAULT_VIRTUAL_COILS,
+    prepared_artifact_records,
+    retained_energy_diagnostics,
+    standard_variant_name,
+    standard_variant_root,
+    validate_prepared_artifact_records,
+    validate_standard_pca_manifest,
+    validate_virtual_coils,
+    write_pca_basis,
+)
 
 NORMAL_INPUT_RELATIVE = Path("normal") / "bart_inputs"
 NORMAL_OUTPUT_RELATIVE = Path("normal") / "bart_output"
@@ -58,6 +69,7 @@ RETRO_CASES = (
     ("lr_y_1p5mm_r3x2", (1.0, 1.5)),
     ("lr_xy_1p25mm_r3x2", (1.25, 1.25)),
 )
+DEFAULT_RETRO_CASE_IDS = ("native_r3x2", "lr_y_1p5mm_r3x2")
 R3X3_CASE_ID = "native_r3x3"
 R3X3_WAVELET_LAMBDA = 0.045
 R3X3_SELECTION_MANIFEST_SHA256 = (
@@ -1813,6 +1825,7 @@ def _native_manifest_matches(
     twix_path: Path,
     sequence_path: Path,
     psf_settings: Mapping[str, Any],
+    virtual_coils: int | None = None,
 ) -> bool:
     """Check whether a native manifest matches sources and PSF settings.
 
@@ -1911,6 +1924,17 @@ def _native_manifest_matches(
         and spatial_settings_match
         and implementation_matches
         and _uses_alias_free_coil_calibration(manifest)
+        and (
+            virtual_coils is None
+            or (
+                manifest.get("standard_pca_variant")
+                == standard_variant_name(virtual_coils)
+                and int(
+                    manifest.get("coil_compression", {}).get("virtual_coils", 0)
+                )
+                == virtual_coils
+            )
+        )
     )
 
 
@@ -1919,6 +1943,7 @@ def _native_manifest_matches_reusable_artifact(
     twix_path: Path,
     sequence_path: Path,
     psf_settings: Mapping[str, Any],
+    virtual_coils: int | None = None,
 ) -> bool:
     """Check whether legacy normal artifacts are safe for retrospective reuse.
 
@@ -1947,6 +1972,17 @@ def _native_manifest_matches_reusable_artifact(
         or not isinstance(manifest.get("geometry"), Mapping)
         or not isinstance(manifest.get("sampling"), Mapping)
         or not _uses_alias_free_coil_calibration(manifest)
+        or (
+            virtual_coils is not None
+            and (
+                manifest.get("standard_pca_variant")
+                != standard_variant_name(virtual_coils)
+                or int(
+                    manifest.get("coil_compression", {}).get("virtual_coils", 0)
+                )
+                != virtual_coils
+            )
+        )
     ):
         return False
     recorded_psf = manifest.get("psf_calibration", {})
@@ -2169,6 +2205,7 @@ def prepare_normal_mprage(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
@@ -2185,6 +2222,8 @@ def prepare_normal_mprage(
         twix: Measured Wave-MPRAGE TWIX file.
         output_root: Dataset-specific output root.
         sequence: Pulseq sequence file used for the acquisition.
+        virtual_coils: Positive standard-PCA channel count. Every count writes
+            to its own immutable ``vccN`` source tree.
         psf_coefficient_processing: Upstream ``sine-line`` mode by default, or
             explicit ``smooth`` processing.
         psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
@@ -2211,6 +2250,7 @@ def prepare_normal_mprage(
 
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
     psf_settings = _normalize_psf_coefficient_settings(
         psf_coefficient_processing, psf_fit_kx_min, psf_fit_kx_max
     )
@@ -2225,16 +2265,22 @@ def prepare_normal_mprage(
     psf_settings["processing_implementation"] = (
         _psf_processing_implementation_identity()
     )
-    destination = Path(output_root).expanduser().resolve() / NORMAL_INPUT_RELATIVE
+    variant_name = standard_variant_name(virtual_coils)
+    variant_root = standard_variant_root(output_root, virtual_coils)
+    destination = variant_root / NORMAL_INPUT_RELATIVE
     manifest_path = destination / "manifest.json"
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
         exact_match = _native_manifest_matches(
-            existing, twix_path, sequence_path, psf_settings
+            existing, twix_path, sequence_path, psf_settings, virtual_coils
         )
         artifact_match = allow_legacy_artifact_reuse and (
             _native_manifest_matches_reusable_artifact(
-                existing, twix_path, sequence_path, psf_settings
+                existing,
+                twix_path,
+                sequence_path,
+                psf_settings,
+                virtual_coils,
             )
         )
         if not exact_match and not artifact_match:
@@ -2242,6 +2288,12 @@ def prepare_normal_mprage(
                 "Existing normal BART inputs use different sources, coil-calibration "
                 "processing, or PSF coefficient-processing settings."
             )
+        validate_standard_pca_manifest(
+            existing, virtual_coils, variant_name=variant_name
+        )
+        validate_prepared_artifact_records(
+            destination, existing.get("output_artifacts", {})
+        )
         for name in (
             "wave_kspace",
             "kspace_calib",
@@ -2297,9 +2349,9 @@ def prepare_normal_mprage(
             else None
         )
         if diagnostic is not None and exact_match:
-            expected_relative = f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+            expected_relative = f"{variant_name}/normal/{PSF_COEFFICIENT_PLOT_NAME}"
             expected_full_relative = (
-                f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
+                f"{variant_name}/normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
             )
             calibration = existing.setdefault("psf_calibration", {})
             recorded_relative = calibration.get(
@@ -2377,8 +2429,7 @@ def prepare_normal_mprage(
         raise ValueError(
             f"Integrated refscan readout {reference.shape[0]} does not match expected {ro_os}."
         )
-    if physical_coils < 12:
-        raise ValueError("MPRAGE BART preparation requires at least 12 physical receive coils.")
+    validate_virtual_coils(virtual_coils, physical_coils)
     # Compute one shared coil-compression basis from the integrated reference
     # scan, then apply it consistently to image and calibration data.
     integrated_acs_oversampled = reference[:, :nacs, :nacs, -1, :]
@@ -2396,9 +2447,12 @@ def prepare_normal_mprage(
         )
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
         integrated_acs,
-        ncc=12,
+        ncc=virtual_coils,
         acs=nacs,
         x_step=1,
+    )
+    basis_identity = write_pca_basis(
+        destination / "coil_compression_basis.npy", basis
     )
     compressed_acs = native.apply_cc_coillast_torch(
         integrated_acs, basis, x_chunk=8
@@ -2414,11 +2468,13 @@ def prepare_normal_mprage(
     )
     compressed = native.apply_cc_coillast_torch(full_image, basis, x_chunk=8)
     del full_image, image
-    if tuple(compressed_acs.shape) != (nro, nacs, nacs, 12):
+    if tuple(compressed_acs.shape) != (nro, nacs, nacs, virtual_coils):
         raise ValueError(f"Unexpected compressed ACS shape: {tuple(compressed_acs.shape)}.")
     if not torch.isfinite(compressed).all() or not torch.isfinite(compressed_acs).all():
         raise ValueError("Compressed image or calibration k-space contains non-finite values.")
-    calibration = torch.zeros((nro, nlin, npar, 12), dtype=torch.complex64)
+    calibration = torch.zeros(
+        (nro, nlin, npar, virtual_coils), dtype=torch.complex64
+    )
     lin_start = nlin // 2 - nacs // 2
     par_start = npar // 2 - nacs // 2
     calibration[
@@ -2513,11 +2569,15 @@ def prepare_normal_mprage(
     )
 
     # Persist BART arrays and the reusable physical calibration vectors.
-    wave_output = create_cfl(destination / "wave_kspace", (ro_os, nlin, npar, 12, 1))
+    wave_output = create_cfl(
+        destination / "wave_kspace", (ro_os, nlin, npar, virtual_coils, 1)
+    )
     wave_output[:, :, :, :, 0] = compressed.cpu().numpy()
     wave_output.flush()
     del wave_output
-    calibration_output = create_cfl(destination / "kspace_calib", (nro, nlin, npar, 12))
+    calibration_output = create_cfl(
+        destination / "kspace_calib", (nro, nlin, npar, virtual_coils)
+    )
     calibration_output[:] = calibration.cpu().numpy()
     calibration_output.flush()
     del calibration_output
@@ -2555,9 +2615,28 @@ def prepare_normal_mprage(
     physical_fov_mm_xyz = tuple(
         float(value) * 1000.0 for value in upstream_geometry["FOVxyz"]
     )
+    (destination / "sampling_class.txt").write_text(
+        sampling.name + "\n", encoding="utf-8"
+    )
+    energy = retained_energy_diagnostics(retained_energy, virtual_coils)
+    output_artifacts = prepared_artifact_records(
+        destination,
+        (
+            "wave_kspace",
+            "kspace_calib",
+            "psf",
+            "wave_trajectory",
+            "psf_coefficients",
+            "psf_coefficients_raw",
+            "psf_coefficients_processing_input",
+            "psf_coefficient_c_branch_turns",
+        ),
+        ("coil_compression_basis.npy", "sampling_class.txt"),
+    )
     manifest: dict[str, Any] = {
-        "format_version": 3,
+        "format_version": 4,
         "status": "measured_wave_mprage_bart_inputs_ready",
+        "standard_pca_variant": variant_name,
         "source": {
             "twix": _file_identity(twix_path),
             "sequence": _file_identity(sequence_path, include_hash=True),
@@ -2575,10 +2654,15 @@ def prepare_normal_mprage(
         "sampling": sampling.to_json(),
         "coil_compression": {
             "physical_coils": physical_coils,
-            "virtual_coils": 12,
+            "virtual_coils": virtual_coils,
             "method": "integrated ACS covariance eigendecomposition",
-            "retained_energy": float(retained_energy[11]),
-            "leading_singular_values": [float(value) for value in singular_values[:12]],
+            "basis_source": "alias-free integrated set-4 ACS",
+            "basis": basis_identity,
+            "retained_energy": energy["selected"],
+            "retained_energy_diagnostics": energy,
+            "leading_singular_values": [
+                float(value) for value in singular_values[:virtual_coils]
+            ],
             "readout_oversampling_removal": {
                 **COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL,
                 "oversampling_factor": os_factor,
@@ -2609,7 +2693,7 @@ def prepare_normal_mprage(
             **(
                 {
                     "visual_assessment_plot_relative_to_output_root": (
-                        f"normal/{PSF_COEFFICIENT_PLOT_NAME}"
+                        f"{variant_name}/normal/{PSF_COEFFICIENT_PLOT_NAME}"
                     )
                 }
                 if diagnostic is not None
@@ -2618,16 +2702,16 @@ def prepare_normal_mprage(
             **(
                 {
                     "full_range_plot_relative_to_output_root": (
-                        f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
+                        f"{variant_name}/normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
                     ),
                     "plane_comparison_plot_relative_to_output_root": (
-                        f"normal/{PSF_PLANE_COMPARISON_PLOT_NAME}"
+                        f"{variant_name}/normal/{PSF_PLANE_COMPARISON_PLOT_NAME}"
                     ),
                 }
                 if plane_diagnostic is not None
                 else {
                     "full_range_plot_relative_to_output_root": (
-                        f"normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
+                        f"{variant_name}/normal/{PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME}"
                     )
                 }
             ),
@@ -2645,10 +2729,10 @@ def prepare_normal_mprage(
                 "psf_shape": list(read_shape(destination / "psf")),
             }
         ],
+        "output_artifacts": output_artifacts,
         "prepared_at_utc": _utc_now(),
     }
     _write_json(manifest_path, manifest)
-    (destination / "sampling_class.txt").write_text(sampling.name + "\n", encoding="utf-8")
     print(f"Prepared normal measured-Wave BART inputs: {destination}")
     return manifest
 
@@ -2680,6 +2764,8 @@ def prepare_retro_mprage(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
+    case_ids: Sequence[str] = DEFAULT_RETRO_CASE_IDS,
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
@@ -2688,12 +2774,15 @@ def prepare_retro_mprage(
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Prepare native R3x2 and three direct-crop LR R3x2 BART input sets.
+    """Prepare selected direct-measured R3x2 MPRAGE BART input sets.
 
     Args:
         twix: Measured Wave-MPRAGE TWIX file.
         output_root: Dataset-specific output root shared with normal preparation.
         sequence: Pulseq sequence file used for the acquisition.
+        virtual_coils: Positive standard-PCA channel count.
+        case_ids: Compatible R3x2 case identifiers to prepare. The default is
+            native R3x2 plus LR-Y R3x2; LR-X and LR-XY remain explicit options.
         psf_coefficient_processing: Upstream ``sine-line`` mode by default, or
             explicit ``smooth`` processing.
         psf_fit_kx_min: Inclusive first sine-line fitting index, if selected.
@@ -2712,11 +2801,14 @@ def prepare_retro_mprage(
         FileExistsError: If an incompatible case input directory is non-empty.
     """
 
-    output_path = Path(output_root).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
+    variant_name = standard_variant_name(virtual_coils)
+    output_path = standard_variant_root(output_root, virtual_coils)
     normal = prepare_normal_mprage(
         twix,
-        output_path,
+        output_root,
         sequence,
+        virtual_coils=virtual_coils,
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
@@ -2750,7 +2842,20 @@ def prepare_retro_mprage(
     # Resolve requested physical resolutions to the nearest centered PE grids
     # whose dimensions remain divisible by four.
     resolved_cases = []
-    for directory_name, requested_xy in RETRO_CASES:
+    requested_case_ids = tuple(str(value) for value in case_ids)
+    known_cases = {name: requested for name, requested in RETRO_CASES}
+    if (
+        not requested_case_ids
+        or len(set(requested_case_ids)) != len(requested_case_ids)
+        or any(value not in known_cases for value in requested_case_ids)
+    ):
+        raise ValueError(
+            "MPRAGE retrospective case IDs must be a non-empty unique subset of: "
+            + ", ".join(known_cases)
+            + "."
+        )
+    for directory_name in requested_case_ids:
+        requested_xy = known_cases[directory_name]
         requested = (
             native_resolution
             if requested_xy is None
@@ -2773,10 +2878,20 @@ def prepare_retro_mprage(
         manifest_path = inputs / "manifest.json"
         if manifest_path.is_file():
             existing = _load_json(manifest_path)
-            if existing.get("source") != source_identity or existing.get("case") != case.to_json():
+            if (
+                existing.get("source") != source_identity
+                or existing.get("case") != case.to_json()
+                or existing.get("standard_pca_variant") != variant_name
+                or int(existing.get("virtual_coils", 0)) != virtual_coils
+                or existing.get("source_normal_manifest_identity", {}).get("sha256")
+                != sha256_file(normal_inputs / "manifest.json")
+            ):
                 raise ValueError(f"Existing retrospective case has different inputs: {case_dir}")
             for name in ("wave_kspace", "psf"):
                 read_shape(inputs / name)
+            validate_prepared_artifact_records(
+                inputs, existing.get("output_artifacts", {})
+            )
             print(f"Reusing compatible retrospective BART inputs: {inputs}")
             results.append(existing)
             continue
@@ -2805,10 +2920,16 @@ def prepare_retro_mprage(
             source_sampling.acceleration_lin_par,
         )
         manifest = {
-            "format_version": 1,
+            "format_version": 2,
             "status": "direct_measured_wave_crop_bart_inputs_ready",
+            "standard_pca_variant": variant_name,
+            "virtual_coils": virtual_coils,
             "source": source_identity,
             "source_normal_manifest": str(normal_inputs / "manifest.json"),
+            "source_normal_manifest_identity": {
+                "path": str(normal_inputs / "manifest.json"),
+                "sha256": sha256_file(normal_inputs / "manifest.json"),
+            },
             "case_directory": directory_name,
             "case": case.to_json(),
             "operator": "direct center crop of measured Wave k-space in LIN/PAR",
@@ -2826,8 +2947,11 @@ def prepare_retro_mprage(
                 }
             ],
             "sampling": crop_metrics,
-            "prepared_at_utc": _utc_now(),
         }
+        manifest["output_artifacts"] = prepared_artifact_records(
+            inputs, ("wave_kspace", "psf")
+        )
+        manifest["prepared_at_utc"] = _utc_now()
         _write_json(manifest_path, manifest)
         print(
             f"Prepared {directory_name}: logical={case.target_logical_matrix_ro_lin_par}, "
@@ -2837,8 +2961,10 @@ def prepare_retro_mprage(
     _write_json(
         retro_root / "manifest.json",
         {
-            "format_version": 1,
+            "format_version": 2,
             "status": "mprage_retro_cases_ready",
+            "standard_pca_variant": variant_name,
+            "virtual_coils": virtual_coils,
             "source": source_identity,
             "normal_inputs": str(normal_inputs),
             "cases": [payload["case_directory"] for payload in results],
@@ -2899,6 +3025,7 @@ def prepare_retro_mprage_r3x3(
     output_root: str | Path,
     sequence: str | Path,
     *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
@@ -2919,6 +3046,7 @@ def prepare_retro_mprage_r3x3(
         twix: Native measured R1 or single-residue R3x1 Wave-MPRAGE TWIX file.
         output_root: Dataset root shared with compatible normal preparation.
         sequence: Matching integrated Wave-MPRAGE sequence.
+        virtual_coils: Positive standard-PCA channel count.
         psf_coefficient_processing: Existing normal PSF processing contract.
         psf_fit_kx_min: Optional inclusive sine-line fitting index.
         psf_fit_kx_max: Optional exclusive sine-line fitting index.
@@ -2935,11 +3063,14 @@ def prepare_retro_mprage_r3x3(
             data contract differs from native R3x3.
         FileExistsError: If an incompatible partial case directory exists.
     """
-    root = Path(output_root).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
+    variant_name = standard_variant_name(virtual_coils)
+    root = standard_variant_root(output_root, virtual_coils)
     normal = prepare_normal_mprage(
         twix,
-        root,
+        output_root,
         sequence,
+        virtual_coils=virtual_coils,
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
@@ -2984,12 +3115,21 @@ def prepare_retro_mprage_r3x3(
     }
     if manifest_path.is_file():
         existing = _load_json(manifest_path)
+        source_normal_identity = existing.get(
+            "source_normal_manifest_identity",
+            existing.get("source_normal_manifest", {}),
+        )
         if (
             existing.get("source") != normal["source"]
             or existing.get("case") != case.to_json()
             or existing.get("sampling", {}).get("logical_sha256")
             != sampling["logical_sha256"]
             or existing.get("selected_regularization") != selection
+            or existing.get("standard_pca_variant") != variant_name
+            or int(existing.get("virtual_coils", 0)) != virtual_coils
+            or not isinstance(source_normal_identity, Mapping)
+            or source_normal_identity.get("sha256")
+            != sha256_file(normal_inputs / "manifest.json")
         ):
             raise ValueError(f"Existing native R3x3 inputs are incompatible: {inputs}")
         mask = np.load(inputs / "sampling_mask.npy", allow_pickle=False)
@@ -2997,6 +3137,9 @@ def prepare_retro_mprage_r3x3(
         read_shape(inputs / "psf")
         _validate_same_grid_masked_wave(
             normal_inputs / "wave_kspace", inputs / "wave_kspace", mask
+        )
+        validate_prepared_artifact_records(
+            inputs, existing.get("output_artifacts", {})
         )
         print(f"Reusing compatible native R3x3 BART inputs: {inputs}")
         return existing
@@ -3022,10 +3165,13 @@ def prepare_retro_mprage_r3x3(
     if read_shape(inputs / "psf")[:3] != read_shape(normal_inputs / "psf")[:3]:
         raise ValueError("Native R3x3 PSF link changed geometry.")
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "status": "direct_measured_wave_r3x3_bart_inputs_ready",
+        "standard_pca_variant": variant_name,
+        "virtual_coils": virtual_coils,
         "source": normal["source"],
-        "source_normal_manifest": {
+        "source_normal_manifest": str(normal_inputs / "manifest.json"),
+        "source_normal_manifest_identity": {
             "path": str(normal_inputs / "manifest.json"),
             "sha256": sha256_file(normal_inputs / "manifest.json"),
         },
@@ -3055,8 +3201,11 @@ def prepare_retro_mprage_r3x3(
         },
         "calibration_kspace_included": False,
         "selected_regularization": selection,
-        "prepared_at_utc": _utc_now(),
     }
+    manifest["output_artifacts"] = prepared_artifact_records(
+        inputs, ("wave_kspace", "psf"), ("sampling_mask.npy",)
+    )
+    manifest["prepared_at_utc"] = _utc_now()
     _write_json(manifest_path, manifest)
     print(
         f"Prepared {R3X3_CASE_ID}: logical={case.target_logical_matrix_ro_lin_par}, "
@@ -3065,12 +3214,17 @@ def prepare_retro_mprage_r3x3(
     return manifest
 
 
-def prepare_retro_sensitivity_maps(output_root: str | Path) -> None:
+def prepare_retro_sensitivity_maps(
+    output_root: str | Path,
+    *,
+    virtual_coils: int = DEFAULT_VIRTUAL_COILS,
+) -> None:
     """Derive all LR CSM grids from the one native BART ecalib result.
 
     Args:
         output_root: Dataset-specific output root containing normal and retro
             BART inputs and the native ``coil_sens`` result.
+        virtual_coils: Positive standard-PCA channel count selecting ``vccN``.
 
     Returns:
         None.
@@ -3079,7 +3233,8 @@ def prepare_retro_sensitivity_maps(output_root: str | Path) -> None:
         ValueError: If an existing low-resolution map has the wrong grid.
     """
 
-    root = Path(output_root).expanduser().resolve()
+    virtual_coils = validate_virtual_coils(virtual_coils)
+    root = standard_variant_root(output_root, virtual_coils)
     source_maps = root / NORMAL_OUTPUT_RELATIVE / "coil_sens"
     read_shape(source_maps)
     retro_root = root / RETRO_RELATIVE
@@ -3087,6 +3242,8 @@ def prepare_retro_sensitivity_maps(output_root: str | Path) -> None:
         if requested_xy is None:
             continue
         inputs = retro_root / directory_name / "bart_inputs"
+        if not (inputs / "manifest.json").is_file():
+            continue
         manifest = _load_json(inputs / "manifest.json")
         target = tuple(int(value) for value in manifest["case"]["target_logical_matrix_ro_lin_par"])
         output_maps = inputs / "coil_sens"

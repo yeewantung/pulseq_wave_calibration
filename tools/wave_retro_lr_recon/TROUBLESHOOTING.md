@@ -1,5 +1,50 @@
 # Wave reconstruction troubleshooting
 
+## A standard run is using the wrong virtual-coil tree
+
+Every new standard-PCA run belongs below `OUTPUT_ROOT/vccN`, with Ncc=24 as
+the default. An explicit `--virtual-coils 12` creates `vcc12`; it never reuses
+or rewrites historical root-level `normal/` and `retro/`. If Ncc, PCA-basis
+hash, source, geometry, CSM command, PSF, prepared-artifact hash, or branch-run
+manifest differs, reuse fails closed. Do not edit manifests or copy a CSM
+between counts; rerun with the intended count so preparation and ecalib remain
+matched.
+
+If preparation stops before writing `bart_inputs/manifest.json`, the non-empty
+directory is deliberately not resumed because its PCA basis and large CFL
+payloads do not yet have an immutable completion record. Preserve the failed
+directory under a diagnostic name, then rerun the same launcher so a clean
+`bart_inputs` directory is created. Do not copy individual CFL files into the
+new directory. A completed manifest is reusable only after all recorded hashes
+and dimensions pass validation.
+
+Early count-specific native-R3x3 manifests stored their exact normal-manifest
+identity directly in `source_normal_manifest`; current manifests use
+`source_normal_manifest_identity` while retaining the path separately. The
+validator accepts the early representation only when its recorded SHA-256
+equals the selected normal manifest. A genuine hash difference remains fatal
+and must not be repaired by editing either manifest.
+
+Wavelet constants inherited from the Ncc=12 studies are written under
+`wavelet_transferred_vcc12`. The reviewed MPRAGE Ncc=24 native-R3x1 selection
+is instead written under `wavelet_selected_vcc24` at `lambda=3e-2`; it is not
+extrapolated to retrospective cases. GRE remains transferred until its compact
+native-R3x1 assessment is reviewed. GRE candidates must use one lambda across
+all echoes and preserve magnitude, wrapped phase, inter-echo scaling, and
+delta-B0 review. The software does not select a winner automatically.
+
+## A profile or ROVir invocation is rejected
+
+Choose exactly one of `--reg-full`, `--wavelet-only`, or `--fista-only`.
+Normal defaults to Wavelet-only and retro defaults to FISTA-only. MPRAGE R1
+must use FISTA-only. `--rovir` uses its canonical transform independently;
+combining it with an explicit standard `--virtual-coils` value or standard
+profile/CSM/PSF overrides is rejected rather than reinterpreted.
+
+The collection accepts asymmetric completed branches. A normal-only Wavelet
+branch and retro-only FISTA branch are valid. For new variants, missing or
+altered reconstruction manifests cannot be repaired by copying NIfTIs.
+
 ## Existing MPRAGE normal inputs are rejected after the readout-crop fix
 
 Integrated set-4 ACS must remove readout oversampling with a centered
@@ -18,6 +63,8 @@ be copied into normal reconstruction commands:
 
 | Record | SHA-256 |
 | --- | --- |
+| MPRAGE VCC24 native-R3x1 metric provenance used for manual `3e-2` selection | `f4f199eae91077b25f742249912da4800a57198b4d742ce5847e01dceb601b78` |
+| MPRAGE VCC24 native-R3x1 metric CSV | `ca5ea4689cd947e0e989d808bd73ae0f4f812b73b4871a6eb69d0c783bcc80f8` |
 | Corrected five-case MPRAGE selection manifest | `07cd8fe9f859ee125e76a338a30fcfc5e79c4c2f46ca9c43d5f454ec32ea90f6` |
 | Native-R3x3 logical mask on the reviewed `256 x 256` grid, residue `(1, 2)` | `36412ff8771b49c3f60b7b2d6ff766101a99334d73811c75d4b45571b2b536f3` |
 | Native-R3x3 MPRAGE selection manifest | `07fec1879821dcef6cd177766224f23930a0c556c96a28055a339c6530b6002d` |
@@ -86,10 +133,10 @@ masking step is part of the measured GRE workflow or its NIfTI collection.
 The GRE collection is intentionally unmasked. If
 `sample_gre_nifti_collection.sh` rejects an input, fix or regenerate the
 incomplete canonical branch rather than adding a mask or copying files by
-hand. Use `--require-retro` only after both established retrospective
-geometries have completed; if `retro/native_r3x3` has been started, both of its
-branches must also be complete. Rerunning the collector atomically appends newly
-discovered R3x3 outputs and refuses to drop any previously collected group.
+hand. Use `--require-retro` only after the default retrospective geometries
+have at least one complete requested branch. Normal and retro need not contain
+the same branches. Rerunning the collector atomically appends newly discovered
+outputs and refuses to drop any previously collected group.
 The collection destination must be a
 tool-owned `OUTPUT_ROOT/nifti_collection`; unexpected or locally modified files
 there cause a hard failure instead of being overwritten.

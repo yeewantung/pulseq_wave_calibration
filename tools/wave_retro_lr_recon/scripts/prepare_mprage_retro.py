@@ -11,7 +11,11 @@ from typing import Sequence
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
-from wave_retro_lr.mprage import prepare_retro_mprage  # noqa: E402
+from wave_retro_lr.mprage import (  # noqa: E402
+    DEFAULT_RETRO_CASE_IDS,
+    prepare_retro_mprage,
+)
+from wave_retro_lr.standard import DEFAULT_VIRTUAL_COILS  # noqa: E402
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -28,6 +32,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.twix,
         args.output,
         args.seq,
+        virtual_coils=args.virtual_coils,
+        case_ids=DEFAULT_RETRO_CASE_IDS if args.case is None else args.case,
         psf_coefficient_processing=args.psf_coefficient_processing,
         psf_fit_kx_min=args.psf_fit_kx_min,
         psf_fit_kx_max=args.psf_fit_kx_max,
@@ -53,6 +59,24 @@ def _parser() -> argparse.ArgumentParser:
         "output", type=Path, help="Same dataset output root used by the normal script."
     )
     parser.add_argument("seq", type=Path, help="Matching integrated Wave-MPRAGE sequence.")
+    parser.add_argument(
+        "--virtual-coils",
+        type=int,
+        default=DEFAULT_VIRTUAL_COILS,
+        help="Standard-PCA channel count written below OUTPUT_ROOT/vccN.",
+    )
+    parser.add_argument(
+        "--case",
+        action="append",
+        choices=(
+            "native_r3x2",
+            "lr_x_1p5mm_r3x2",
+            "lr_y_1p5mm_r3x2",
+            "lr_xy_1p25mm_r3x2",
+        ),
+        default=None,
+        help="R3x2 case to prepare; repeat to override the reduced default set.",
+    )
     parser.add_argument(
         "--psf-coefficient-processing",
         choices=("smooth", "sine-line"),

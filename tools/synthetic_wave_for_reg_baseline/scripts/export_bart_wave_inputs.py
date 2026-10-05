@@ -5,11 +5,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+
+TOOL_ROOT = Path(__file__).resolve().parents[1]
+RETRO_TOOL_ROOT = TOOL_ROOT.parent / "wave_retro_lr_recon"
+
+if str(RETRO_TOOL_ROOT) not in sys.path:
+    sys.path.insert(0, str(RETRO_TOOL_ROOT))
+
+from wave_retro_lr.sampling import (  # noqa: E402
+    PURE_CARTESIAN_IMAGE_LATTICE,
+    pure_cartesian_image_lattice_mask,
+)
 
 from checkpoint_io import write_json_atomic
 from dataset_manifest import (
@@ -35,6 +47,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--visual-review-approved",
         action="store_true",
         help="Required acknowledgement that the full-Wave diagnostics were approved.",
+    )
+    parser.add_argument(
+        "--one-shot-sweep",
+        action="store_true",
+        help=(
+            "Allow pure-lattice sweep export after the hash-bound full-sampling "
+            "operator gate, without claiming an intermediate visual review."
+        ),
     )
     parser.add_argument("--pe2-chunk", type=int, default=8)
     parser.add_argument("--overwrite", action="store_true")
@@ -125,8 +145,12 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "--dataset-manifest cannot be combined with --synthesis-dir, "
             "--sampling-report, or --overwrite"
         )
-    if not args.visual_review_approved:
-        raise ValueError("Refusing export without full-Wave visual-review approval.")
+    if args.visual_review_approved and args.one_shot_sweep:
+        raise ValueError("Choose visual review or one-shot sweep export, not both.")
+    if not args.visual_review_approved and not args.one_shot_sweep:
+        raise ValueError(
+            "Export requires --visual-review-approved or --one-shot-sweep."
+        )
 
     dataset = load_dataset_manifest(args.dataset_manifest)
     load_passed_inspection(dataset)
@@ -141,6 +165,29 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("Full-Wave synthesis has not reached the visual-review gate.")
     if source_manifest.get("dataset_manifest", {}).get("sha256") != dataset.sha256:
         raise ValueError("Full-Wave synthesis uses a stale dataset manifest.")
+    operator_validation = None
+    if args.one_shot_sweep:
+        operator_path = (
+            dataset.output_root
+            / "evaluation"
+            / "full_sampling_wave_operator_validation"
+            / "operator_validation_manifest.json"
+        )
+        if not operator_path.is_file():
+            raise FileNotFoundError(operator_path)
+        operator_document = json.loads(operator_path.read_text(encoding="utf-8"))
+        if (
+            operator_document.get("status") != "passed"
+            or operator_document.get("dataset_manifest", {}).get("sha256")
+            != dataset.sha256
+            or operator_document.get("synthesis_manifest", {}).get("sha256")
+            != source_manifest_sha256
+        ):
+            raise ValueError("One-shot export requires the matching passed operator gate.")
+        operator_validation = {
+            "path": str(operator_path),
+            "sha256": sha256_file(operator_path),
+        }
 
     full_wave_info = source_manifest.get("full_wave_kspace", {})
     if full_wave_info.get("sampling_mask_applied") is not False:
@@ -178,6 +225,9 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("BART PSF differs from the validated synthesis PSF.")
 
     config = _manifest_mask_config(contract)
+    config["authorization_mode"] = (
+        "one_shot_operator_gate" if args.one_shot_sweep else "visual_review"
+    )
     manifest_path = output_dir / "manifest.json"
     if args.resume and _completed_manifest_export_reusable(
         manifest_path,
@@ -211,20 +261,31 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
             "path": str(source_manifest_path),
             "sha256": source_manifest_sha256,
         },
+        "operator_validation": operator_validation,
         "config": config,
         "mask_application_order": "full source -> Wave encoding -> target sampling mask",
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     _write_json(manifest_path, started)
 
-    mask, mask_info = historical_cartesian_with_full_pe1_acs_mask(
-        expected_shape[1:3],
-        accelerations=(config["pe1_acceleration"], config["pe2_acceleration"]),
-        residues=(config["pe1_residue"], config["pe2_residue"]),
-        fully_sampled_pe1_lines=np.arange(
-            config["acs_pe1_start"], config["acs_pe1_stop_exclusive"]
-        ),
-    )
+    if config["mask_kind"] == PURE_CARTESIAN_IMAGE_LATTICE:
+        mask, mask_info = pure_cartesian_image_lattice_mask(
+            expected_shape[1:3],
+            acceleration_lin_par=(
+                config["pe1_acceleration"],
+                config["pe2_acceleration"],
+            ),
+            residue_lin_par=(config["pe1_residue"], config["pe2_residue"]),
+        )
+    else:
+        mask, mask_info = historical_cartesian_with_full_pe1_acs_mask(
+            expected_shape[1:3],
+            accelerations=(config["pe1_acceleration"], config["pe2_acceleration"]),
+            residues=(config["pe1_residue"], config["pe2_residue"]),
+            fully_sampled_pe1_lines=np.arange(
+                config["acs_pe1_start"], config["acs_pe1_stop_exclusive"]
+            ),
+        )
     mask_path = output_dir / "sampling_mask.npy"
     if mask_path.exists() and not recover_incomplete:
         raise FileExistsError(mask_path)
@@ -276,6 +337,11 @@ def _run_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "dimension_order": ["READ", "PHS1", "PHS2", "COIL", "MAPS"],
         "dataset_manifest": dataset.provenance(),
         "source_synthesis_manifest": started["source_synthesis_manifest"],
+        "visual_review": {
+            "approved": bool(args.visual_review_approved),
+            "one_shot_sweep": bool(args.one_shot_sweep),
+            "operator_validation": operator_validation,
+        },
         "sampling_mask": mask_info,
         "full_wave_kspace": full_wave_info,
         "masked_wave_kspace": kspace_info,

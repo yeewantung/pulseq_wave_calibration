@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -26,6 +27,11 @@ from scipy.ndimage import (
 )
 
 from .bart_io import sha256_file
+from .reconstruction_state import validate_completed_reconstruction_manifest
+from .standard import (
+    validate_prepared_artifact_records,
+    validate_standard_pca_manifest,
+)
 
 
 COLLECTION_BUILDER = "wave_retro_lr.nifti_collection"
@@ -33,6 +39,9 @@ RECONSTRUCTION_BRANCHES = ("fista_r0", "optimal_wavelet")
 MASK_BRANCH_PREFERENCE = (
     "rovir_optimal_wavelet",
     "rovir_fista_r0",
+    "wavelet_selected_vcc24",
+    "wavelet_candidate",
+    "wavelet_transferred_vcc12",
     "optimal_wavelet",
     "fista_r0",
 )
@@ -43,6 +52,11 @@ REQUIRED_RETRO_CASES = (
     "lr_xy_1p25mm_r3x2",
 )
 OPTIONAL_RETRO_CASES = (
+    "native_r3x3",
+)
+STANDARD_DEFAULT_RETRO_CASES = (
+    "native_r3x2",
+    "lr_y_1p5mm_r3x2",
     "native_r3x3",
 )
 RETRO_CASES = (*REQUIRED_RETRO_CASES, *OPTIONAL_RETRO_CASES)
@@ -119,47 +133,130 @@ def build_mprage_nifti_collection(
 
     collection = root / "nifti_collection"
     previous_manifest = _validate_existing_collection(collection)
-    sampling_class = _read_sampling_class(root)
-    branch_sources = _discover_case_sources(
-        root, sampling_class=sampling_class, require_retro=require_retro
-    )
-    synchronization = _collection_synchronization(
-        previous_manifest, branch_sources
-    )
-    missing_previous = synchronization["no_longer_discovered_case_groups"]
+    variants = _discover_collection_variants(root, require_retro=require_retro)
+    discovered_groups = {
+        f"{variant['collection_id']}:{branch}:{case}"
+        for variant in variants
+        for branch, cases in variant["sources"].items()
+        for case in cases
+    }
+    previous_groups = _previous_variant_groups(previous_manifest)
+    missing_previous = sorted(previous_groups - discovered_groups)
     if missing_previous:
         raise FileNotFoundError(
             "Previously collected reconstruction groups are no longer discoverable; "
             f"refusing to remove them during synchronization: {missing_previous}."
         )
-    normal_branches = [
-        branch for branch, cases in branch_sources.items() if "normal" in cases
-    ]
-    mask_branch = next(
-        (
-            branch
-            for branch in (*MASK_BRANCH_PREFERENCE, *normal_branches)
-            if branch in normal_branches
-        )
-    )
-    normal_magnitude = _select_normal_magnitude(branch_sources[mask_branch]["normal"])
-    normal_image, _ = _load_validated_nifti(normal_magnitude)
-    head_mask, mask_details = create_whole_head_mask(normal_image, mask_parameters)
 
     staging = Path(tempfile.mkdtemp(prefix=".nifti_collection-", dir=root))
     try:
-        manifest = _materialize_collection(
-            staging,
-            root,
-            branch_sources,
-            mask_branch,
-            normal_magnitude,
-            head_mask,
-            mask_parameters,
-            mask_details,
-            sampling_class,
+        variant_records: list[dict[str, Any]] = []
+        flattened_cases: list[dict[str, Any]] = []
+        for variant in variants:
+            target = staging / variant["collection_relative"]
+            target.mkdir(parents=True, exist_ok=True)
+            branch_sources = variant["sources"]
+            normal_branches = [
+                branch for branch, cases in branch_sources.items() if "normal" in cases
+            ]
+            mask_branch = next(
+                branch
+                for branch in (*MASK_BRANCH_PREFERENCE, *normal_branches)
+                if branch in normal_branches
+            )
+            normal_magnitude = _select_normal_magnitude(
+                branch_sources[mask_branch]["normal"]
+            )
+            normal_image, _ = _load_validated_nifti(normal_magnitude)
+            head_mask, mask_details = create_whole_head_mask(
+                normal_image, mask_parameters
+            )
+            subtree = _materialize_collection(
+                target,
+                root,
+                branch_sources,
+                mask_branch,
+                normal_magnitude,
+                head_mask,
+                mask_parameters,
+                mask_details,
+                variant["sampling_class"],
+            )
+            subtree["collection_id"] = variant["collection_id"]
+            subtree["source_contract"] = variant["source_contract"]
+            for case in subtree["cases"]:
+                case["collection_id"] = variant["collection_id"]
+                run_key = f"{case['branch']}:{case['case']}"
+                if run_key in variant["run_manifests"]:
+                    case["reconstruction_manifest"] = variant["run_manifests"][run_key]
+                flattened_cases.append(case)
+            relative = Path(variant["collection_relative"])
+            if relative != Path("."):
+                subtree_manifest = target / "manifest.json"
+                _write_json(subtree_manifest, subtree)
+                manifest_record = {
+                    "path": str(subtree_manifest.relative_to(staging)),
+                    "sha256": sha256_file(subtree_manifest),
+                }
+            else:
+                manifest_record = None
+            variant_records.append(
+                {
+                    "collection_id": variant["collection_id"],
+                    "kind": variant["kind"],
+                    "collection_relative": str(relative),
+                    "source_contract": variant["source_contract"],
+                    "subtree_manifest": manifest_record,
+                    "case_groups": sorted(
+                        f"{branch}:{case}"
+                        for branch, cases in branch_sources.items()
+                        for case in cases
+                    ),
+                    "head_mask": subtree["head_mask"],
+                }
+            )
+        owned_files = {
+            str(path.relative_to(staging)): sha256_file(path)
+            for path in sorted(staging.rglob("*"))
+            if path.is_file()
+        }
+        manifest = {
+            "format_version": 5,
+            "builder": COLLECTION_BUILDER,
+            "status": "complete",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "collection_layout": "one top-level collection with legacy, vccN, and rovir variants",
+            "variants": variant_records,
+            "cases": flattened_cases,
+            "owned_files": owned_files,
+            "synchronization": {
+                "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
+                "previous_case_groups": sorted(previous_groups),
+                "discovered_case_groups": sorted(discovered_groups),
+                "retained_case_groups": sorted(previous_groups & discovered_groups),
+                "added_case_groups": sorted(discovered_groups - previous_groups),
+                "rovir_replacements": [],
+                "no_longer_discovered_case_groups": missing_previous,
+            },
+        }
+        # Preserve the established top-level fields when a historical VCC=12
+        # tree is present. New variants still carry independent subtree masks.
+        legacy = next(
+            (
+                record
+                for record in variant_records
+                if record["collection_id"] == "legacy_vcc12"
+            ),
+            None,
         )
-        manifest["synchronization"] = synchronization
+        if legacy is not None:
+            manifest["head_mask"] = legacy["head_mask"]
+            manifest["scientific_scope"] = {
+                "canonical_reconstruction_outputs_modified": False,
+                "original_niftis_copied_byte_for_byte": True,
+                "same_whole_head_mask_applied_to_all_branches": True,
+                "standard_variants_and_rovir_are_additive": True,
+            }
         _write_json(staging / "manifest.json", manifest)
         _replace_owned_collection(staging, collection)
     except Exception:
@@ -167,6 +264,237 @@ def build_mprage_nifti_collection(
             shutil.rmtree(staging)
         raise
     return manifest
+
+
+def _discover_collection_variants(
+    root: Path, *, require_retro: bool
+) -> list[dict[str, Any]]:
+    """Discover legacy, count-specific, and canonical ROVir source trees.
+
+    Args:
+        root: User-selected reconstruction root.
+        require_retro: Whether each standard variant must contain its complete
+            modality-specific retrospective case set.
+
+    Returns:
+        Ordered source-tree records ready for independent materialization.
+
+    Raises:
+        FileNotFoundError: If no complete normal source tree is discoverable.
+        ValueError: If a ``vccN`` directory records another Ncc or changed
+            preparation/reconstruction provenance.
+    """
+
+    variants: list[dict[str, Any]] = []
+    legacy_normal = root / "normal" / "nifti"
+    if legacy_normal.is_dir():
+        sampling_class = _read_sampling_class(root)
+        sources = _discover_case_sources(
+            root,
+            sampling_class=sampling_class,
+            require_retro=require_retro,
+            required_case_ids=REQUIRED_RETRO_CASES,
+            include_rovir=False,
+        )
+        normal_manifest = root / "normal" / "bart_inputs" / "manifest.json"
+        source_manifest = (
+            {
+                "source_manifest": str(normal_manifest.relative_to(root)),
+                "source_manifest_sha256": sha256_file(normal_manifest),
+            }
+            if normal_manifest.is_file()
+            else {
+                "source_manifest": None,
+                "source_manifest_sha256": None,
+                "legacy_manifest_unavailable": True,
+            }
+        )
+        variants.append(
+            {
+                "collection_id": "legacy_vcc12",
+                "kind": "legacy_standard_pca",
+                "collection_relative": Path("."),
+                "sampling_class": sampling_class,
+                "sources": sources,
+                "run_manifests": {},
+                "source_contract": {
+                    "historical_root_level_vcc12": True,
+                    **source_manifest,
+                    "relabeled_or_modified": False,
+                },
+            }
+        )
+
+    count_variants = []
+    for directory in root.iterdir():
+        match = re.fullmatch(r"vcc([1-9][0-9]*)", directory.name)
+        if match is None or not directory.is_dir():
+            continue
+        count_variants.append((int(match.group(1)), directory))
+    for count, directory in sorted(count_variants):
+        normal_manifest = directory / "normal" / "bart_inputs" / "manifest.json"
+        normal_nifti = directory / "normal" / "nifti"
+        if not normal_manifest.is_file() or not normal_nifti.is_dir():
+            continue
+        payload = _load_json(normal_manifest)
+        compression = validate_standard_pca_manifest(
+            payload, count, variant_name=directory.name
+        )
+        validate_prepared_artifact_records(
+            normal_manifest.parent, payload.get("output_artifacts", {})
+        )
+        sampling_class = _read_sampling_class(directory)
+        sources = _discover_case_sources(
+            directory,
+            sampling_class=sampling_class,
+            require_retro=require_retro,
+            required_case_ids=STANDARD_DEFAULT_RETRO_CASES,
+            include_rovir=False,
+        )
+        run_manifests = _validate_standard_run_manifests(directory, sources, count)
+        variants.append(
+            {
+                "collection_id": directory.name,
+                "kind": "standard_pca",
+                "collection_relative": Path(directory.name),
+                "sampling_class": sampling_class,
+                "sources": sources,
+                "run_manifests": run_manifests,
+                "source_contract": {
+                    "virtual_coils": count,
+                    "physical_coils": int(compression["physical_coils"]),
+                    "retained_energy": float(compression["retained_energy"]),
+                    "compression_basis": dict(compression["basis"]),
+                    "geometry": payload.get("geometry"),
+                    "source": payload.get("source"),
+                    "source_manifest": str(normal_manifest.relative_to(root)),
+                    "source_manifest_sha256": sha256_file(normal_manifest),
+                },
+            }
+        )
+
+    rovir_manifest = root / "normal" / "rovir" / "manifest.json"
+    if rovir_manifest.is_file() and (root / "normal" / "rovir" / "nifti").is_dir():
+        sources = _discover_rovir_sources(root)
+        variants.append(
+            {
+                "collection_id": "rovir",
+                "kind": "canonical_rovir",
+                "collection_relative": Path("rovir"),
+                "sampling_class": _read_sampling_class(root),
+                "sources": sources,
+                "run_manifests": {},
+                "source_contract": {
+                    "canonical_rovir_manifest": str(rovir_manifest.relative_to(root)),
+                    "canonical_rovir_manifest_sha256": sha256_file(rovir_manifest),
+                    "independent_of_standard_pca_counts": True,
+                },
+            }
+        )
+    if not variants:
+        raise FileNotFoundError(
+            f"No complete legacy, vccN, or canonical ROVir MPRAGE outputs found in {root}."
+        )
+    return variants
+
+
+def _discover_rovir_sources(
+    root: Path,
+) -> dict[str, dict[str, list[tuple[Path, Path]]]]:
+    """Discover canonical ROVir normal and retrospective NIfTI branches.
+
+    Args:
+        root: Top-level reconstruction root containing canonical ROVir output.
+
+    Returns:
+        Branch/case mapping without a redundant ``rovir_`` branch prefix.
+    """
+
+    sources: dict[str, dict[str, list[tuple[Path, Path]]]] = {}
+    normal = root / "normal" / "rovir" / "nifti"
+    for branch_directory in sorted(normal.iterdir(), key=lambda path: path.name):
+        if branch_directory.is_dir():
+            pairs = _discover_nifti_pairs(branch_directory)
+            if pairs:
+                sources.setdefault(branch_directory.name, {})["normal"] = pairs
+    if not any("normal" in cases for cases in sources.values()):
+        raise FileNotFoundError(f"Canonical ROVir normal NIfTIs are incomplete: {normal}")
+    retro = root / "retro"
+    if retro.is_dir():
+        for case_directory in sorted(retro.iterdir(), key=lambda path: path.name):
+            nifti = case_directory / "rovir" / "nifti"
+            if not nifti.is_dir():
+                continue
+            for branch_directory in sorted(nifti.iterdir(), key=lambda path: path.name):
+                if branch_directory.is_dir():
+                    pairs = _discover_nifti_pairs(branch_directory)
+                    if pairs:
+                        sources.setdefault(branch_directory.name, {})[
+                            case_directory.name
+                        ] = pairs
+    return sources
+
+
+def _validate_standard_run_manifests(
+    variant_root: Path,
+    sources: dict[str, dict[str, list[tuple[Path, Path]]]],
+    virtual_coils: int,
+) -> dict[str, dict[str, Any]]:
+    """Validate exact run provenance for all collected standard branches.
+
+    Args:
+        variant_root: Count-specific ``vccN`` source root.
+        sources: Discovered canonical NIfTI mapping.
+        virtual_coils: Expected count encoded by ``variant_root``.
+
+    Returns:
+        Run-manifest identities keyed by ``branch:case``.
+    """
+
+    records: dict[str, dict[str, Any]] = {}
+    for branch, cases in sources.items():
+        for case in cases:
+            output = (
+                variant_root / "normal" / "bart_output" / branch
+                if case == "normal"
+                else variant_root / "retro" / case / "bart_output" / branch
+            )
+            path = output / "reconstruction_manifest.json"
+            manifest = validate_completed_reconstruction_manifest(path)
+            request = manifest["request"]
+            if (
+                int(request.get("virtual_coils", 0)) != virtual_coils
+                or request.get("case") != case
+                or request.get("branch") != branch
+            ):
+                raise ValueError(f"Reconstruction manifest identity mismatch: {path}")
+            records[f"{branch}:{case}"] = {
+                "path": str(path.relative_to(variant_root)),
+                "sha256": sha256_file(path),
+                "profile": request["profile"],
+                "method": request["method"],
+                "lambda": request["regularization"],
+                "prepared_manifest_sha256": request["prepared_manifest"]["sha256"],
+            }
+    return records
+
+
+def _previous_variant_groups(manifest: dict[str, Any] | None) -> set[str]:
+    """Read group identifiers from current or legacy collection manifests.
+
+    Args:
+        manifest: Validated prior collection manifest, if present.
+
+    Returns:
+        Stable variant/branch/case identifiers.
+    """
+
+    if manifest is None:
+        return set()
+    return {
+        f"{case.get('collection_id', 'legacy_vcc12')}:{case['branch']}:{case['case']}"
+        for case in manifest.get("cases", [])
+    }
 
 
 def create_whole_head_mask(
@@ -337,7 +665,12 @@ def _validate_parameters(parameters: HeadMaskParameters) -> None:
 
 
 def _discover_case_sources(
-    output_root: Path, *, sampling_class: str, require_retro: bool
+    output_root: Path,
+    *,
+    sampling_class: str,
+    require_retro: bool,
+    required_case_ids: tuple[str, ...] = REQUIRED_RETRO_CASES,
+    include_rovir: bool = True,
 ) -> dict[str, dict[str, list[tuple[Path, Path]]]]:
     """Discover complete canonical NIfTI/JSON pairs for available cases.
 
@@ -346,6 +679,9 @@ def _discover_case_sources(
         sampling_class: Validated measured sampling class, ``R1`` or ``R3x1``.
         require_retro: Whether legacy cases and any present optional cases are
             mandatory.
+        required_case_ids: Retrospective cases required independently of
+            normal reconstruction branch names.
+        include_rovir: Whether to discover canonical root-level ROVir siblings.
 
     Returns:
         Mapping from every discovered reconstruction branch and case label to
@@ -379,7 +715,7 @@ def _discover_case_sources(
             f"No normal canonical NIfTI files found below: {normal_root}"
         )
     normal_rovir_root = output_root / "normal" / "rovir" / "nifti"
-    if normal_rovir_root.is_dir():
+    if include_rovir and normal_rovir_root.is_dir():
         for branch_directory in sorted(normal_rovir_root.iterdir(), key=lambda path: path.name):
             if not branch_directory.is_dir():
                 continue
@@ -409,7 +745,7 @@ def _discover_case_sources(
                             case_directory.name
                         ] = pairs
             rovir_nifti_root = case_directory / "rovir" / "nifti"
-            if rovir_nifti_root.is_dir():
+            if include_rovir and rovir_nifti_root.is_dir():
                 for branch_directory in sorted(
                     rovir_nifti_root.iterdir(), key=lambda path: path.name
                 ):
@@ -422,22 +758,14 @@ def _discover_case_sources(
                         ] = pairs
 
     if require_retro:
-        required_cases = list(REQUIRED_RETRO_CASES)
-        required_cases.extend(
-            case
-            for case in OPTIONAL_RETRO_CASES
-            if (retro_root / case).exists()
-        )
-        for branch in sorted(standard_normal_branches):
-            for case in required_cases:
-                if case not in sources.get(branch, {}) and case not in sources.get(
-                    f"rovir_{branch}", {}
-                ):
-                    directory = output_root / "retro" / case / "nifti" / branch
-                    raise FileNotFoundError(
-                        f"No standard or ROVir {branch} canonical NIfTI files found "
-                        f"for {case}: {directory}"
-                    )
+        for case in required_case_ids:
+            available = any(case in cases for cases in sources.values())
+            if not available:
+                directory = output_root / "retro" / case / "nifti"
+                raise FileNotFoundError(
+                    f"No complete reconstruction branch found for required case "
+                    f"{case}: {directory}"
+                )
 
     branch_order = {
         branch: index for index, branch in enumerate(RECONSTRUCTION_BRANCHES)
@@ -978,6 +1306,14 @@ def _manifest_owned_files(payload: dict[str, Any]) -> dict[str, str]:
     Raises:
         FileExistsError: If the manifest lacks a required owned path or digest.
     """
+    explicit = payload.get("owned_files")
+    if isinstance(explicit, dict):
+        owned = {str(path): str(digest) for path, digest in explicit.items()}
+        if any(not path or len(digest) != 64 for path, digest in owned.items()):
+            raise FileExistsError(
+                "Existing collection manifest contains an invalid file hash."
+            )
+        return owned
     try:
         mask = payload["head_mask"]
         owned = {
