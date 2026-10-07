@@ -15,15 +15,47 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.bart_io import sha256_file  # noqa: E402
+from wave_retro_lr.collection_archive import (  # noqa: E402
+    archive_collection_source_niftis,
+    prune_mprage_head_masks,
+)
 from wave_retro_lr.nifti_collection import (  # noqa: E402
     HeadMaskParameters,
     RECONSTRUCTION_BRANCHES,
     RETRO_CASES,
+    _legacy_rovir_group_migrations,
     build_mprage_nifti_collection,
 )
 
 
 class NiftiCollectionTests(unittest.TestCase):
+    def test_legacy_rovir_groups_migrate_without_case_loss(self) -> None:
+        """Map embedded historical ROVir labels to the canonical subtree.
+
+        Returns:
+            None.
+        """
+
+        previous = {
+            "legacy_vcc12:fista_r0:normal",
+            "legacy_vcc12:rovir_fista_r0:normal",
+            "legacy_vcc12:rovir_fista_r0:native_r3x2",
+        }
+        discovered = {
+            "legacy_vcc12:fista_r0:normal",
+            "rovir:fista_r0:normal",
+            "rovir:fista_r0:native_r3x2",
+        }
+        self.assertEqual(
+            _legacy_rovir_group_migrations(previous, discovered),
+            {
+                "legacy_vcc12:rovir_fista_r0:native_r3x2": (
+                    "rovir:fista_r0:native_r3x2"
+                ),
+                "legacy_vcc12:rovir_fista_r0:normal": "rovir:fista_r0:normal",
+            },
+        )
+
     def test_require_retro_accepts_legacy_layout_and_asymmetric_r3x3(self) -> None:
         """Accept required legacy cases plus one complete R3x3 branch.
 
@@ -68,7 +100,10 @@ class NiftiCollectionTests(unittest.TestCase):
                 opening_radius_mm=0.0,
             )
             manifest = build_mprage_nifti_collection(
-                root, require_retro=True, parameters=mask_parameters
+                root,
+                require_retro=True,
+                include_head_mask=True,
+                parameters=mask_parameters,
             )
 
             collection = root / "nifti_collection"
@@ -132,7 +167,10 @@ class NiftiCollectionTests(unittest.TestCase):
 
             # A second build safely replaces only the utility-owned collection.
             refreshed = build_mprage_nifti_collection(
-                root, require_retro=True, parameters=mask_parameters
+                root,
+                require_retro=True,
+                include_head_mask=True,
+                parameters=mask_parameters,
             )
             self.assertEqual(len(refreshed["cases"]), 12)
 
@@ -142,7 +180,10 @@ class NiftiCollectionTests(unittest.TestCase):
             protected.write_bytes(b"user-modified")
             with self.assertRaisesRegex(FileExistsError, "changed since its manifest"):
                 build_mprage_nifti_collection(
-                    root, require_retro=True, parameters=mask_parameters
+                    root,
+                    require_retro=True,
+                    include_head_mask=True,
+                    parameters=mask_parameters,
                 )
             self.assertEqual(protected.read_bytes(), b"user-modified")
 
@@ -163,7 +204,15 @@ class NiftiCollectionTests(unittest.TestCase):
             manifest = build_mprage_nifti_collection(root)
             self.assertEqual([record["case"] for record in manifest["cases"]], ["normal"])
             self.assertEqual([record["branch"] for record in manifest["cases"]], ["fista_r0"])
-            self.assertEqual(manifest["head_mask"]["source_branch"], "fista_r0")
+            self.assertEqual(manifest["head_mask"]["status"], "not_requested")
+            self.assertEqual(
+                manifest["storage_policy"]["collection_payload"],
+                "original_nifti_only",
+            )
+            self.assertFalse((root / "nifti_collection" / "masks").exists())
+            self.assertFalse(
+                (root / "nifti_collection" / "head_masked_nifti").exists()
+            )
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "reconstruction"
@@ -180,6 +229,104 @@ class NiftiCollectionTests(unittest.TestCase):
                 build_mprage_nifti_collection(root)
             self.assertEqual((collection / "user_file.txt").read_text(encoding="utf-8"), "keep\n")
 
+    def test_in_place_prune_records_removed_head_mask_outputs(self) -> None:
+        """Record an in-place migration that removes prior mask products.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_sampling_class(root, "R1")
+            self._write_case(
+                root / "normal" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            build_mprage_nifti_collection(root, include_head_mask=True)
+            self.assertTrue((root / "nifti_collection" / "masks").is_dir())
+            summary = prune_mprage_head_masks(root)
+            self.assertEqual(summary["status"], "complete")
+            migrated = json.loads(
+                (root / "nifti_collection" / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            policy = migrated["storage_policy"]["head_mask_outputs"]
+            self.assertEqual(policy["status"], "omitted_by_policy")
+            self.assertTrue(policy["removed_during_this_sync"])
+            self.assertTrue(policy["historical_outputs_removed"])
+            self.assertFalse((root / "nifti_collection" / "masks").exists())
+            self.assertFalse(
+                (root / "nifti_collection" / "head_masked_nifti").exists()
+            )
+            verified = archive_collection_source_niftis(root, dry_run=True)
+            self.assertEqual(verified["verification_mode"], "recomputed_sha256")
+
+    def test_archive_removes_only_verified_source_pairs(self) -> None:
+        """Preserve collection copies and record intentional source removal.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_sampling_class(root, "R1")
+            sources = self._write_case(
+                root / "normal" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            build_mprage_nifti_collection(root)
+            manifest_path = root / "nifti_collection" / "manifest.json"
+            legacy_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            legacy_manifest.pop("variants", None)
+            for case in legacy_manifest["cases"]:
+                case.pop("collection_id", None)
+            manifest_path.write_text(
+                json.dumps(legacy_manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            lightweight = archive_collection_source_niftis(
+                root, dry_run=True, verify_hashes=False
+            )
+            self.assertEqual(
+                lightweight["verification_mode"],
+                "recorded_sha256_and_copy_presence",
+            )
+            dry_run = archive_collection_source_niftis(root, dry_run=True)
+            self.assertEqual(dry_run["source_nifti_count"], 2)
+            self.assertTrue(all(path.is_file() for path in sources))
+
+            archived = archive_collection_source_niftis(root)
+            self.assertEqual(archived["status"], "complete")
+            self.assertTrue(all(not path.exists() for path in sources))
+            self.assertTrue(
+                (
+                    root
+                    / "nifti_collection"
+                    / "original_nifti"
+                    / "fista_r0"
+                    / "normal"
+                    / sources[0].name
+                ).is_file()
+            )
+            manifest = json.loads(
+                (root / "nifti_collection" / "manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(manifest["source_archival"]["status"], "complete")
+            self.assertTrue(
+                manifest["scientific_scope"][
+                    "source_nifti_outputs_removed_after_verified_copy"
+                ]
+            )
+            repeated = archive_collection_source_niftis(root)
+            self.assertTrue(repeated["already_complete"])
+
     def test_discovers_all_available_normal_branches(self) -> None:
         """Collect every populated normal branch without a hard-coded list.
 
@@ -194,7 +341,7 @@ class NiftiCollectionTests(unittest.TestCase):
                 (32, 32, 32),
                 (1.0, 1.0, 1.0),
             )
-            manifest = build_mprage_nifti_collection(root)
+            manifest = build_mprage_nifti_collection(root, include_head_mask=True)
             self.assertEqual(
                 [(record["branch"], record["case"]) for record in manifest["cases"]],
                 [("fista_r0", "normal")],
@@ -209,7 +356,7 @@ class NiftiCollectionTests(unittest.TestCase):
                     (32, 32, 32),
                     (1.0, 1.0, 1.0),
                 )
-            manifest = build_mprage_nifti_collection(root)
+            manifest = build_mprage_nifti_collection(root, include_head_mask=True)
             self.assertEqual(
                 {record["branch"] for record in manifest["cases"]},
                 {"fista_r0", "optimal_wavelet", "llr_block8"},
@@ -281,7 +428,9 @@ class NiftiCollectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "reconstruction"
             self._write_complete_source_tree(root, include_r3x3=False)
-            baseline = build_mprage_nifti_collection(root, require_retro=True)
+            baseline = build_mprage_nifti_collection(
+                root, require_retro=True, include_head_mask=True
+            )
             self.assertEqual(len(baseline["cases"]), 10)
             self._write_case(
                 root / "normal" / "rovir" / "nifti" / "fista_r0",
@@ -313,7 +462,9 @@ class NiftiCollectionTests(unittest.TestCase):
                 json.dumps({"status": "canonical_rovir_complete"}) + "\n",
                 encoding="utf-8",
             )
-            manifest = build_mprage_nifti_collection(root, require_retro=True)
+            manifest = build_mprage_nifti_collection(
+                root, require_retro=True, include_head_mask=True
+            )
             groups = {
                 (entry["collection_id"], entry["branch"], entry["case"])
                 for entry in manifest["cases"]
@@ -348,7 +499,9 @@ class NiftiCollectionTests(unittest.TestCase):
                 manifest["synchronization"]["no_longer_discovered_case_groups"], []
             )
 
-            refreshed = build_mprage_nifti_collection(root, require_retro=True)
+            refreshed = build_mprage_nifti_collection(
+                root, require_retro=True, include_head_mask=True
+            )
             self.assertEqual(len(refreshed["cases"]), 13)
             self.assertEqual(refreshed["synchronization"]["added_case_groups"], [])
             self.assertEqual(refreshed["synchronization"]["rovir_replacements"], [])

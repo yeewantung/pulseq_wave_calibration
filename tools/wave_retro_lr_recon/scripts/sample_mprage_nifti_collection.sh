@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Collect preferred ROVir/standard cases and apply one shared presentation mask.
+# Collect preferred ROVir/standard cases; head masking is explicitly optional.
 # This workflow never prepares k-space or launches BART reconstruction.
 
 usage() {
-    echo "Usage: $0 OUTPUT_ROOT [--require-retro] [mask parameter overrides]"
+    echo "Usage: $0 OUTPUT_ROOT [--require-retro] [--head-mask [mask parameter overrides]]"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi

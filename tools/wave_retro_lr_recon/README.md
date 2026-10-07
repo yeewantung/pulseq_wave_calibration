@@ -74,9 +74,9 @@ rejected. A valid R3x1 image lattice may omit the exact logical center when it
 is present in the separate integrated ACS; the measured LIN residue is always
 preserved. The sequence trajectory must contain both Wave axes.
 
-The complete dual-branch normal, retrospective, NIfTI-conversion, and shared
-head-mask collection workflow passed representative real measured-MPRAGE
-visual validation on 2026-09-01.
+The complete dual-branch normal, retrospective, NIfTI-conversion, and optional
+shared-head-mask collection workflow passed representative real
+measured-MPRAGE visual validation on 2026-09-01.
 
 Coil calibration removes readout oversampling from integrated set-4 ACS by a
 centered full-readout IFFT, central nominal-FOV image crop, and centered FFT.
@@ -339,11 +339,16 @@ retro branch names need not match. Historical root-level layouts remain
 discoverable under their legacy requirements. This script never runs k-space
 preparation, ecalib, or Wave reconstruction.
 
+The default collection contains only byte-identical canonical files below
+`original_nifti`. Add `--head-mask` to explicitly request the historical
+whole-head mask and `head_masked_nifti` presentation derivatives. Mask
+parameter overrides apply only to that explicit mode.
+
 Discovery is directory-backed rather than case-list-backed. Standard
 `nifti/<branch>` and ROVir `rovir/nifti/<branch>` results are retained as
 separate collection branches, including when they have the same case,
-resolution, acceleration, and reconstruction method. Source reconstruction
-trees are never deleted or modified.
+resolution, acceleration, and reconstruction method. Normal collection builds
+never delete or modify source reconstruction trees.
 
 Rerunning the builder validates the existing tool-owned collection and its
 hashes, then atomically synchronizes it with the source tree. A newly available
@@ -353,11 +358,11 @@ entry. The legacy `synchronization.rovir_replacements` field remains present
 but is always empty under this additive policy.
 
 MPRAGE reconstruction and presentation masking remain separate. The collection
-copies canonical NIfTIs byte-for-byte and creates whole-head-masked derivatives
-without modifying the scientific source files under `normal/nifti` and
-`retro/<case>/nifti`.
+always copies canonical NIfTIs byte-for-byte. Whole-head-masked derivatives are
+created only when `--head-mask` is supplied and never modify scientific source
+files under `normal/nifti` and `retro/<case>/nifti`.
 
-Each collection variant estimates its mask from its own normal magnitude;
+When explicitly requested, each collection variant estimates its mask from its own normal magnitude;
 canonical ROVir and every `vccN` subtree remain independent. Within a variant,
 Wavelet is preferred over FISTA when present, followed by the first other
 normal branch. The mask is applied identically to that variant's selected
@@ -386,11 +391,11 @@ OUTPUT_ROOT/
     │   └── <branch>/
     │       ├── normal/
     │       └── retro/<case>/
-    ├── head_masked_nifti/
+    ├── head_masked_nifti/                 # only with --head-mask
     │   └── <branch>/
     │       ├── normal/
     │       └── retro/<case>/
-    ├── masks/
+    ├── masks/                              # only with --head-mask
     └── manifest.json
 ```
 
@@ -398,6 +403,34 @@ Here `<branch>` and `<case>` are discovered from the populated source tree;
 standard examples include `fista_r0`, `wavelet_selected_vcc24`,
 `wavelet_transferred_vcc12`, the reduced default cases, and explicitly
 requested legacy-compatible LR cases.
+
+For an explicitly finalized archive, source NIfTI/JSON pairs may be removed
+only after their collection copies pass exact SHA-256 verification:
+
+```bash
+python scripts/archive_collection_source_niftis.py /path/to/output_root --dry-run
+python scripts/archive_collection_source_niftis.py /path/to/output_root
+```
+
+The archival command preserves collection copies, GRE conversion manifests,
+and quantitative complex arrays. It writes `source_nifti_archival.json` and
+updates the collection manifest with the removed paths, hashes, byte counts,
+and the fact that branch-level reconstruction resumability is intentionally
+disabled. It must therefore be used only after reconstruction and collection
+are final.
+
+Existing MPRAGE collections with historical mask products can be migrated in
+place before archival:
+
+```bash
+python scripts/prune_mprage_collection_head_masks.py /path/to/output_root
+```
+
+Use `--validate-hashes` to reread and verify every collection payload. For a
+large reviewed batch, `archive_collection_source_niftis.py` also accepts
+`--trust-manifest-hashes`; that mode still requires an exact owned-file set,
+matching recorded source/copy hashes, and both files to be present, but should
+only be used after representative collections pass full SHA-256 verification.
 
 ### Optional MPRAGE troubleshooting features
 
@@ -624,9 +657,12 @@ source ~/cluster/bart/bart_startup.sh
 - `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
   split-complex output recombination;
 - `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,
-  normal-derived whole-head mask, physical-grid mask mapping, and provenance;
+  optional normal-derived whole-head mask, physical-grid mask mapping, and
+  provenance;
 - `wave_retro_lr/gre_nifti_collection.py`: strict byte-identical GRE magnitude
   and phase collection with no masking or quantitative-complex duplication;
+- `wave_retro_lr/collection_archive.py`: explicit mask-product pruning and
+  hash-bound source-NIfTI archival after collection finalization;
 - `wave_retro_lr/core.py`: geometry, grids, FFT, masks, and compatibility
   primitives.
 

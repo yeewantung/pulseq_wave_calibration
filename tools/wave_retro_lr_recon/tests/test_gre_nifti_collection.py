@@ -17,6 +17,9 @@ SCRIPTS = TOOL_ROOT / "scripts"
 sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.bart_io import create_cfl, sha256_file  # noqa: E402
+from wave_retro_lr.collection_archive import (  # noqa: E402
+    archive_collection_source_niftis,
+)
 from wave_retro_lr.gre import gre_wavelet_selection_provenance  # noqa: E402
 from wave_retro_lr.gre_nifti_collection import (  # noqa: E402
     CASE_LOCATIONS,
@@ -108,6 +111,43 @@ class GreNiftiCollectionTests(unittest.TestCase):
             self.assertEqual(
                 (destination / "user_file.txt").read_text(encoding="utf-8"),
                 "preserve\n",
+            )
+
+    def test_archive_preserves_gre_conversion_metadata(self) -> None:
+        """Remove copied GRE source pairs but retain conversion provenance.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as folder:
+            source_root = Path(folder) / "reconstruction"
+            self._write_case(source_root, "native_r3x1", Path("normal"))
+            build_gre_nifti_collection(source_root)
+            source_niftis = sorted(
+                (source_root / "normal" / "nifti").rglob("*.nii.gz")
+            )
+            source_sidecars = sorted(
+                path
+                for path in (source_root / "normal" / "nifti").rglob("*.json")
+                if path.name != "conversion_manifest.json"
+            )
+            conversions = sorted(
+                (source_root / "normal" / "nifti").rglob(
+                    "conversion_manifest.json"
+                )
+            )
+            archived = archive_collection_source_niftis(source_root)
+            self.assertEqual(archived["source_nifti_count"], 8)
+            self.assertTrue(all(not path.exists() for path in source_niftis))
+            self.assertTrue(all(not path.exists() for path in source_sidecars))
+            self.assertTrue(all(path.is_file() for path in conversions))
+            self.assertTrue(
+                (
+                    source_root
+                    / "nifti_collection"
+                    / "source_nifti_archival.json"
+                ).is_file()
             )
 
     def test_legacy_collection_appends_r3x3_and_never_silently_removes_it(self) -> None:

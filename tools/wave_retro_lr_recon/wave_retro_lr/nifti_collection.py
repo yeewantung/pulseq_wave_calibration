@@ -1,4 +1,4 @@
-"""Build canonical and whole-head-masked MPRAGE NIfTI collections."""
+"""Build canonical MPRAGE NIfTI collections with optional head masking."""
 
 from __future__ import annotations
 
@@ -101,16 +101,20 @@ def build_mprage_nifti_collection(
     output_root: str | Path,
     *,
     require_retro: bool = False,
+    include_head_mask: bool = False,
     parameters: HeadMaskParameters | None = None,
 ) -> dict[str, Any]:
-    """Create canonical-copy and whole-head-masked MPRAGE NIfTI trees.
+    """Create canonical-copy MPRAGE NIfTI trees and optional masked derivatives.
 
     Args:
         output_root: Reconstruction root containing branch-specific normal and,
             when available, retrospective canonical NIfTI directories.
         require_retro: Whether the four legacy retrospective cases, plus any
             present optional R3x3 case, must contain complete NIfTI/JSON pairs.
-        parameters: Optional whole-head mask extraction parameters.
+        include_head_mask: Whether to generate whole-head masks and masked
+            presentation derivatives. The default stores original NIfTIs only.
+        parameters: Optional whole-head mask extraction parameters, used only
+            when ``include_head_mask`` is true.
 
     Returns:
         JSON-native collection manifest written below ``nifti_collection``.
@@ -129,10 +133,37 @@ def build_mprage_nifti_collection(
     if not root.is_dir():
         raise FileNotFoundError(f"Reconstruction output root does not exist: {root}")
     mask_parameters = parameters or HeadMaskParameters()
-    _validate_parameters(mask_parameters)
+    if include_head_mask:
+        _validate_parameters(mask_parameters)
 
     collection = root / "nifti_collection"
     previous_manifest = _validate_existing_collection(collection)
+    previous_owned = (
+        set(_manifest_owned_files(previous_manifest))
+        if previous_manifest is not None
+        else set()
+    )
+    previous_had_head_mask_outputs = any(
+        path.startswith("head_masked_nifti/")
+        or "/head_masked_nifti/" in path
+        or path.startswith("masks/")
+        or "/masks/" in path
+        for path in previous_owned
+    )
+    previous_storage = (
+        previous_manifest.get("storage_policy", {})
+        if previous_manifest is not None
+        else {}
+    )
+    previous_head_policy = (
+        previous_storage.get("head_mask_outputs", {})
+        if isinstance(previous_storage, dict)
+        else {}
+    )
+    historical_head_mask_outputs_removed = bool(
+        isinstance(previous_head_policy, dict)
+        and previous_head_policy.get("historical_outputs_removed", False)
+    ) or (previous_had_head_mask_outputs and not include_head_mask)
     variants = _discover_collection_variants(root, require_retro=require_retro)
     discovered_groups = {
         f"{variant['collection_id']}:{branch}:{case}"
@@ -141,7 +172,14 @@ def build_mprage_nifti_collection(
         for case in cases
     }
     previous_groups = _previous_variant_groups(previous_manifest)
-    missing_previous = sorted(previous_groups - discovered_groups)
+    legacy_rovir_migrations = _legacy_rovir_group_migrations(
+        previous_groups, discovered_groups
+    )
+    migrated_previous = set(legacy_rovir_migrations)
+    migrated_discovered = set(legacy_rovir_migrations.values())
+    missing_previous = sorted(
+        previous_groups - discovered_groups - migrated_previous
+    )
     if missing_previous:
         raise FileNotFoundError(
             "Previously collected reconstruction groups are no longer discoverable; "
@@ -159,18 +197,23 @@ def build_mprage_nifti_collection(
             normal_branches = [
                 branch for branch, cases in branch_sources.items() if "normal" in cases
             ]
-            mask_branch = next(
-                branch
-                for branch in (*MASK_BRANCH_PREFERENCE, *normal_branches)
-                if branch in normal_branches
-            )
-            normal_magnitude = _select_normal_magnitude(
-                branch_sources[mask_branch]["normal"]
-            )
-            normal_image, _ = _load_validated_nifti(normal_magnitude)
-            head_mask, mask_details = create_whole_head_mask(
-                normal_image, mask_parameters
-            )
+            mask_branch: str | None = None
+            normal_magnitude: Path | None = None
+            head_mask: nib.Nifti1Image | None = None
+            mask_details: dict[str, Any] | None = None
+            if include_head_mask:
+                mask_branch = next(
+                    branch
+                    for branch in (*MASK_BRANCH_PREFERENCE, *normal_branches)
+                    if branch in normal_branches
+                )
+                normal_magnitude = _select_normal_magnitude(
+                    branch_sources[mask_branch]["normal"]
+                )
+                normal_image, _ = _load_validated_nifti(normal_magnitude)
+                head_mask, mask_details = create_whole_head_mask(
+                    normal_image, mask_parameters
+                )
             subtree = _materialize_collection(
                 target,
                 root,
@@ -181,6 +224,7 @@ def build_mprage_nifti_collection(
                 mask_parameters,
                 mask_details,
                 variant["sampling_class"],
+                include_head_mask=include_head_mask,
             )
             subtree["collection_id"] = variant["collection_id"]
             subtree["source_contract"] = variant["source_contract"]
@@ -221,7 +265,7 @@ def build_mprage_nifti_collection(
             if path.is_file()
         }
         manifest = {
-            "format_version": 5,
+            "format_version": 6,
             "builder": COLLECTION_BUILDER,
             "status": "complete",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -229,12 +273,31 @@ def build_mprage_nifti_collection(
             "variants": variant_records,
             "cases": flattened_cases,
             "owned_files": owned_files,
+            "storage_policy": {
+                "collection_payload": (
+                    "original_and_head_masked_nifti"
+                    if include_head_mask
+                    else "original_nifti_only"
+                ),
+                "head_mask_outputs": {
+                    "default": "omitted",
+                    "requested": include_head_mask,
+                    "status": "generated" if include_head_mask else "omitted_by_policy",
+                    "removed_during_this_sync": (
+                        previous_had_head_mask_outputs and not include_head_mask
+                    ),
+                    "historical_outputs_removed": historical_head_mask_outputs_removed,
+                },
+            },
             "synchronization": {
                 "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
                 "previous_case_groups": sorted(previous_groups),
                 "discovered_case_groups": sorted(discovered_groups),
                 "retained_case_groups": sorted(previous_groups & discovered_groups),
-                "added_case_groups": sorted(discovered_groups - previous_groups),
+                "added_case_groups": sorted(
+                    discovered_groups - previous_groups - migrated_discovered
+                ),
+                "legacy_rovir_layout_migrations": legacy_rovir_migrations,
                 "rovir_replacements": [],
                 "no_longer_discovered_case_groups": missing_previous,
             },
@@ -254,7 +317,8 @@ def build_mprage_nifti_collection(
             manifest["scientific_scope"] = {
                 "canonical_reconstruction_outputs_modified": False,
                 "original_niftis_copied_byte_for_byte": True,
-                "same_whole_head_mask_applied_to_all_branches": True,
+                "head_mask_outputs_generated": include_head_mask,
+                "same_whole_head_mask_applied_to_all_branches": include_head_mask,
                 "standard_variants_and_rovir_are_additive": True,
             }
         _write_json(staging / "manifest.json", manifest)
@@ -495,6 +559,32 @@ def _previous_variant_groups(manifest: dict[str, Any] | None) -> set[str]:
         f"{case.get('collection_id', 'legacy_vcc12')}:{case['branch']}:{case['case']}"
         for case in manifest.get("cases", [])
     }
+
+
+def _legacy_rovir_group_migrations(
+    previous_groups: set[str], discovered_groups: set[str]
+) -> dict[str, str]:
+    """Map pre-redesign embedded ROVir groups to the canonical ROVir variant.
+
+    Args:
+        previous_groups: Case identifiers from the validated prior collection.
+        discovered_groups: Case identifiers found in current source trees.
+
+    Returns:
+        Old-to-new group identifiers for exact ROVir layout migrations whose
+        canonical replacement is currently discoverable.
+    """
+
+    migrations: dict[str, str] = {}
+    prefix = "legacy_vcc12:rovir_"
+    for previous in sorted(previous_groups):
+        if not previous.startswith(prefix):
+            continue
+        branch_and_case = previous[len(prefix) :]
+        replacement = f"rovir:{branch_and_case}"
+        if replacement in discovered_groups:
+            migrations[previous] = replacement
+    return migrations
 
 
 def create_whole_head_mask(
@@ -1030,12 +1120,14 @@ def _materialize_collection(
     staging: Path,
     output_root: Path,
     branch_sources: dict[str, dict[str, list[tuple[Path, Path]]]],
-    mask_branch: str,
-    normal_magnitude: Path,
-    head_mask: nib.Nifti1Image,
+    mask_branch: str | None,
+    normal_magnitude: Path | None,
+    head_mask: nib.Nifti1Image | None,
     parameters: HeadMaskParameters,
-    mask_details: dict[str, Any],
+    mask_details: dict[str, Any] | None,
     sampling_class: str,
+    *,
+    include_head_mask: bool,
 ) -> dict[str, Any]:
     """Write one complete collection into an empty staging directory.
 
@@ -1044,41 +1136,57 @@ def _materialize_collection(
         output_root: Source reconstruction root used for relative provenance.
         branch_sources: Available canonical NIfTI/JSON pairs by reconstruction
             branch and case.
-        mask_branch: Normal reconstruction branch used to derive the shared
-            presentation mask.
-        normal_magnitude: Normal magnitude path used to derive the head mask.
-        head_mask: Binary mask on the normal grid.
+        mask_branch: Normal reconstruction branch used to derive the optional
+            shared presentation mask.
+        normal_magnitude: Normal magnitude path used to derive the optional mask.
+        head_mask: Optional binary mask on the normal grid.
         parameters: Mask extraction parameters.
-        mask_details: Calculated mask threshold and coverage metadata.
+        mask_details: Optional calculated mask threshold and coverage metadata.
         sampling_class: Measured normal sampling class controlling available
             reconstruction branches.
+        include_head_mask: Whether to write the mask and masked derivatives.
 
     Returns:
         JSON-native manifest describing all copied and masked files.
 
     Side Effects:
-        Writes NIfTIs, sidecars, one native-grid mask, and a manifest-ready
+        Writes NIfTIs, sidecars, optional mask derivatives, and a manifest-ready
         record below ``staging``; source files remain read-only.
     """
-    mask_dir = staging / "masks"
-    mask_dir.mkdir(parents=True)
-    mask_path = mask_dir / "head_mask_from_normal.nii.gz"
-    nib.save(head_mask, str(mask_path))
-    mask_record = {
-        "source_nifti": str(normal_magnitude.relative_to(output_root)),
-        "source_branch": mask_branch,
-        "source_sha256": sha256_file(normal_magnitude),
-        "collection_file": str(mask_path.relative_to(staging)),
-        "collection_sha256": sha256_file(mask_path),
-        "parameters": asdict(parameters),
-        "details": mask_details,
-        "intended_use": "presentation masking only; excluded from sweep evaluation",
-        "bet_used": False,
+    mask_record: dict[str, Any] = {
+        "status": "not_requested",
+        "generated": False,
+        "default": "omitted",
     }
-    mask_metadata = mask_dir / "head_mask_from_normal.json"
-    _write_json(mask_metadata, mask_record)
-    mask_record["metadata_file"] = str(mask_metadata.relative_to(staging))
-    mask_record["metadata_sha256"] = sha256_file(mask_metadata)
+    if include_head_mask:
+        if (
+            mask_branch is None
+            or normal_magnitude is None
+            or head_mask is None
+            or mask_details is None
+        ):
+            raise ValueError("Head-mask generation requires complete mask inputs.")
+        mask_dir = staging / "masks"
+        mask_dir.mkdir(parents=True)
+        mask_path = mask_dir / "head_mask_from_normal.nii.gz"
+        nib.save(head_mask, str(mask_path))
+        mask_record = {
+            "status": "generated",
+            "generated": True,
+            "source_nifti": str(normal_magnitude.relative_to(output_root)),
+            "source_branch": mask_branch,
+            "source_sha256": sha256_file(normal_magnitude),
+            "collection_file": str(mask_path.relative_to(staging)),
+            "collection_sha256": sha256_file(mask_path),
+            "parameters": asdict(parameters),
+            "details": mask_details,
+            "intended_use": "presentation masking only; excluded from sweep evaluation",
+            "bet_used": False,
+        }
+        mask_metadata = mask_dir / "head_mask_from_normal.json"
+        _write_json(mask_metadata, mask_record)
+        mask_record["metadata_file"] = str(mask_metadata.relative_to(staging))
+        mask_record["metadata_sha256"] = sha256_file(mask_metadata)
 
     case_records: list[dict[str, Any]] = []
     for branch, case_sources in branch_sources.items():
@@ -1086,9 +1194,14 @@ def _materialize_collection(
             case_leaf = Path("normal") if case == "normal" else Path("retro") / case
             relative_leaf = Path(branch) / case_leaf
             original_dir = staging / "original_nifti" / relative_leaf
-            masked_dir = staging / "head_masked_nifti" / relative_leaf
             original_dir.mkdir(parents=True)
-            masked_dir.mkdir(parents=True)
+            masked_dir = (
+                staging / "head_masked_nifti" / relative_leaf
+                if include_head_mask
+                else None
+            )
+            if masked_dir is not None:
+                masked_dir.mkdir(parents=True)
             files = [
                 _materialize_pair(
                     nifti,
@@ -1112,7 +1225,7 @@ def _materialize_collection(
             )
 
     return {
-        "format_version": 4,
+        "format_version": 5,
         "builder": COLLECTION_BUILDER,
         "status": "complete",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1120,13 +1233,22 @@ def _materialize_collection(
             "canonical_reconstruction_outputs_modified": False,
             "normal_sampling_class": sampling_class,
             "original_niftis_copied_byte_for_byte": True,
-            "whole_head_mask_source": "normal canonical magnitude",
+            "head_mask_outputs_generated": include_head_mask,
+            "whole_head_mask_source": (
+                "normal canonical magnitude" if include_head_mask else None
+            ),
             "whole_head_mask_source_branch": mask_branch,
-            "same_whole_head_mask_applied_to_all_branches": True,
-            "whole_head_mask_backend": "SciPy morphology; no BET",
-            "mask_resampling": "nearest-neighbor in NIfTI physical space when grids differ",
-            "masked_outputs_for_presentation_only": True,
-            "masked_outputs_excluded_from_regularization_evaluation": True,
+            "same_whole_head_mask_applied_to_all_branches": include_head_mask,
+            "whole_head_mask_backend": (
+                "SciPy morphology; no BET" if include_head_mask else None
+            ),
+            "mask_resampling": (
+                "nearest-neighbor in NIfTI physical space when grids differ"
+                if include_head_mask
+                else None
+            ),
+            "masked_outputs_for_presentation_only": include_head_mask,
+            "masked_outputs_excluded_from_regularization_evaluation": include_head_mask,
             "coil_processing_selection": (
                 "standard and ROVir case groups are retained independently"
             ),
@@ -1142,8 +1264,8 @@ def _materialize_pair(
     output_root: Path,
     staging: Path,
     original_dir: Path,
-    masked_dir: Path,
-    head_mask: nib.Nifti1Image,
+    masked_dir: Path | None,
+    head_mask: nib.Nifti1Image | None,
     mask_record: dict[str, Any],
 ) -> dict[str, Any]:
     """Copy one canonical pair and write its masked derivative.
@@ -1154,15 +1276,15 @@ def _materialize_pair(
         output_root: Reconstruction root used for relative provenance paths.
         staging: Collection staging directory.
         original_dir: Destination leaf for byte-identical source copies.
-        masked_dir: Destination leaf for masked derivatives.
-        head_mask: Normal-grid binary whole-head mask.
-        mask_record: Native mask provenance record.
+        masked_dir: Optional destination leaf for masked derivatives.
+        head_mask: Optional normal-grid binary whole-head mask.
+        mask_record: Native mask provenance or omission record.
 
     Returns:
         JSON-native provenance and hash record for the copied and masked files.
 
     Side Effects:
-        Copies the NIfTI and JSON source pair and writes one masked NIfTI/JSON pair.
+        Copies the NIfTI and JSON source pair and optionally writes one masked pair.
     """
     image, data = _load_validated_nifti(source_nifti)
     source_metadata = _load_json(source_sidecar)
@@ -1174,6 +1296,21 @@ def _materialize_pair(
         raise RuntimeError(f"Canonical NIfTI copy hash mismatch: {source_nifti}")
     if sha256_file(original_sidecar) != sha256_file(source_sidecar):
         raise RuntimeError(f"Canonical JSON copy hash mismatch: {source_sidecar}")
+
+    record = {
+        "source_nifti": str(source_nifti.relative_to(output_root)),
+        "source_nifti_sha256": sha256_file(source_nifti),
+        "source_json": str(source_sidecar.relative_to(output_root)),
+        "source_json_sha256": sha256_file(source_sidecar),
+        "original_nifti": str(original_nifti.relative_to(staging)),
+        "original_nifti_sha256": sha256_file(original_nifti),
+        "original_json": str(original_sidecar.relative_to(staging)),
+        "original_json_sha256": sha256_file(original_sidecar),
+    }
+    if masked_dir is None and head_mask is None:
+        return record
+    if masked_dir is None or head_mask is None or not mask_record.get("generated"):
+        raise ValueError("Masked derivative materialization has incomplete inputs.")
 
     mapped_mask, mapping_method = resample_head_mask(head_mask, image)
     masked_data = np.where(mapped_mask, data, 0)
@@ -1197,22 +1334,15 @@ def _materialize_pair(
         }
     )
     _write_json(masked_sidecar, masked_metadata)
-    return {
-        "source_nifti": str(source_nifti.relative_to(output_root)),
-        "source_nifti_sha256": sha256_file(source_nifti),
-        "source_json": str(source_sidecar.relative_to(output_root)),
-        "source_json_sha256": sha256_file(source_sidecar),
-        "original_nifti": str(original_nifti.relative_to(staging)),
-        "original_nifti_sha256": sha256_file(original_nifti),
-        "original_json": str(original_sidecar.relative_to(staging)),
-        "original_json_sha256": sha256_file(original_sidecar),
+    record.update({
         "masked_nifti": str(masked_nifti.relative_to(staging)),
         "masked_nifti_sha256": sha256_file(masked_nifti),
         "masked_json": str(masked_sidecar.relative_to(staging)),
         "masked_json_sha256": sha256_file(masked_sidecar),
         "mask_mapping": mapping_method,
         "masked_nonzero_voxels": int(np.count_nonzero(masked_data)),
-    }
+    })
+    return record
 
 
 def _load_json(path: Path) -> dict[str, Any]:

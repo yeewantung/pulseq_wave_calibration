@@ -124,7 +124,7 @@ RECONSTRUCTION_ROOT/
 `-- nifti_collection/               # the only collection root
     |-- vcc24/
     |   |-- original_nifti/
-    |   |-- head_masked_nifti/      # MPRAGE presentation derivatives only
+    |   |-- head_masked_nifti/      # optional explicit MPRAGE derivatives
     |   `-- manifest.json
     |-- vcc20/
     |   `-- ...

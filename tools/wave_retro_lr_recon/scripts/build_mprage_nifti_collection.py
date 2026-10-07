@@ -42,6 +42,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = build_mprage_nifti_collection(
         args.output_root,
         require_retro=args.require_retro,
+        include_head_mask=args.head_mask,
         parameters=parameters,
     )
     print(
@@ -78,6 +79,14 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Require all four R3x2 retrospective cases for every discovered "
             "normal method; a method-matched ROVir case satisfies the requirement."
+        ),
+    )
+    parser.add_argument(
+        "--head-mask",
+        action="store_true",
+        help=(
+            "Also generate whole-head masks and masked presentation derivatives; "
+            "the default collection contains byte-identical original NIfTIs only."
         ),
     )
     parser.add_argument(
