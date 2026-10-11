@@ -105,13 +105,14 @@ def build_mprage_nifti_collection(
     include_head_mask: bool = False,
     parameters: HeadMaskParameters | None = None,
 ) -> dict[str, Any]:
-    """Create canonical-copy MPRAGE NIfTI trees and optional masked derivatives.
+    """Create preferred-magnitude MPRAGE trees and optional masked derivatives.
 
     Args:
         output_root: Reconstruction root containing branch-specific normal and,
             when available, retrospective canonical NIfTI directories.
-        require_retro: Whether the four legacy retrospective cases, plus any
-            present optional R3x3 case, must contain complete NIfTI/JSON pairs.
+        require_retro: Whether at least one collected variant must provide its
+            complete retrospective case contract. Normal-only variants remain
+            additive when another standard or ROVir variant satisfies the gate.
         include_head_mask: Whether to generate whole-head masks and masked
             presentation derivatives. The default stores original NIfTIs only.
         parameters: Optional whole-head mask extraction parameters, used only
@@ -128,7 +129,9 @@ def build_mprage_nifti_collection(
     Side Effects:
         Replaces a prior tool-owned ``nifti_collection`` atomically after the
         complete replacement has been built in a sibling staging directory.
-        Canonical reconstruction outputs are never modified.
+        Canonical reconstruction outputs are never modified. Complete,
+        source-bound N4 magnitudes are preferred without renaming; phase stays
+        canonical and every selection is recorded in the manifest.
     """
     root = Path(output_root).expanduser().resolve()
     if not root.is_dir():
@@ -165,7 +168,10 @@ def build_mprage_nifti_collection(
         isinstance(previous_head_policy, dict)
         and previous_head_policy.get("historical_outputs_removed", False)
     ) or (previous_had_head_mask_outputs and not include_head_mask)
-    variants = _discover_collection_variants(root, require_retro=require_retro)
+    variants = _discover_collection_variants(root)
+    retro_requirement = _validate_collection_retro_requirement(
+        variants, required=require_retro
+    )
     discovered_groups = {
         f"{variant['collection_id']}:{branch}:{case}"
         for variant in variants
@@ -258,15 +264,20 @@ def build_mprage_nifti_collection(
                         for case in cases
                     ),
                     "head_mask": subtree["head_mask"],
+                    "scientific_scope": subtree["scientific_scope"],
                 }
             )
+        n4_selected_count = sum(
+            int(record["scientific_scope"]["n4_bias_corrected_magnitude_count"])
+            for record in variant_records
+        )
         owned_files = {
             str(path.relative_to(staging)): sha256_file(path)
             for path in sorted(staging.rglob("*"))
             if path.is_file()
         }
         manifest = {
-            "format_version": 6,
+            "format_version": 7,
             "builder": COLLECTION_BUILDER,
             "status": "complete",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -289,7 +300,15 @@ def build_mprage_nifti_collection(
                     ),
                     "historical_outputs_removed": historical_head_mask_outputs_removed,
                 },
+                "magnitude_selection": {
+                    "default": "prefer_complete_source_bound_n4_derivative",
+                    "filenames_mark_n4": False,
+                    "metadata_records_n4_provenance": True,
+                    "n4_bias_corrected_magnitude_count": n4_selected_count,
+                    "phase_selection": "canonical_unmodified",
+                },
             },
+            "retro_requirement": retro_requirement,
             "synchronization": {
                 "mode": "initial_build" if previous_manifest is None else "atomic_source_sync",
                 "previous_case_groups": sorted(previous_groups),
@@ -317,7 +336,13 @@ def build_mprage_nifti_collection(
             manifest["head_mask"] = legacy["head_mask"]
             manifest["scientific_scope"] = {
                 "canonical_reconstruction_outputs_modified": False,
-                "original_niftis_copied_byte_for_byte": True,
+                "canonical_phase_niftis_copied_byte_for_byte": True,
+                "canonical_magnitude_niftis_copied_byte_for_byte": (
+                    n4_selected_count == 0
+                ),
+                "original_niftis_copied_byte_for_byte": n4_selected_count == 0,
+                "n4_bias_corrected_magnitudes_preferred_when_available": True,
+                "n4_bias_corrected_magnitude_count": n4_selected_count,
                 "head_mask_outputs_generated": include_head_mask,
                 "same_whole_head_mask_applied_to_all_branches": include_head_mask,
                 "standard_variants_and_rovir_are_additive": True,
@@ -331,16 +356,11 @@ def build_mprage_nifti_collection(
     return manifest
 
 
-def _discover_collection_variants(
-    root: Path, *, require_retro: bool
-) -> list[dict[str, Any]]:
+def _discover_collection_variants(root: Path) -> list[dict[str, Any]]:
     """Discover legacy, count-specific, and canonical ROVir source trees.
 
     Args:
         root: User-selected reconstruction root.
-        require_retro: Whether each standard variant must contain its complete
-            modality-specific retrospective case set.
-
     Returns:
         Ordered source-tree records ready for independent materialization.
 
@@ -357,7 +377,7 @@ def _discover_collection_variants(
         sources = _discover_case_sources(
             root,
             sampling_class=sampling_class,
-            require_retro=require_retro,
+            require_retro=False,
             required_case_ids=REQUIRED_RETRO_CASES,
             include_rovir=False,
         )
@@ -412,7 +432,7 @@ def _discover_collection_variants(
         sources = _discover_case_sources(
             directory,
             sampling_class=sampling_class,
-            require_retro=require_retro,
+            require_retro=False,
             required_case_ids=STANDARD_DEFAULT_RETRO_CASES,
             include_rovir=False,
         )
@@ -440,18 +460,20 @@ def _discover_collection_variants(
 
     rovir_manifest = root / "normal" / "rovir" / "manifest.json"
     if rovir_manifest.is_file() and (root / "normal" / "rovir" / "nifti").is_dir():
+        sampling_class, sampling_record = _read_rovir_sampling_class(root)
         sources = _discover_rovir_sources(root)
         variants.append(
             {
                 "collection_id": "rovir",
                 "kind": "canonical_rovir",
                 "collection_relative": Path("rovir"),
-                "sampling_class": _read_sampling_class(root),
+                "sampling_class": sampling_class,
                 "sources": sources,
                 "run_manifests": {},
                 "source_contract": {
                     "canonical_rovir_manifest": str(rovir_manifest.relative_to(root)),
                     "canonical_rovir_manifest_sha256": sha256_file(rovir_manifest),
+                    "sampling_class_record": sampling_record,
                     "independent_of_standard_pca_counts": True,
                 },
             }
@@ -461,6 +483,79 @@ def _discover_collection_variants(
             f"No complete legacy, vccN, or canonical ROVir MPRAGE outputs found in {root}."
         )
     return variants
+
+
+def _validate_collection_retro_requirement(
+    variants: list[dict[str, Any]], *, required: bool
+) -> dict[str, Any]:
+    """Require one complete retro variant while retaining normal-only variants.
+
+    Args:
+        variants: Discovered legacy, count-specific, and ROVir source records.
+        required: Whether the caller requested a complete retrospective set.
+
+    Returns:
+        JSON-native validation record identifying complete variants and each
+        variant's contract-specific missing cases.
+
+    Raises:
+        FileNotFoundError: If required and no single variant satisfies its
+            retrospective geometry contract.
+        ValueError: If a variant record is malformed or has an unknown kind.
+    """
+
+    assessments: list[dict[str, Any]] = []
+    complete_variants: list[str] = []
+    for variant in variants:
+        collection_id = variant.get("collection_id")
+        kind = variant.get("kind")
+        sources = variant.get("sources")
+        if not isinstance(collection_id, str) or not isinstance(sources, dict):
+            raise ValueError("Collection variant has an invalid retrospective contract.")
+        if kind == "legacy_standard_pca":
+            required_cases = REQUIRED_RETRO_CASES
+        elif kind in {"standard_pca", "canonical_rovir"}:
+            required_cases = STANDARD_DEFAULT_RETRO_CASES
+        else:
+            raise ValueError(f"Unsupported collection variant kind: {kind!r}")
+        available_cases = {
+            case
+            for cases in sources.values()
+            if isinstance(cases, dict)
+            for case in cases
+            if case != "normal"
+        }
+        missing_cases = [case for case in required_cases if case not in available_cases]
+        complete = not missing_cases
+        if complete:
+            complete_variants.append(collection_id)
+        assessments.append(
+            {
+                "collection_id": collection_id,
+                "kind": kind,
+                "required_cases": list(required_cases),
+                "available_cases": sorted(available_cases),
+                "missing_cases": missing_cases,
+                "complete": complete,
+            }
+        )
+    if required and not complete_variants:
+        details = "; ".join(
+            f"{record['collection_id']} missing {record['missing_cases']}"
+            for record in assessments
+        )
+        raise FileNotFoundError(
+            "No collection variant provides a complete required retrospective set: "
+            + details
+        )
+    return {
+        "requested": required,
+        "scope": "at_least_one_complete_variant",
+        "satisfied": bool(complete_variants) if required else None,
+        "complete_variants": complete_variants,
+        "variant_assessments": assessments,
+        "normal_only_variants_are_additive": True,
+    }
 
 
 def _discover_rovir_sources(
@@ -933,6 +1028,72 @@ def _read_sampling_class(output_root: Path) -> str:
     return sampling_class
 
 
+def _read_rovir_sampling_class(root: Path) -> tuple[str, dict[str, Any]]:
+    """Read and cross-check sampling records owned by canonical ROVir.
+
+    Args:
+        root: Top-level reconstruction root containing ``normal/rovir``.
+
+    Returns:
+        Validated sampling label and exact path/hash provenance for every
+        available matching ROVir record. The prepared BART-input record is
+        selected when both supported records are present. Historical mixed
+        trees may return the root-level standard record as a marked fallback.
+
+    Raises:
+        FileNotFoundError: If neither canonical ROVir nor a historical
+            root-level standard tree has a sampling-class record.
+        ValueError: If a record is unsupported or available records disagree.
+    """
+    candidates = (
+        root / "normal" / "rovir" / "bart_inputs" / "sampling_class.txt",
+        root / "normal" / "rovir" / "source_inputs" / "sampling_class.txt",
+    )
+    available = [path for path in candidates if path.is_file()]
+    used_legacy_standard_fallback = False
+    if not available:
+        legacy_standard = root / "normal" / "bart_inputs" / "sampling_class.txt"
+        if legacy_standard.is_file():
+            available = [legacy_standard]
+            used_legacy_standard_fallback = True
+        else:
+            raise FileNotFoundError(
+                "Canonical ROVir sampling-class record does not exist; checked: "
+                + ", ".join(str(path) for path in (*candidates, legacy_standard))
+            )
+
+    records: list[dict[str, str]] = []
+    sampling_classes: set[str] = set()
+    for path in available:
+        sampling_class = path.read_text(encoding="utf-8").strip()
+        if sampling_class not in {"R1", "R3x1"}:
+            raise ValueError(
+                f"Unsupported canonical ROVir sampling class in {path}: "
+                f"{sampling_class!r}"
+            )
+        sampling_classes.add(sampling_class)
+        records.append(
+            {
+                "path": str(path.relative_to(root)),
+                "sha256": sha256_file(path),
+            }
+        )
+    if len(sampling_classes) != 1:
+        details = ", ".join(
+            f"{record['path']}={path.read_text(encoding='utf-8').strip()!r}"
+            for record, path in zip(records, available)
+        )
+        raise ValueError(f"Canonical ROVir sampling-class records disagree: {details}")
+
+    sampling_class = next(iter(sampling_classes))
+    return sampling_class, {
+        "value": sampling_class,
+        "selected": records[0],
+        "matching_records": records,
+        "legacy_standard_fallback": used_legacy_standard_fallback,
+    }
+
+
 def _discover_nifti_pairs(directory: Path) -> list[tuple[Path, Path]]:
     """Find NIfTI files and require matching JSON sidecars.
 
@@ -1225,15 +1386,28 @@ def _materialize_collection(
                 }
             )
 
+    n4_selected_count = sum(
+        1
+        for case in case_records
+        for record in case["files"]
+        if record["collection_source_selection"] == "n4_bias_corrected_magnitude"
+    )
+
     return {
-        "format_version": 5,
+        "format_version": 6,
         "builder": COLLECTION_BUILDER,
         "status": "complete",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "scientific_scope": {
             "canonical_reconstruction_outputs_modified": False,
             "normal_sampling_class": sampling_class,
-            "original_niftis_copied_byte_for_byte": True,
+            "canonical_phase_niftis_copied_byte_for_byte": True,
+            "canonical_magnitude_niftis_copied_byte_for_byte": (
+                n4_selected_count == 0
+            ),
+            "original_niftis_copied_byte_for_byte": n4_selected_count == 0,
+            "n4_bias_corrected_magnitudes_preferred_when_available": True,
+            "n4_bias_corrected_magnitude_count": n4_selected_count,
             "head_mask_outputs_generated": include_head_mask,
             "whole_head_mask_source": (
                 "normal canonical magnitude" if include_head_mask else None
@@ -1259,6 +1433,144 @@ def _materialize_collection(
     }
 
 
+def _select_collection_source(
+    canonical_nifti: Path,
+    canonical_sidecar: Path,
+    output_root: Path,
+) -> tuple[Path, Path, dict[str, Any]]:
+    """Prefer a complete source-bound N4 magnitude without changing filenames.
+
+    Args:
+        canonical_nifti: Canonical reconstruction NIfTI discovered for one case.
+        canonical_sidecar: Matching canonical JSON sidecar.
+        output_root: Reconstruction root used to confine derivative provenance.
+
+    Returns:
+        Selected NIfTI, selected sidecar, and explicit selection provenance.
+        Phase always returns the canonical pair. Magnitude returns its N4
+        derivative only when a complete adjacent derivative tree exists.
+
+    Raises:
+        FileNotFoundError: If an advertised derivative is incomplete.
+        ValueError: If its source binding, hashes, geometry, or confinement fails.
+    """
+
+    if "_part-mag_" not in canonical_nifti.name:
+        return canonical_nifti, canonical_sidecar, {"selection": "canonical"}
+
+    nifti_root = next(
+        (parent for parent in canonical_nifti.parents if parent.name == "nifti"),
+        None,
+    )
+    if nifti_root is None:
+        raise ValueError(
+            f"Canonical NIfTI is not below a nifti directory: {canonical_nifti}"
+        )
+    relative_parts = canonical_nifti.relative_to(nifti_root).parts
+    if len(relative_parts) < 2:
+        raise ValueError(
+            f"Canonical magnitude lacks a branch below its nifti directory: {canonical_nifti}"
+        )
+    derivative = (
+        nifti_root.parent / "n4_bias_corrected_nifti" / relative_parts[0]
+    )
+    if not derivative.exists():
+        return canonical_nifti, canonical_sidecar, {"selection": "canonical"}
+    if not derivative.is_dir():
+        raise ValueError(f"N4 derivative path is not a directory: {derivative}")
+    manifest_path = derivative / "metadata" / "n4_manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"N4 derivative exists without its complete manifest: {manifest_path}"
+        )
+    manifest = _load_json(manifest_path)
+    if manifest.get("status") != "mprage_n4_bias_correction_complete":
+        raise ValueError(
+            f"N4 derivative manifest has an unexpected status: {manifest_path}"
+        )
+    request_source = manifest.get("request", {}).get("source", {})
+    magnitude_record = request_source.get("magnitude", {})
+    sidecar_record = request_source.get("magnitude_sidecar", {})
+    expected_source = {
+        "path": str(canonical_nifti.resolve()),
+        "size_bytes": canonical_nifti.stat().st_size,
+        "sha256": sha256_file(canonical_nifti),
+    }
+    expected_sidecar = {
+        "path": str(canonical_sidecar.resolve()),
+        "size_bytes": canonical_sidecar.stat().st_size,
+        "sha256": sha256_file(canonical_sidecar),
+    }
+    if magnitude_record != expected_source or sidecar_record != expected_sidecar:
+        raise ValueError(
+            f"N4 derivative is not bound to the selected canonical magnitude: {derivative}"
+        )
+
+    output_records = manifest.get("outputs")
+    if not isinstance(output_records, list) or not output_records:
+        raise ValueError(f"N4 derivative manifest has no output records: {manifest_path}")
+    validated: dict[str, Path] = {}
+    for record in output_records:
+        if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+            raise ValueError(f"N4 derivative output record is malformed: {manifest_path}")
+        path = (derivative / record["path"]).resolve()
+        if derivative.resolve() not in path.parents:
+            raise ValueError(f"N4 derivative output escapes its directory: {path}")
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        if path.stat().st_size != record.get("size_bytes"):
+            raise ValueError(f"N4 derivative output size changed: {path}")
+        if sha256_file(path) != record.get("sha256"):
+            raise ValueError(f"N4 derivative output hash changed: {path}")
+        validated[str(record["path"])] = path
+    corrected = [
+        path
+        for path in validated.values()
+        if path.name.endswith("_desc-N4BiasCorrected.nii.gz")
+    ]
+    if len(corrected) != 1:
+        raise ValueError(
+            f"N4 derivative must contain exactly one corrected magnitude: {derivative}"
+        )
+    bias_fields = [
+        path
+        for path in validated.values()
+        if path.name.endswith("_desc-N4BiasField.nii.gz")
+    ]
+    if len(bias_fields) != 1:
+        raise ValueError(
+            f"N4 derivative must contain exactly one multiplicative bias field: {derivative}"
+        )
+    selected_nifti = corrected[0]
+    selected_sidecar = selected_nifti.with_name(
+        selected_nifti.name.removesuffix(".nii.gz") + ".json"
+    )
+    if selected_sidecar not in validated.values():
+        raise FileNotFoundError(
+            f"Corrected N4 magnitude sidecar is not manifest-bound: {selected_sidecar}"
+        )
+    canonical_image, _ = _load_validated_nifti(canonical_nifti)
+    selected_image, _ = _load_validated_nifti(selected_nifti)
+    if selected_image.shape != canonical_image.shape or not np.allclose(
+        selected_image.affine, canonical_image.affine, rtol=0.0, atol=1e-6
+    ):
+        raise ValueError("N4 corrected magnitude geometry differs from its canonical source.")
+    if output_root.resolve() not in selected_nifti.parents:
+        raise ValueError("N4 collection source lies outside the reconstruction root.")
+    return selected_nifti, selected_sidecar, {
+        "selection": "n4_bias_corrected_magnitude",
+        "n4_provenance": {
+            "manifest": str(manifest_path.relative_to(output_root)),
+            "manifest_sha256": sha256_file(manifest_path),
+            "mode": manifest.get("mode", "field_estimation"),
+            "bias_field": str(bias_fields[0].relative_to(output_root)),
+            "bias_field_sha256": sha256_file(bias_fields[0]),
+            "request": manifest.get("request"),
+            "validation": manifest.get("validation"),
+        },
+    }
+
+
 def _materialize_pair(
     source_nifti: Path,
     source_sidecar: Path,
@@ -1269,10 +1581,10 @@ def _materialize_pair(
     head_mask: nib.Nifti1Image | None,
     mask_record: dict[str, Any],
 ) -> dict[str, Any]:
-    """Copy one canonical pair and write its masked derivative.
+    """Copy one preferred-source pair and write its masked derivative.
 
     Args:
-        source_nifti: Canonical source NIfTI.
+        source_nifti: Canonical source NIfTI used to locate any N4 derivative.
         source_sidecar: Matching canonical JSON sidecar.
         output_root: Reconstruction root used for relative provenance paths.
         staging: Collection staging directory.
@@ -1285,24 +1597,34 @@ def _materialize_pair(
         JSON-native provenance and hash record for the copied and masked files.
 
     Side Effects:
-        Copies the NIfTI and JSON source pair and optionally writes one masked pair.
+        Copies the selected NIfTI/JSON pair under the canonical names and
+        optionally writes one masked pair.
     """
-    image, data = _load_validated_nifti(source_nifti)
-    source_metadata = _load_json(source_sidecar)
+    selected_nifti, selected_sidecar, selection = _select_collection_source(
+        source_nifti, source_sidecar, output_root
+    )
+    image, data = _load_validated_nifti(selected_nifti)
+    source_metadata = _load_json(selected_sidecar)
     original_nifti = original_dir / source_nifti.name
     original_sidecar = original_dir / source_sidecar.name
-    shutil.copy2(source_nifti, original_nifti)
-    shutil.copy2(source_sidecar, original_sidecar)
-    if sha256_file(original_nifti) != sha256_file(source_nifti):
-        raise RuntimeError(f"Canonical NIfTI copy hash mismatch: {source_nifti}")
-    if sha256_file(original_sidecar) != sha256_file(source_sidecar):
-        raise RuntimeError(f"Canonical JSON copy hash mismatch: {source_sidecar}")
+    shutil.copy2(selected_nifti, original_nifti)
+    shutil.copy2(selected_sidecar, original_sidecar)
+    if sha256_file(original_nifti) != sha256_file(selected_nifti):
+        raise RuntimeError(f"Selected NIfTI copy hash mismatch: {selected_nifti}")
+    if sha256_file(original_sidecar) != sha256_file(selected_sidecar):
+        raise RuntimeError(f"Selected JSON copy hash mismatch: {selected_sidecar}")
 
     record = {
         "source_nifti": str(source_nifti.relative_to(output_root)),
         "source_nifti_sha256": sha256_file(source_nifti),
         "source_json": str(source_sidecar.relative_to(output_root)),
         "source_json_sha256": sha256_file(source_sidecar),
+        "collection_source_selection": selection["selection"],
+        "collected_source_nifti": str(selected_nifti.relative_to(output_root)),
+        "collected_source_nifti_sha256": sha256_file(selected_nifti),
+        "collected_source_json": str(selected_sidecar.relative_to(output_root)),
+        "collected_source_json_sha256": sha256_file(selected_sidecar),
+        "n4_provenance": selection.get("n4_provenance"),
         "original_nifti": str(original_nifti.relative_to(staging)),
         "original_nifti_sha256": sha256_file(original_nifti),
         "original_json": str(original_sidecar.relative_to(staging)),
@@ -1332,6 +1654,8 @@ def _materialize_pair(
             "WholeHeadMaskBETUsed": False,
             "CanonicalUnmaskedSource": str(source_nifti.relative_to(output_root)),
             "CanonicalUnmaskedSourceSHA256": sha256_file(source_nifti),
+            "CollectedUnmaskedSource": str(selected_nifti.relative_to(output_root)),
+            "CollectedUnmaskedSourceSHA256": sha256_file(selected_nifti),
         }
     )
     _write_json(masked_sidecar, masked_metadata)

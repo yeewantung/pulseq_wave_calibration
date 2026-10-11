@@ -14,6 +14,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 from wave_retro_lr.n4_bias_correction import (  # noqa: E402
     N4Parameters,
     apply_mprage_n4_bias_correction,
+    apply_mprage_shared_n4_bias_field,
 )
 
 
@@ -28,17 +29,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
 
     args = _parser().parse_args(argv)
-    manifest = apply_mprage_n4_bias_correction(
-        args.source_nifti_directory,
-        args.output_directory,
-        executable=args.executable,
-        parameters=N4Parameters(
-            shrink_factor=args.shrink_factor,
-            bspline_spacing_mm=args.bspline_spacing_mm,
-            convergence_iterations=tuple(args.convergence_iterations),
-            convergence_threshold=args.convergence_threshold,
-        ),
-    )
+    if args.reference_derivative is not None:
+        manifest = apply_mprage_shared_n4_bias_field(
+            args.source_nifti_directory,
+            args.output_directory,
+            args.reference_derivative,
+        )
+    else:
+        manifest = apply_mprage_n4_bias_correction(
+            args.source_nifti_directory,
+            args.output_directory,
+            executable=args.executable,
+            parameters=N4Parameters(
+                shrink_factor=args.shrink_factor,
+                bspline_spacing_mm=args.bspline_spacing_mm,
+                convergence_iterations=tuple(args.convergence_iterations),
+                convergence_threshold=args.convergence_threshold,
+            ),
+        )
     print(
         "MPRAGE N4 derivative ready: "
         f"{args.output_directory.expanduser().resolve()} "
@@ -82,6 +90,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("source_nifti_directory", type=Path)
     parser.add_argument("output_directory", type=Path)
+    parser.add_argument(
+        "--reference-derivative",
+        type=Path,
+        help=(
+            "reuse a validated normal-reconstruction N4 field in physical space "
+            "instead of fitting a new field"
+        ),
+    )
     parser.add_argument("--executable", default="N4BiasFieldCorrection")
     parser.add_argument("--shrink-factor", type=int, default=defaults.shrink_factor)
     parser.add_argument(

@@ -6,8 +6,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq [-no-noise-prewhitening]
-  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [-no-noise-prewhitening] [--n4-bias-correction] [ROI options] [run options]
+  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--noise-prewhitening | --no-noise-prewhitening]
+  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [ROI options] [run options]
 
 ROI options (choose exactly one mode):
   --use-recommended                       requires a prior inspect
@@ -15,8 +15,9 @@ ROI options (choose exactly one mode):
   --null-box-file ROI_BOXES.json          may run directly
 
 Run options:
-  -no-noise-prewhitening
-                         force off automatic TWIX noise-scan prewhitening
+  --noise-prewhitening   explicitly enable experimental TWIX noise-scan prewhitening
+  --no-noise-prewhitening
+                         explicitly retain the current no-prewhitening default
   --n4-bias-correction   create optional magnitude-only ANTs N4 derivatives
   --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
   -g                     use GPU for BART Wave only
@@ -41,11 +42,13 @@ TWIX_FILE="$1"
 RECONSTRUCTION_ROOT="${2%/}"
 SEQUENCE_FILE="$3"
 shift 3
-NOISE_PREWHITENING=true
+NOISE_PREWHITENING=false
 N4_BIAS_CORRECTION=false
 FILTERED_ARGS=()
 for argument in "$@"; do
-    if [[ "$argument" == "-no-noise-prewhitening" || "$argument" == "--no-noise-prewhitening" ]]; then
+    if [[ "$argument" == "--noise-prewhitening" ]]; then
+        NOISE_PREWHITENING=true
+    elif [[ "$argument" == "-no-noise-prewhitening" || "$argument" == "--no-noise-prewhitening" ]]; then
         NOISE_PREWHITENING=false
     elif [[ "$argument" == "--n4-bias-correction" ]]; then
         N4_BIAS_CORRECTION=true
@@ -68,7 +71,7 @@ echo "ROVir reconstruction root: $RECONSTRUCTION_ROOT"
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 PREPARE_INVOCATION_ARGS=(prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE")
-[[ "$NOISE_PREWHITENING" == true ]] || PREPARE_INVOCATION_ARGS+=(--no-noise-prewhitening)
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREPARE_INVOCATION_ARGS+=(--noise-prewhitening); else PREPARE_INVOCATION_ARGS+=(--no-noise-prewhitening); fi
 python "$WORKFLOW" "${PREPARE_INVOCATION_ARGS[@]}" >/dev/null
 # Use the validated canonical source paths recorded by the normal manifest.
 TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
@@ -247,8 +250,8 @@ else
         --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT" \
         --suffix "BARTWaveMPRAGEROVir${VIRTUAL_COILS}FISTAR0"
 fi
-run_optional_n4 "$NIFTI_OUTPUT" "$ROVIR_ROOT/n4_bias_corrected_nifti/fista_r0"
 python "$WORKFLOW" finalize "$RECONSTRUCTION_ROOT" "$VIRTUAL_COILS" >/dev/null
+run_optional_n4 "$NIFTI_OUTPUT" "$ROVIR_ROOT/n4_bias_corrected_nifti/fista_r0"
 if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_class)" == "R3x1" ]]; then
     # Keep the selected R3x1 Wavelet branch visible and resumable in this launcher.
     python "$WORKFLOW" wavelet-context "$RECONSTRUCTION_ROOT" >/dev/null
@@ -294,10 +297,10 @@ if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_clas
             --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$WAVELET_NIFTI_OUTPUT" \
             --suffix "BARTWaveMPRAGENativeR3x1ROVir${VIRTUAL_COILS}OptimalWavelet"
     fi
+    python "$WORKFLOW" finalize-wavelet "$RECONSTRUCTION_ROOT" >/dev/null
     run_optional_n4 \
         "$WAVELET_NIFTI_OUTPUT" \
         "$ROVIR_ROOT/n4_bias_corrected_nifti/optimal_wavelet"
-    python "$WORKFLOW" finalize-wavelet "$RECONSTRUCTION_ROOT" >/dev/null
 else
     echo "Normal R1 ROVir remains FISTA-r0-only; no R1 Wavelet value is selected."
 fi

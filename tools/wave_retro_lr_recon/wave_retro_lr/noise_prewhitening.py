@@ -39,7 +39,7 @@ def prepare_noise_prewhitening(
     twix_path: str | Path,
     physical_coils: int,
     *,
-    enabled: bool = True,
+    enabled: bool = False,
     measurements: Sequence[Any] | None = None,
 ) -> NoisePrewhiteningPlan:
     """Inspect a TWIX file and prepare one physical-coil whitening transform.
@@ -73,7 +73,8 @@ def prepare_noise_prewhitening(
         raise ValueError("Physical coil count must be positive.")
     request = {
         "enabled": bool(enabled),
-        "default": True,
+        "default": False,
+        "enable_flag": "--noise-prewhitening",
         "disable_flags": ["-no-noise-prewhitening", "--no-noise-prewhitening"],
     }
     if not enabled:
@@ -81,7 +82,7 @@ def prepare_noise_prewhitening(
             record={
                 "version": PREWHITENING_VERSION,
                 "request": request,
-                "status": "disabled_by_user",
+                "status": "not_applied_disabled",
                 "applied": False,
                 "physical_coils": coils,
                 "fallback": False,

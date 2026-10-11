@@ -28,8 +28,10 @@ and are never overwritten, moved, or relabeled. Preparation rejects Ncc above
 the measured physical receive-coil count and records retained energy, PCA-basis
 identity, source and geometry provenance, and prepared-artifact hashes.
 
-Noise prewhitening is enabled by default for new MPRAGE and GRE standard-PCA
-preparation. The tool searches for a real `MDH_NOISEADJSCAN`, validates its
+Noise prewhitening is disabled by default for MPRAGE, GRE, and ROVir until the
+experimental path is validated on real data. Pass `--noise-prewhitening` to
+explicitly enable it. When enabled, the tool searches for a real
+`MDH_NOISEADJSCAN`, validates its
 physical-coil count and finite covariance, applies the same physical-coil
 transform to image k-space and integrated ACS before PCA, and records the
 covariance, transform, hashes, empirical already-white assessment, and Siemens
@@ -37,10 +39,10 @@ raw-data-correction bits. The raw-data-correction bit is audit evidence only;
 it is not relabeled as proof of scanner-side whitening. If no noise scan
 exists, preparation continues without whitening and records
 `not_applied_no_noise_scan`. A populated but invalid noise scan is a hard
-error. Use either `-no-noise-prewhitening` (the requested spelling) or
-`--no-noise-prewhitening` to force the pipeline off. A complete historical
+error. The legacy `-no-noise-prewhitening` spelling and
+`--no-noise-prewhitening` remain accepted explicit opt-outs. A complete historical
 manifest that predates this field remains reusable as an unchanged legacy
-unwhitened result, including under the default launcher invocation. It is not
+unwhitened result under the default launcher invocation. It is not
 rewritten or relabeled. Among newly prepared manifests, a whitening-mode
 change never reuses a mismatched PCA basis or CSM.
 
@@ -53,10 +55,22 @@ the canonical magnitude/phase pair, and writes a separate derivative below
 magnitude, multiplicative bias field, source/output hashes, ANTs identity and
 parameters, numerical validation, and logs. A temporary whole-head estimation
 mask is used because N4 operates in the log domain, but the mask is not
-retained. GRE is intentionally excluded: independently estimated echo bias
-fields would violate the shared inter-echo scaling contract. The default
-NIfTI collection remains a byte-identical collection of canonical originals;
-N4 derivatives are not silently substituted for them.
+retained. Mask algorithm version and parameters are bound into the resumable
+request. Masked ANTs intensity rescaling is explicitly disabled so the saved
+bias field satisfies the validated `corrected = source / bias` identity. GRE
+is intentionally excluded: independently estimated echo bias
+fields would violate the shared inter-echo scaling contract. ROVir normal
+R3x1 fits the field on the selected Wavelet magnitude; ROVir retrospective
+cases reuse that one hash-bound field after physical-space field and mask
+resampling. R1 uses the normal FISTA field because no R1 Wavelet branch is
+selected. Retrospective ROVir never silently refits N4 per case.
+
+The NIfTI collection prefers a complete source-bound N4 magnitude when both
+canonical and corrected files exist. It keeps the canonical filename so
+downstream naming remains stable, while phase always remains canonical and
+unchanged. Every file record states the canonical source, collected source,
+N4 manifest and bias-field hashes, fitting/application mode, and validation;
+an incomplete or mismatched N4 tree is rejected rather than ignored.
 
 The four main launchers accept mutually exclusive profiles: `--reg-full`
 (FISTA-r0 plus Wavelet), `--wavelet-only`, and `--fista-only`. Normal defaults
@@ -370,16 +384,28 @@ scripts/sample_mprage_nifti_collection.sh \
 ```
 
 Omit `--require-retro` to collect every currently available normal and
-retrospective reconstruction. For new `vccN` trees, `--require-retro` requires
-the reduced default cases but accepts any complete branch per case; normal and
-retro branch names need not match. Historical root-level layouts remain
-discoverable under their legacy requirements. This script never runs k-space
-preparation, ecalib, or Wave reconstruction.
+retrospective reconstruction. `--require-retro` requires at least one collected
+variant to satisfy its complete retrospective contract: new `vccN` and ROVir
+variants use native R3x2, LR-Y R3x2, and native R3x3; a historical root-level
+variant uses its four legacy R3x2 cases. Other normal-only variants remain
+additive, so a VCC normal reconstruction and complete ROVir retro reconstruction
+can coexist. Within the complete variant, normal and retro branch names need
+not match. This script never runs k-space preparation, ecalib, or Wave
+reconstruction. The manifest records every variant assessment and the variant
+that satisfied the gate.
 
-The default collection contains only byte-identical canonical files below
-`original_nifti`. Add `--head-mask` to explicitly request the historical
+The default collection stores canonical phase and prefers complete N4-corrected
+magnitude below the established `original_nifti` layout without adding N4 to
+the filename. When no N4 derivative exists, magnitude is copied byte-for-byte
+from the canonical reconstruction. Consult `manifest.json` for the exact
+per-file selection and hashes. Add `--head-mask` to explicitly request the historical
 whole-head mask and `head_masked_nifti` presentation derivatives. Mask
 parameter overrides apply only to that explicit mode.
+
+The source-NIfTI archival utility still requires a byte-identical collection
+copy. It therefore refuses to remove a canonical magnitude when collection
+selected its N4 derivative; this preserves strict N4 source validation and
+rebuildability.
 
 Discovery is directory-backed rather than case-list-backed. Standard
 `nifti/<branch>` and ROVir `rovir/nifti/<branch>` results are retained as
@@ -701,9 +727,9 @@ source ~/cluster/bart/bart_startup.sh
   retrospective crop, CSM, command, and normalization contracts;
 - `wave_retro_lr/bart_io.py`: bounded BART CFL I/O, logical hashing, and
   split-complex output recombination;
-- `wave_retro_lr/nifti_collection.py`: byte-identical canonical collection,
-  optional normal-derived whole-head mask, physical-grid mask mapping, and
-  provenance;
+- `wave_retro_lr/nifti_collection.py`: canonical-phase/N4-preferred-magnitude
+  collection with exact provenance, optional normal-derived whole-head mask,
+  and physical-grid mask mapping;
 - `wave_retro_lr/gre_nifti_collection.py`: strict byte-identical GRE magnitude
   and phase collection with no masking or quantitative-complex duplication;
 - `wave_retro_lr/collection_archive.py`: explicit mask-product pruning and

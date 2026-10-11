@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from inspect import signature
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +17,16 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from scripts.prepare_gre_normal import _parser as gre_parser  # noqa: E402
 from scripts.prepare_mprage_normal import _parser as mprage_parser  # noqa: E402
+from wave_retro_lr.gre import (  # noqa: E402
+    prepare_normal_gre,
+    prepare_retro_gre,
+    prepare_retro_gre_r3x3,
+)
+from wave_retro_lr.mprage import (  # noqa: E402
+    prepare_normal_mprage,
+    prepare_retro_mprage,
+    prepare_retro_mprage_r3x3,
+)
 from wave_retro_lr.noise_prewhitening import (  # noqa: E402
     apply_noise_prewhitening_coillast,
     combined_prewhitening_and_compression_basis,
@@ -24,6 +35,10 @@ from wave_retro_lr.noise_prewhitening import (  # noqa: E402
     prepare_noise_prewhitening,
     prewhitening_request_matches,
 )
+from wave_retro_lr.rovir_feasibility import (  # noqa: E402
+    prepare_mprage_rovir_source_anchor,
+)
+from wave_retro_lr.rovir_workflow import prepare_normal_rovir_invocation  # noqa: E402
 
 
 class _Stream:
@@ -48,12 +63,16 @@ class _Stream:
 class NoisePrewhiteningTests(unittest.TestCase):
     """Validate default, fallback, numerical, and provenance behavior."""
 
-    def test_cli_defaults_and_both_disable_spellings(self) -> None:
-        """Enable whitening by default and accept both requested flag forms."""
+    def test_cli_defaults_to_off_and_accepts_explicit_modes(self) -> None:
+        """Keep whitening off by default and expose explicit on/off flags."""
 
         for parser in (mprage_parser(), gre_parser()):
             default = parser.parse_args(["input.dat", "output", "input.seq"])
-            self.assertTrue(default.noise_prewhitening)
+            self.assertFalse(default.noise_prewhitening)
+            enabled = parser.parse_args(
+                ["input.dat", "output", "input.seq", "--noise-prewhitening"]
+            )
+            self.assertTrue(enabled.noise_prewhitening)
             for flag in ("-no-noise-prewhitening", "--no-noise-prewhitening"):
                 parsed = parser.parse_args(
                     ["input.dat", "output", "input.seq", flag]
@@ -73,6 +92,8 @@ class NoisePrewhiteningTests(unittest.TestCase):
             "sample_mprage_rovir_recon.sh",
         ):
             source = (TOOL_ROOT / "scripts" / name).read_text(encoding="utf-8")
+            self.assertIn("NOISE_PREWHITENING=false", source, name)
+            self.assertIn("--noise-prewhitening", source, name)
             self.assertIn("-no-noise-prewhitening", source, name)
             self.assertIn("--no-noise-prewhitening", source, name)
         for name in standard_launchers:
@@ -84,15 +105,34 @@ class NoisePrewhiteningTests(unittest.TestCase):
                 name,
             )
 
-    def test_disabled_mode_does_not_open_twix(self) -> None:
-        """Honor explicit opt-out without importing or reading mapVBVD."""
+    def test_public_preparation_apis_default_to_off(self) -> None:
+        """Keep all standard and ROVir preparation APIs default-off."""
+
+        for function in (
+            prepare_normal_mprage,
+            prepare_retro_mprage,
+            prepare_retro_mprage_r3x3,
+            prepare_normal_gre,
+            prepare_retro_gre,
+            prepare_retro_gre_r3x3,
+            prepare_mprage_rovir_source_anchor,
+            prepare_normal_rovir_invocation,
+        ):
+            self.assertFalse(
+                signature(function).parameters["noise_prewhitening"].default,
+                function.__name__,
+            )
+
+    def test_default_disabled_mode_does_not_open_twix(self) -> None:
+        """Keep the default off without importing or reading mapVBVD."""
 
         with tempfile.TemporaryDirectory() as folder:
             twix = Path(folder) / "input.dat"
             twix.write_bytes(b"placeholder")
             with patch.dict(sys.modules, {"mapvbvd": None}):
-                plan = prepare_noise_prewhitening(twix, 4, enabled=False)
-        self.assertEqual(plan.record["status"], "disabled_by_user")
+                plan = prepare_noise_prewhitening(twix, 4)
+        self.assertEqual(plan.record["status"], "not_applied_disabled")
+        self.assertFalse(plan.record["request"]["default"])
         self.assertIsNone(plan.matrix)
 
     def test_legacy_manifest_is_compatible_without_relabeling(self) -> None:
@@ -140,7 +180,7 @@ class NoisePrewhiteningTests(unittest.TestCase):
             twix.write_bytes(b"placeholder")
             with patch.dict(sys.modules, {"mapvbvd": None}):
                 plan = prepare_noise_prewhitening(
-                    twix, 4, measurements=[{}, measurement]
+                    twix, 4, enabled=True, measurements=[{}, measurement]
                 )
         self.assertEqual(plan.record["status"], "not_applied_no_noise_scan")
         self.assertEqual(
@@ -227,7 +267,7 @@ class NoisePrewhiteningTests(unittest.TestCase):
             twix.write_bytes(b"placeholder")
             module = SimpleNamespace(mapVBVD=lambda *_args, **_kwargs: measurements)
             with patch.dict(sys.modules, {"mapvbvd": module}):
-                return prepare_noise_prewhitening(twix, coils)
+                return prepare_noise_prewhitening(twix, coils, enabled=True)
 
 
 if __name__ == "__main__":

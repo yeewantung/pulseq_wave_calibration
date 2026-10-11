@@ -21,6 +21,7 @@ from scripts.apply_mprage_n4_bias_correction import _parser  # noqa: E402
 from wave_retro_lr.n4_bias_correction import (  # noqa: E402
     N4Parameters,
     apply_mprage_n4_bias_correction,
+    apply_mprage_shared_n4_bias_field,
 )
 
 
@@ -68,6 +69,17 @@ class N4BiasCorrectionTests(unittest.TestCase):
             self.assertTrue(manifest["validation"]["affine_matches_source"])
             self.assertFalse(manifest["request"]["policy"]["default_enabled"])
             self.assertFalse(manifest["request"]["policy"]["phase_modified"])
+            self.assertFalse(
+                manifest["request"]["parameters"]["rescale_intensities"]
+            )
+            mask_request = manifest["request"]["estimation_mask"]
+            self.assertEqual(mask_request["contract_version"], 1)
+            self.assertEqual(
+                mask_request["parameters"],
+                manifest["estimation_mask"]["parameters"],
+            )
+            command = manifest["command"]["arguments_with_path_placeholders"]
+            self.assertEqual(command[command.index("-r") + 1], "0")
             output_names = {
                 Path(record["path"]).name for record in manifest["outputs"]
             }
@@ -111,6 +123,66 @@ class N4BiasCorrectionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source or parameter"):
                 apply_mprage_n4_bias_correction(source, destination)
 
+    def test_shared_normal_field_is_resampled_and_strictly_reused(self) -> None:
+        """Apply one fitted normal field to retro geometry without another fit."""
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            normal = self._write_source_pair(root / "normal" / "nifti")
+            reference = root / "normal" / "n4"
+            retro = self._write_source_pair(root / "retro" / "nifti")
+            retro_shape = (16, 32, 32)
+            retro_affine = np.diag([2.0, 1.0, 1.0, 1.0])
+            coordinates = np.indices(retro_shape, dtype=np.float32)
+            retro_magnitude = 80.0 + coordinates[0]
+            for nifti in retro.glob("*.nii.gz"):
+                values = (
+                    retro_magnitude
+                    if "_part-mag_" in nifti.name
+                    else np.zeros(retro_shape, dtype=np.float32)
+                )
+                nib.save(nib.Nifti1Image(values, retro_affine), str(nifti))
+            with (
+                patch(
+                    "wave_retro_lr.n4_bias_correction._tool_identity",
+                    return_value={
+                        "path": "N4BiasFieldCorrection-fixture",
+                        "size_bytes": 7,
+                        "sha256": "fixture-tool-sha256",
+                        "version": "ANTs fixture",
+                    },
+                ),
+                patch(
+                    "wave_retro_lr.n4_bias_correction._execute_n4",
+                    side_effect=self._fake_n4,
+                ) as execute,
+            ):
+                apply_mprage_n4_bias_correction(normal, reference)
+                destination = root / "retro" / "n4"
+                manifest = apply_mprage_shared_n4_bias_field(
+                    retro, destination, reference
+                )
+                reused = apply_mprage_shared_n4_bias_field(
+                    retro, destination, reference
+                )
+            self.assertEqual(execute.call_count, 1)
+            self.assertEqual(manifest, reused)
+            self.assertEqual(manifest["mode"], "shared_field_application")
+            self.assertTrue(manifest["validation"]["physical_space_resampling"])
+            self.assertFalse(manifest["request"]["policy"]["ants_refit_per_target"])
+            self.assertEqual(
+                manifest["request"]["shared_bias_field"]["reference"]["manifest"][
+                    "sha256"
+                ],
+                self._sha256(reference / "metadata" / "n4_manifest.json"),
+            )
+            corrected = next(
+                destination.rglob("*_desc-N4BiasCorrected.nii.gz")
+            )
+            corrected_data = np.asarray(nib.load(str(corrected)).dataobj)
+            self.assertEqual(corrected_data.shape, retro_shape)
+            self.assertTrue(np.isfinite(corrected_data).all())
+
     def test_mprage_launchers_are_opt_in_and_gre_is_untouched(self) -> None:
         """Expose N4 only through MPRAGE launchers and keep GRE unchanged."""
 
@@ -132,6 +204,25 @@ class N4BiasCorrectionTests(unittest.TestCase):
         ):
             source = (TOOL_ROOT / "scripts" / name).read_text(encoding="utf-8")
             self.assertNotIn("--n4-bias-correction", source, name)
+
+        rovir = (
+            TOOL_ROOT / "scripts" / "sample_mprage_rovir_recon.sh"
+        ).read_text(encoding="utf-8")
+        self.assertLess(
+            rovir.index('python "$WORKFLOW" finalize "$RECONSTRUCTION_ROOT"'),
+            rovir.index('run_optional_n4 "$NIFTI_OUTPUT"'),
+        )
+        self.assertLess(
+            rovir.index('python "$WORKFLOW" finalize-wavelet'),
+            rovir.index('"$ROVIR_ROOT/n4_bias_corrected_nifti/optimal_wavelet"'),
+        )
+        rovir_retro = (
+            TOOL_ROOT / "scripts" / "sample_mprage_rovir_retro_recon.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("--reference-derivative", rovir_retro)
+        self.assertIn(
+            "normal/rovir/n4_bias_corrected_nifti/optimal_wavelet", rovir_retro
+        )
 
     @staticmethod
     def _write_source_pair(directory: Path) -> Path:

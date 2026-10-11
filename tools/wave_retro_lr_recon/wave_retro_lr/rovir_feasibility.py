@@ -311,7 +311,7 @@ def prepare_mprage_rovir_source_anchor(
     sequence: str | Path,
     output_root: str | Path,
     *,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
 ) -> Path:
     """Prepare minimal source, PSF, and physical-ACS inputs for ROVir.
 

@@ -72,7 +72,7 @@ class StandardPcaContractTests(unittest.TestCase):
                 inspect.signature(function).parameters[
                     "noise_prewhitening"
                 ].default,
-                True,
+                False,
             )
         self.assertEqual(
             inspect.signature(prepare_retro_mprage).parameters["case_ids"].default,

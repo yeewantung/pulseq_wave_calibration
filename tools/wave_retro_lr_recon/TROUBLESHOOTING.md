@@ -12,21 +12,24 @@ matched.
 
 ## Noise prewhitening is skipped or an existing tree is rejected
 
-New preparation enables TWIX noise-scan prewhitening by default. Inspect
+New preparation keeps TWIX noise-scan prewhitening off by default until the
+experimental path is validated on real data. Pass `--noise-prewhitening` to
+enable it explicitly. Inspect
 `normal/bart_inputs/manifest.json` at `noise_prewhitening.status`:
 
 - `applied` means image data and integrated ACS used the recorded transform;
 - `not_applied_no_noise_scan` is the allowed missing-noise fallback;
 - `not_applied_empirically_already_white` means the measured covariance met
   both recorded identity thresholds; and
-- `disabled_by_user` means one of the explicit disable flags was supplied.
+- `not_applied_disabled` means the default-off policy or an explicit disable
+  flag selected no whitening.
 
 `MDH_RAWDATACORRECTION` is recorded but is not interpreted as proof of noise
 whitening because pyMapVBVD does not implement that correction. A populated
 noise scan with non-finite values, too few samples, a singular covariance, an
 ambiguous measurement, or a coil-count mismatch fails instead of falling back.
-Do not delete the matrix or edit the status. Switching between enabled and
-forced-off modes requires a separate clean source tree and a newly matched
+Do not delete the matrix or edit the status. Switching between explicitly
+enabled and default/explicitly disabled modes requires a separate clean source tree and a newly matched
 PCA basis and CSM for newly prepared manifests. Historical complete manifests
 without this field remain reusable under the default invocation as unchanged
 legacy unwhitened inputs; they are neither rewritten nor claimed to be
@@ -54,9 +57,20 @@ The manifest binds the original magnitude and untouched phase hashes, tool
 binary/version, parameters, temporary estimation-mask identity, output hashes,
 and the numerical `corrected = source / bias` check. A matching completed
 derivative is reused without rerunning ANTs. Changed sources or parameters are
-rejected; do not edit the manifest or copy a bias field between geometries.
-Original magnitude/phase files and the default `nifti_collection` remain
-unchanged. GRE launchers intentionally reject no N4 option because separate
+rejected; do not edit the manifest or manually copy a bias field between
+geometries. The ROVir retrospective launcher performs the supported operation:
+it validates the normal fitted derivative, recreates and hash-checks its
+temporary mask, resamples field and mask in physical space, and records all
+reference and target hashes. A missing normal R3x1 `optimal_wavelet` derivative
+(or normal R1 `fista_r0` derivative) is an error; rerun the normal ROVir
+launcher with `--n4-bias-correction` first.
+The command records `--rescale-intensities 0` because ANTs otherwise rescales
+masked corrected outputs and breaks that exact multiplicative identity.
+Original magnitude/phase files remain unchanged. Collection prefers a complete,
+source-bound N4 magnitude under the unchanged canonical filename and leaves
+phase canonical; `manifest.json` records both sources, the N4 manifest and
+bias-field hashes, and the fitting or shared-field mode. GRE launchers
+intentionally expose no N4 option because separate
 per-echo correction would disturb inter-echo scaling and downstream delta-B0.
 
 If preparation stops before writing `bart_inputs/manifest.json`, the non-empty

@@ -53,7 +53,7 @@ def prepare_normal_rovir_invocation(
     output_root: str | Path,
     sequence: str | Path,
     *,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
 ) -> dict[str, Any]:
     """Select, bind, or minimally prepare the source contract for ROVir.
 
@@ -124,12 +124,11 @@ def prepare_normal_rovir_invocation(
                 "Incomplete normal or vccN source layouts exist; refusing to "
                 "bootstrap around them: " + ", ".join(str(path) for path in incomplete)
             )
-        selected = (
-            prepare_mprage_rovir_source_anchor(twix, sequence, root)
-            if noise_prewhitening
-            else prepare_mprage_rovir_source_anchor(
-                twix, sequence, root, noise_prewhitening=False
-            )
+        selected = prepare_mprage_rovir_source_anchor(
+            twix,
+            sequence,
+            root,
+            noise_prewhitening=noise_prewhitening,
         )
         source = _validated_source_contract(
             twix,

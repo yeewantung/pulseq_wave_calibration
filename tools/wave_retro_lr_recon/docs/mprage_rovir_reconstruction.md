@@ -60,24 +60,30 @@ configuration file.
 ROVir writes only below `normal/rovir/` and leaves the standard normal branch
 unchanged.
 
-ROVir shares the same default noise-prewhitening policy as standard PCA but
-keeps its virtual-coil transform independent. If its bound standard source
+ROVir shares the same default-off noise-prewhitening policy as standard PCA but
+keeps its virtual-coil transform independent. Pass `--noise-prewhitening` to
+explicitly enable the experimental path. If its bound standard source
 records an applied whitening matrix, ROVir hash-validates and applies that
 exact physical-coil transform to both ACS and image data before the ROVir
 projection. A ROVir-only source anchor estimates and records the same contract
-itself. Missing noise data are an explicit no-op fallback. Use
-`-no-noise-prewhitening` (or `--no-noise-prewhitening`) on `inspect` or `run`
-to force off whitening. A default invocation may reuse a complete historical
+itself. Missing noise data are an explicit no-op fallback. The legacy
+`-no-noise-prewhitening` spelling and `--no-noise-prewhitening` remain accepted
+explicit opt-outs on `inspect` and `run`. A default invocation may reuse a complete historical
 unwhitened source, but records it as legacy and never reinterprets or relabels
 it as whitened.
 
 N4 is independent of the ROVir transform and remains disabled by default.
 Supplying `--n4-bias-correction` to `run` creates magnitude-only derivatives
 for the completed normal ROVir branches. The retrospective ROVir launcher
-accepts the same flag and writes case-local derivatives. Canonical magnitude
+accepts the same flag and writes case-local derivatives without fitting a new
+field: R3x1 uses the hash-bound normal `optimal_wavelet` field, while R1 uses
+the normal `fista_r0` field. The field is cubic-resampled and the recreated,
+hash-checked estimation mask is nearest-neighbor-resampled in NIfTI physical
+space. A missing or changed normal reference is rejected. Canonical magnitude
 and phase NIfTIs are unchanged; the temporary N4 estimation mask is not
 retained. `inspect` rejects the N4 flag because it produces no reconstructed
-magnitude image.
+magnitude image. Collection keeps canonical filenames but prefers a complete
+N4 magnitude and records the correction and reference hashes in its manifest.
 
 ROVir's canonical virtual-coil count is independent of the standard-PCA
 default. The combined retrospective launcher accepts `--rovir` without a
@@ -252,8 +258,11 @@ The MPRAGE NIfTI collection synchronizes available standard and ROVir outputs
 idempotently. Count-specific standard products appear below
 `nifti_collection/vccN/`, while canonical ROVir appears below
 `nifti_collection/rovir/`. They remain additive even for the same case and
-method. A partially populated ROVir set does not become a global
-`--require-retro` requirement.
+method. `--require-retro` requires at least one variant to have its complete
+retrospective geometry contract; it does not reject another additive variant
+that contains normal only. Thus complete ROVir retro can satisfy the gate while
+a normal-only `vccN` subtree is retained. The collection manifest records the
+per-variant assessment.
 
 ## Failure handling
 

@@ -30,8 +30,13 @@ N4BiasFieldCorrection --version
 The sample MPRAGE launchers check this dependency only when
 `--n4-bias-correction` is requested. The reviewed default follows the ANTs
 human-T1w quick-start settings: 3D input, shrink factor 4, 180-mm initial
-B-spline spacing, and four 50-iteration resolution levels. Original NIfTIs
-are never overwritten.
+B-spline spacing, and four 50-iteration resolution levels. Because supplying a
+mask makes ANTs rescale corrected intensities by default, the wrapper explicitly
+uses `--rescale-intensities 0`; this preserves the exact multiplicative
+`corrected = source / bias` contract. Original NIfTIs are never overwritten.
+ROVir retrospective N4 application does not run ANTs again: it requires the
+completed normal ROVir N4 derivative, validates its source and output hashes,
+and resamples the shared field in physical space.
 
 ## Obtain the source and submodules
 

@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct only native-grid R3x3 Wave-MPRAGE.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line]"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -15,7 +15,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 ]] || { usage >&2; exit 2; }
 TWIX_FILE="$1"; OUTPUT_ROOT="${2%/}"; SEQUENCE_FILE="$3"; shift 3
 VIRTUAL_COILS=24; ECALIB_CROP="0.6"; USE_GPU=false
-NOISE_PREWHITENING=true
+NOISE_PREWHITENING=false
 N4_BIAS_CORRECTION=false
 RECON_PROFILE="fista-only"; PROFILE_EXPLICIT=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
@@ -29,6 +29,7 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
+        --noise-prewhitening) NOISE_PREWHITENING=true; shift ;;
         -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
@@ -63,7 +64,7 @@ run_optional_n4() {
 }
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
-[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREP_ARGS+=(--noise-prewhitening); else PREP_ARGS+=(--no-noise-prewhitening); fi
 for axis in KX Y Z; do
     min_name="PSF_FIT_${axis}_MIN"; max_name="PSF_FIT_${axis}_MAX"
     minimum="${!min_name}"; maximum="${!max_name}"

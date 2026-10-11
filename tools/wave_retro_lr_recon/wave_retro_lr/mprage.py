@@ -2232,7 +2232,7 @@ def prepare_normal_mprage(
     psf_fit_y_max: int | None = None,
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
     reuse: bool = True,
     allow_legacy_artifact_reuse: bool = False,
 ) -> dict[str, Any]:
@@ -2833,7 +2833,7 @@ def prepare_retro_mprage(
     psf_fit_y_max: int | None = None,
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
 ) -> list[dict[str, Any]]:
     """Prepare selected direct-measured R3x2 MPRAGE BART input sets.
 
@@ -3110,7 +3110,7 @@ def prepare_retro_mprage_r3x3(
     psf_fit_y_max: int | None = None,
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
 ) -> dict[str, Any]:
     """Prepare only native-grid R3x3 retrospective MPRAGE BART inputs.
 

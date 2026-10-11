@@ -24,6 +24,7 @@ from wave_retro_lr.nifti_collection import (  # noqa: E402
     RECONSTRUCTION_BRANCHES,
     RETRO_CASES,
     _legacy_rovir_group_migrations,
+    _validate_collection_retro_requirement,
     build_mprage_nifti_collection,
 )
 
@@ -228,6 +229,81 @@ class NiftiCollectionTests(unittest.TestCase):
             with self.assertRaisesRegex(FileExistsError, "not tool-owned"):
                 build_mprage_nifti_collection(root)
             self.assertEqual((collection / "user_file.txt").read_text(encoding="utf-8"), "keep\n")
+
+    def test_collection_prefers_n4_without_renaming_and_records_provenance(
+        self,
+    ) -> None:
+        """Select complete N4 magnitude while retaining canonical phase and names."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_sampling_class(root, "R1")
+            sources = self._write_case(
+                root / "normal" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            canonical_magnitude = next(
+                path
+                for path in sources
+                if path.suffix == ".gz" and "_part-mag_" in path.name
+            )
+            canonical_phase = next(
+                path
+                for path in sources
+                if path.suffix == ".gz" and "_part-phase_" in path.name
+            )
+            derivative = root / "normal" / "n4_bias_corrected_nifti" / "fista_r0"
+            corrected = self._write_n4_fixture(derivative, canonical_magnitude)
+
+            manifest = build_mprage_nifti_collection(root)
+            collection = root / "nifti_collection"
+            collected_magnitude = (
+                collection
+                / "original_nifti"
+                / "fista_r0"
+                / "normal"
+                / canonical_magnitude.name
+            )
+            collected_phase = (
+                collection
+                / "original_nifti"
+                / "fista_r0"
+                / "normal"
+                / canonical_phase.name
+            )
+            self.assertEqual(
+                sha256_file(collected_magnitude), sha256_file(corrected)
+            )
+            self.assertNotEqual(
+                sha256_file(collected_magnitude), sha256_file(canonical_magnitude)
+            )
+            self.assertEqual(
+                sha256_file(collected_phase), sha256_file(canonical_phase)
+            )
+            self.assertNotIn("N4", collected_magnitude.name)
+            magnitude_record = next(
+                record
+                for record in manifest["cases"][0]["files"]
+                if "_part-mag_" in record["source_nifti"]
+            )
+            self.assertEqual(
+                magnitude_record["collection_source_selection"],
+                "n4_bias_corrected_magnitude",
+            )
+            self.assertEqual(
+                magnitude_record["n4_provenance"]["manifest"],
+                "normal/n4_bias_corrected_nifti/fista_r0/metadata/n4_manifest.json",
+            )
+            self.assertEqual(
+                manifest["storage_policy"]["magnitude_selection"][
+                    "n4_bias_corrected_magnitude_count"
+                ],
+                1,
+            )
+            self.assertFalse(
+                manifest["scientific_scope"]["original_niftis_copied_byte_for_byte"]
+            )
 
     def test_in_place_prune_records_removed_head_mask_outputs(self) -> None:
         """Record an in-place migration that removes prior mask products.
@@ -483,6 +559,14 @@ class NiftiCollectionTests(unittest.TestCase):
                 item for item in manifest["variants"] if item["collection_id"] == "rovir"
             )
             self.assertEqual(rovir_variant["head_mask"]["source_branch"], "fista_r0")
+            sampling_record = rovir_variant["source_contract"][
+                "sampling_class_record"
+            ]
+            self.assertTrue(sampling_record["legacy_standard_fallback"])
+            self.assertEqual(
+                sampling_record["selected"]["path"],
+                "normal/bart_inputs/sampling_class.txt",
+            )
             self.assertEqual(
                 manifest["synchronization"]["rovir_replacements"],
                 [],
@@ -505,6 +589,110 @@ class NiftiCollectionTests(unittest.TestCase):
             self.assertEqual(len(refreshed["cases"]), 13)
             self.assertEqual(refreshed["synchronization"]["added_case_groups"], [])
             self.assertEqual(refreshed["synchronization"]["rovir_replacements"], [])
+
+    def test_rovir_only_collection_uses_its_own_sampling_provenance(self) -> None:
+        """Build a required-retro collection without any standard normal tree."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_case(
+                root / "normal" / "rovir" / "nifti" / "optimal_wavelet",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            for case, shape, spacing in (
+                ("native_r3x2", (32, 32, 32), (1.0, 1.0, 1.0)),
+                ("lr_y_1p5mm_r3x2", (32, 22, 32), (1.0, 1.5, 1.0)),
+                ("native_r3x3", (32, 32, 32), (1.0, 1.0, 1.0)),
+            ):
+                self._write_case(
+                    root / "retro" / case / "rovir" / "nifti" / "fista_r0",
+                    shape,
+                    spacing,
+                )
+            rovir_root = root / "normal" / "rovir"
+            (rovir_root / "manifest.json").write_text(
+                json.dumps({"status": "mprage_normal_rovir_complete"}) + "\n",
+                encoding="utf-8",
+            )
+            for directory in ("bart_inputs", "source_inputs"):
+                sampling = rovir_root / directory / "sampling_class.txt"
+                sampling.parent.mkdir(parents=True, exist_ok=True)
+                sampling.write_text("R3x1\n", encoding="utf-8")
+
+            manifest = build_mprage_nifti_collection(root, require_retro=True)
+
+            self.assertEqual(
+                [variant["collection_id"] for variant in manifest["variants"]],
+                ["rovir"],
+            )
+            self.assertEqual(len(manifest["cases"]), 4)
+            record = manifest["variants"][0]["source_contract"][
+                "sampling_class_record"
+            ]
+            self.assertEqual(record["value"], "R3x1")
+            self.assertEqual(
+                record["selected"]["path"],
+                "normal/rovir/bart_inputs/sampling_class.txt",
+            )
+            self.assertEqual(len(record["matching_records"]), 2)
+
+    def test_rovir_only_collection_rejects_sampling_record_mismatch(self) -> None:
+        """Reject inconsistent ROVir source and prepared sampling records."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_case(
+                root / "normal" / "rovir" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            rovir_root = root / "normal" / "rovir"
+            (rovir_root / "manifest.json").write_text("{}\n", encoding="utf-8")
+            for directory, value in (
+                ("bart_inputs", "R3x1"),
+                ("source_inputs", "R1"),
+            ):
+                sampling = rovir_root / directory / "sampling_class.txt"
+                sampling.parent.mkdir(parents=True, exist_ok=True)
+                sampling.write_text(f"{value}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "sampling-class records disagree"):
+                build_mprage_nifti_collection(root)
+
+    def test_retro_requirement_allows_additive_normal_only_variant(self) -> None:
+        """Let complete ROVir retro satisfy the gate beside normal-only VCC."""
+
+        variants = [
+            {
+                "collection_id": "vcc24",
+                "kind": "standard_pca",
+                "sources": {"wavelet_selected_vcc24": {"normal": []}},
+            },
+            {
+                "collection_id": "rovir",
+                "kind": "canonical_rovir",
+                "sources": {
+                    "optimal_wavelet": {"normal": []},
+                    "fista_r0": {
+                        "native_r3x2": [],
+                        "lr_y_1p5mm_r3x2": [],
+                        "native_r3x3": [],
+                    },
+                },
+            },
+        ]
+        record = _validate_collection_retro_requirement(variants, required=True)
+        self.assertTrue(record["satisfied"])
+        self.assertEqual(record["complete_variants"], ["rovir"])
+        assessments = {
+            item["collection_id"]: item for item in record["variant_assessments"]
+        }
+        self.assertFalse(assessments["vcc24"]["complete"])
+        self.assertTrue(assessments["rovir"]["complete"])
+
+        with self.assertRaisesRegex(FileNotFoundError, "vcc24 missing"):
+            _validate_collection_retro_requirement(variants[:1], required=True)
 
     def _write_complete_source_tree(
         self, root: Path, *, include_r3x3: bool = True
@@ -609,6 +797,75 @@ class NiftiCollectionTests(unittest.TestCase):
             sidecar.write_text(json.dumps({"Part": part}) + "\n", encoding="utf-8")
             created.extend((nifti, sidecar))
         return created
+
+    @staticmethod
+    def _write_n4_fixture(derivative: Path, canonical_magnitude: Path) -> Path:
+        """Write one complete source-bound N4 derivative fixture.
+
+        Args:
+            derivative: Branch-local N4 derivative directory.
+            canonical_magnitude: Canonical magnitude to bind and correct.
+
+        Returns:
+            Corrected-magnitude fixture path.
+        """
+
+        images = derivative / "images"
+        metadata = derivative / "metadata"
+        images.mkdir(parents=True)
+        metadata.mkdir()
+        source_image = nib.load(str(canonical_magnitude))
+        source_data = np.asarray(source_image.dataobj, dtype=np.float32)
+        stem = canonical_magnitude.name.removesuffix(".nii.gz")
+        corrected = images / f"{stem}_desc-N4BiasCorrected.nii.gz"
+        bias = images / f"{stem}_desc-N4BiasField.nii.gz"
+        nib.save(
+            nib.Nifti1Image(source_data / 2.0, source_image.affine, source_image.header),
+            str(corrected),
+        )
+        nib.save(
+            nib.Nifti1Image(np.full(source_data.shape, 2.0), source_image.affine),
+            str(bias),
+        )
+        corrected_sidecar = corrected.with_name(
+            corrected.name.removesuffix(".nii.gz") + ".json"
+        )
+        corrected_sidecar.write_text(
+            json.dumps({"N4BiasCorrectionApplied": True}) + "\n", encoding="utf-8"
+        )
+        source_sidecar = canonical_magnitude.with_name(
+            canonical_magnitude.name.removesuffix(".nii.gz") + ".json"
+        )
+
+        def file_record(path: Path, *, relative: bool = False) -> dict[str, object]:
+            """Create one fixture file identity record."""
+
+            return {
+                "path": str(path.relative_to(derivative) if relative else path.resolve()),
+                "size_bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+
+        manifest = {
+            "format_version": 1,
+            "status": "mprage_n4_bias_correction_complete",
+            "mode": "field_estimation",
+            "request": {
+                "source": {
+                    "magnitude": file_record(canonical_magnitude),
+                    "magnitude_sidecar": file_record(source_sidecar),
+                }
+            },
+            "validation": {"finite": True},
+            "outputs": [
+                file_record(path, relative=True)
+                for path in (corrected, corrected_sidecar, bias)
+            ],
+        }
+        (metadata / "n4_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return corrected
 
 
 if __name__ == "__main__":

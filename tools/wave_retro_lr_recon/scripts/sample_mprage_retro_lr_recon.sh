@@ -4,7 +4,7 @@ set -euo pipefail
 # Reconstruct the reduced standard MPRAGE retro set or canonical legacy ROVir.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -24,7 +24,7 @@ RECON_PROFILE="fista-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
 USE_ROVIR=false
-NOISE_PREWHITENING=true
+NOISE_PREWHITENING=false
 N4_BIAS_CORRECTION=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
@@ -42,6 +42,7 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; VIRTUAL_COILS_EXPLICIT=true; shift 2 ;;
+        --noise-prewhitening) NOISE_PREWHITENING=true; shift ;;
         -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; ECALIB_CROP_EXPLICIT=true; shift 2 ;;
@@ -104,7 +105,7 @@ RETRO_ROOT="$STANDARD_ROOT/retro"
 ECALIB_RECORD="$NORMAL_OUTPUT/ecalib_command.txt"
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
-[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREP_ARGS+=(--noise-prewhitening); else PREP_ARGS+=(--no-noise-prewhitening); fi
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
     PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then
@@ -186,7 +187,7 @@ for case_id in native_r3x2 lr_y_1p5mm_r3x2; do
 done
 
 R3X3_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --ecalib-crop "$ECALIB_CROP" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING" "--$RECON_PROFILE")
-[[ "$NOISE_PREWHITENING" == true ]] || R3X3_ARGS+=(--no-noise-prewhitening)
+if [[ "$NOISE_PREWHITENING" == true ]]; then R3X3_ARGS+=(--noise-prewhitening); else R3X3_ARGS+=(--no-noise-prewhitening); fi
 [[ "$N4_BIAS_CORRECTION" == true ]] && R3X3_ARGS+=(--n4-bias-correction)
 [[ -n "$PSF_FIT_KX_MIN" ]] && R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 [[ -n "$PSF_FIT_Y_MIN" ]] && R3X3_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")

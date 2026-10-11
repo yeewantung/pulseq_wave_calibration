@@ -26,12 +26,27 @@ command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.m
 
 run_optional_n4() {
     [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
-    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" \
+        "$1" "$2" --reference-derivative "$N4_REFERENCE"
 }
 echo "Preparing pure-mask cases from the canonical normal ROVir contract; validation can be quiet for several minutes."
 python "$SCRIPT_DIR/prepare_mprage_rovir_retro.py" "$ROOT" >/dev/null
 TWIX_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field sequence)"
+SAMPLING_CLASS="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field sampling_class)"
+N4_REFERENCE=""
+if [[ "$N4_BIAS_CORRECTION" == true ]]; then
+    if [[ "$SAMPLING_CLASS" == "R3x1" ]]; then
+        N4_REFERENCE="$ROOT/normal/rovir/n4_bias_corrected_nifti/optimal_wavelet"
+    else
+        N4_REFERENCE="$ROOT/normal/rovir/n4_bias_corrected_nifti/fista_r0"
+    fi
+    [[ -f "$N4_REFERENCE/metadata/n4_manifest.json" ]] || {
+        echo "Error: retro ROVir N4 requires the completed normal reference derivative: $N4_REFERENCE" >&2
+        echo "Run sample_mprage_rovir_recon.sh run ... --n4-bias-correction first." >&2
+        exit 2
+    }
+fi
 
 CASES=(native_r3x2 lr_x_1p5mm_r3x2 lr_y_1p5mm_r3x2 lr_xy_1p25mm_r3x2 native_r3x3)
 LAMBDAS=(3.5e-2 2.5e-2 2.5e-2 2.2e-2 4.5e-2)

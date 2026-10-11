@@ -14,12 +14,15 @@ from typing import Any, Mapping, Sequence
 
 import nibabel as nib
 import numpy as np
+from nibabel.processing import resample_from_to
 
 from .bart_io import sha256_file
-from .nifti_collection import create_whole_head_mask
+from .nifti_collection import HeadMaskParameters, create_whole_head_mask
 
 N4_MANIFEST_NAME = "n4_manifest.json"
 N4_MANIFEST_STATUS = "mprage_n4_bias_correction_complete"
+N4_MASK_CONTRACT_VERSION = 1
+N4_SHARED_FIELD_CONTRACT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ def apply_mprage_n4_bias_correction(
     source = Path(source_directory).expanduser().resolve()
     destination = Path(output_directory).expanduser().resolve()
     config = parameters or N4Parameters()
+    mask_config = HeadMaskParameters()
     _validate_parameters(config)
     magnitude, magnitude_sidecar, phase_records = _discover_mprage_sources(source)
     source_record = {
@@ -84,6 +88,11 @@ def apply_mprage_n4_bias_correction(
     request = {
         "source": source_record,
         "parameters": _parameter_record(config),
+        "estimation_mask": {
+            "algorithm": "wave_retro_lr.nifti_collection.create_whole_head_mask",
+            "contract_version": N4_MASK_CONTRACT_VERSION,
+            "parameters": asdict(mask_config),
+        },
         "policy": {
             "default_enabled": False,
             "magnitude_only": True,
@@ -101,7 +110,7 @@ def apply_mprage_n4_bias_correction(
         )
 
     image, source_data = _load_magnitude(magnitude)
-    mask_image, mask_details = create_whole_head_mask(image)
+    mask_image, mask_details = create_whole_head_mask(image, mask_config)
     mask_data = np.asarray(mask_image.dataobj, dtype=bool)
     tool = _tool_identity(executable)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -171,6 +180,7 @@ def apply_mprage_n4_bias_correction(
         manifest = {
             "format_version": 1,
             "status": N4_MANIFEST_STATUS,
+            "mode": "field_estimation",
             "request": request,
             "tool": tool,
             "command": {
@@ -180,11 +190,220 @@ def apply_mprage_n4_bias_correction(
             },
             "estimation_mask": {
                 **mask_details,
+                "contract_version": N4_MASK_CONTRACT_VERSION,
+                "parameters": asdict(mask_config),
                 "logical_sha256": _logical_array_hash(mask_data.astype(np.uint8)),
                 "retained": False,
                 "purpose": "temporary N4 histogram-estimation mask only",
             },
             "validation": validation,
+            "outputs": [
+                _relative_file_record(path, staging) for path in output_paths
+            ],
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json(metadata / N4_MANIFEST_NAME, manifest)
+        staging.replace(destination)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return _validate_existing_derivative(destination, request)
+
+
+def apply_mprage_shared_n4_bias_field(
+    source_directory: str | Path,
+    output_directory: str | Path,
+    reference_derivative_directory: str | Path,
+) -> dict[str, Any]:
+    """Apply one validated normal-reconstruction N4 field to another geometry.
+
+    Args:
+        source_directory: Canonical target magnitude/phase NIfTI folder.
+        output_directory: Dedicated target derivative folder.
+        reference_derivative_directory: Complete N4 derivative whose fitted bias
+            field and estimation mask define the shared correction.
+
+    Returns:
+        Installed, fully validated target derivative manifest.
+
+    Raises:
+        FileNotFoundError: If a source, reference, sidecar, or manifest is absent.
+        FileExistsError: If an unowned or incomplete destination exists.
+        ValueError: If provenance, geometry, finite values, hashes, or the
+            multiplicative correction contract do not validate exactly.
+
+    Side Effects:
+        Writes a corrected target magnitude and the physically resampled shared
+        bias field. It never runs ANTs and never modifies canonical NIfTIs.
+    """
+
+    source = Path(source_directory).expanduser().resolve()
+    destination = Path(output_directory).expanduser().resolve()
+    reference = Path(reference_derivative_directory).expanduser().resolve()
+    magnitude, magnitude_sidecar, phase_records = _discover_mprage_sources(source)
+    source_record = {
+        "directory": str(source),
+        "magnitude": _file_record(magnitude),
+        "magnitude_sidecar": _file_record(magnitude_sidecar),
+        "phase_files_unchanged": phase_records,
+    }
+    reference_manifest, reference_manifest_path, reference_bias = (
+        _load_validated_reference_derivative(reference)
+    )
+    reference_record = {
+        "directory": str(reference),
+        "manifest": _file_record(reference_manifest_path),
+        "bias_field": _file_record(reference_bias),
+        "source_magnitude": reference_manifest["request"]["source"]["magnitude"],
+        "estimation_mask_logical_sha256": reference_manifest["estimation_mask"][
+            "logical_sha256"
+        ],
+    }
+    request = {
+        "source": source_record,
+        "shared_bias_field": {
+            "contract_version": N4_SHARED_FIELD_CONTRACT_VERSION,
+            "reference": reference_record,
+            "bias_resampling": "cubic interpolation in NIfTI physical space",
+            "mask_resampling": "nearest-neighbor in NIfTI physical space",
+        },
+        "policy": {
+            "default_enabled": False,
+            "magnitude_only": True,
+            "original_niftis_modified": False,
+            "phase_modified": False,
+            "ants_refit_per_target": False,
+        },
+    }
+    manifest_path = destination / "metadata" / N4_MANIFEST_NAME
+    if manifest_path.is_file():
+        return _validate_existing_derivative(destination, request)
+    if destination.exists():
+        raise FileExistsError(
+            f"N4 derivative directory exists without a complete manifest: {destination}"
+        )
+
+    target_image, target_data = _load_magnitude(magnitude)
+    reference_source_record = reference_manifest["request"]["source"]["magnitude"]
+    reference_source = _validate_absolute_file_record(reference_source_record)
+    reference_image, _ = _load_magnitude(reference_source)
+    reference_mask = _recreate_reference_mask(reference_manifest, reference_image)
+    bias_image = nib.load(str(reference_bias))
+    target_spec = (target_image.shape, target_image.affine)
+    mapped_bias_image = resample_from_to(
+        bias_image, target_spec, order=3, mode="constant", cval=np.nan
+    )
+    mapped_mask_image = resample_from_to(
+        reference_mask, target_spec, order=0, mode="constant", cval=0.0
+    )
+    mapped_bias = np.asarray(mapped_bias_image.dataobj, dtype=np.float64)
+    mapped_mask = np.asarray(mapped_mask_image.dataobj, dtype=np.float64) >= 0.5
+    if not np.any(mapped_mask):
+        raise ValueError("Shared N4 reference mask has no overlap with the target grid.")
+    if not np.isfinite(mapped_bias[mapped_mask]).all() or np.any(
+        mapped_bias[mapped_mask] <= 0
+    ):
+        raise ValueError(
+            "Resampled shared N4 bias field is nonfinite or nonpositive inside the mask."
+        )
+    installed_bias = np.ones(target_data.shape, dtype=np.float32)
+    installed_bias[mapped_mask] = mapped_bias[mapped_mask].astype(np.float32)
+    corrected_data = target_data.copy()
+    corrected_data[mapped_mask] = (
+        target_data[mapped_mask] / installed_bias[mapped_mask]
+    )
+    if not np.isfinite(corrected_data).all() or np.any(corrected_data < 0):
+        raise ValueError("Shared N4 application produced invalid corrected magnitude values.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
+    )
+    try:
+        images = staging / "images"
+        metadata = staging / "metadata"
+        images.mkdir()
+        metadata.mkdir()
+        source_stem = magnitude.name.removesuffix(".nii.gz")
+        corrected = images / f"{source_stem}_desc-N4BiasCorrected.nii.gz"
+        bias = images / f"{source_stem}_desc-N4BiasField.nii.gz"
+        header = target_image.header.copy()
+        header.set_data_dtype(np.float32)
+        nib.save(
+            nib.Nifti1Image(corrected_data, target_image.affine, header), str(corrected)
+        )
+        nib.save(
+            nib.Nifti1Image(installed_bias, target_image.affine, header), str(bias)
+        )
+        validation = _validate_n4_outputs(
+            target_image, target_data, mapped_mask, corrected, bias
+        )
+        source_metadata = _load_json(magnitude_sidecar)
+        shared_metadata = {
+            "N4BiasCorrectionApplied": True,
+            "N4BiasCorrectionDefaultEnabled": False,
+            "N4CorrectionMode": "shared normal-reconstruction bias field",
+            "N4SourceMagnitude": str(magnitude),
+            "N4SourceMagnitudeSHA256": source_record["magnitude"]["sha256"],
+            "N4ReferenceDerivativeManifest": str(reference_manifest_path),
+            "N4ReferenceDerivativeManifestSHA256": reference_record["manifest"][
+                "sha256"
+            ],
+            "N4ReferenceBiasField": str(reference_bias),
+            "N4ReferenceBiasFieldSHA256": reference_record["bias_field"]["sha256"],
+            "N4OriginalNIfTIsModified": False,
+            "N4PhaseModified": False,
+        }
+        _write_json(
+            corrected.with_name(corrected.name.removesuffix(".nii.gz") + ".json"),
+            {
+                **source_metadata,
+                **shared_metadata,
+                "N4DerivativeType": "bias-corrected magnitude",
+            },
+        )
+        _write_json(
+            bias.with_name(bias.name.removesuffix(".nii.gz") + ".json"),
+            {
+                **shared_metadata,
+                "N4DerivativeType": "resampled multiplicative bias field",
+                "N4BiasFieldApplication": (
+                    "corrected_magnitude = source_magnitude / bias_field "
+                    "inside the resampled reference mask"
+                ),
+            },
+        )
+        output_paths = sorted(
+            path
+            for path in staging.rglob("*")
+            if path.is_file() and path.name != N4_MANIFEST_NAME
+        )
+        manifest = {
+            "format_version": 2,
+            "status": N4_MANIFEST_STATUS,
+            "mode": "shared_field_application",
+            "request": request,
+            "tool": {
+                "name": "nibabel.processing.resample_from_to",
+                "ants_executed": False,
+            },
+            "estimation_mask": {
+                "estimated_once_in_reference": True,
+                "reference_logical_sha256": reference_record[
+                    "estimation_mask_logical_sha256"
+                ],
+                "mapped_logical_sha256": _logical_array_hash(
+                    mapped_mask.astype(np.uint8)
+                ),
+                "mapped_voxels": int(np.count_nonzero(mapped_mask)),
+                "retained": False,
+            },
+            "validation": {
+                **validation,
+                "reference_manifest_validated": True,
+                "reference_output_hashes_validated": True,
+                "physical_space_resampling": True,
+            },
             "outputs": [
                 _relative_file_record(path, staging) for path in output_paths
             ],
@@ -367,6 +586,10 @@ def _n4_command(
         f"[{parameters.bspline_spacing_mm:g}]",
         "-c",
         f"[{iterations},{parameters.convergence_threshold:g}]",
+        # Masked ANTs runs otherwise rescale the corrected intensity range,
+        # which breaks the exact multiplicative source/bias relationship.
+        "-r",
+        "0",
         "-o",
         f"[{corrected},{bias}]",
         "-v",
@@ -493,6 +716,114 @@ def _validate_existing_derivative(
     return manifest
 
 
+def _load_validated_reference_derivative(
+    reference: Path,
+) -> tuple[dict[str, Any], Path, Path]:
+    """Validate one fitted N4 derivative and resolve its bias-field image.
+
+    Args:
+        reference: N4 derivative directory produced by this module.
+
+    Returns:
+        Validated manifest, manifest path, and unique fitted bias-field NIfTI.
+
+    Raises:
+        FileNotFoundError: If the reference manifest or an output is absent.
+        ValueError: If status, mode, request, hashes, or output discovery fails.
+    """
+
+    manifest_path = reference / "metadata" / N4_MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Normal-reconstruction N4 reference does not exist: {manifest_path}"
+        )
+    manifest = _load_json(manifest_path)
+    request = manifest.get("request")
+    if not isinstance(request, Mapping):
+        raise ValueError("N4 reference manifest has no valid request contract.")
+    manifest = _validate_existing_derivative(reference, request)
+    if manifest.get("mode", "field_estimation") != "field_estimation":
+        raise ValueError("Shared N4 application requires an independently fitted reference.")
+    outputs = manifest.get("outputs", [])
+    bias_records = [
+        record
+        for record in outputs
+        if isinstance(record, Mapping)
+        and isinstance(record.get("path"), str)
+        and str(record["path"]).endswith("_desc-N4BiasField.nii.gz")
+    ]
+    if len(bias_records) != 1:
+        raise ValueError("N4 reference must contain exactly one fitted bias-field NIfTI.")
+    bias = (reference / str(bias_records[0]["path"])).resolve()
+    if reference not in bias.parents:
+        raise ValueError("N4 reference bias-field path escapes its derivative directory.")
+    return manifest, manifest_path, bias
+
+
+def _validate_absolute_file_record(record: Mapping[str, Any]) -> Path:
+    """Validate one absolute source file identity recorded in a manifest.
+
+    Args:
+        record: Mapping containing absolute path, byte size, and SHA-256 digest.
+
+    Returns:
+        Validated resolved file path.
+
+    Raises:
+        FileNotFoundError: If the recorded source is absent.
+        ValueError: If the record is malformed or its identity changed.
+    """
+
+    if not isinstance(record.get("path"), str):
+        raise ValueError("N4 reference source file record is malformed.")
+    path = Path(str(record["path"])).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if path.stat().st_size != record.get("size_bytes"):
+        raise ValueError(f"N4 reference source size changed: {path}")
+    if sha256_file(path) != record.get("sha256"):
+        raise ValueError(f"N4 reference source hash changed: {path}")
+    return path
+
+
+def _recreate_reference_mask(
+    manifest: Mapping[str, Any], reference_image: nib.Nifti1Image
+) -> nib.Nifti1Image:
+    """Recreate and hash-check the temporary mask used for reference fitting.
+
+    Args:
+        manifest: Validated fitted-reference N4 manifest.
+        reference_image: Hash-bound source magnitude loaded from that manifest.
+
+    Returns:
+        Recreated binary estimation-mask image on the reference grid.
+
+    Raises:
+        ValueError: If the mask contract, parameters, or logical hash changed.
+    """
+
+    request_mask = manifest.get("request", {}).get("estimation_mask", {})
+    fitted_mask = manifest.get("estimation_mask", {})
+    if (
+        request_mask.get("contract_version") != N4_MASK_CONTRACT_VERSION
+        or fitted_mask.get("contract_version") != N4_MASK_CONTRACT_VERSION
+    ):
+        raise ValueError("N4 reference uses an unsupported estimation-mask contract.")
+    parameter_record = request_mask.get("parameters")
+    if not isinstance(parameter_record, Mapping):
+        raise ValueError("N4 reference estimation-mask parameters are malformed.")
+    try:
+        parameters = HeadMaskParameters(**dict(parameter_record))
+    except TypeError as exc:
+        raise ValueError("N4 reference estimation-mask parameters are unsupported.") from exc
+    mask, _ = create_whole_head_mask(reference_image, parameters)
+    values = np.asarray(mask.dataobj, dtype=bool)
+    logical_hash = _logical_array_hash(values.astype(np.uint8))
+    if logical_hash != fitted_mask.get("logical_sha256"):
+        raise ValueError("Recreated N4 reference estimation-mask hash differs.")
+    return mask
+
+
 def _parameter_record(parameters: N4Parameters) -> dict[str, Any]:
     """Convert N4 parameters to a JSON-native record.
 
@@ -505,6 +836,10 @@ def _parameter_record(parameters: N4Parameters) -> dict[str, Any]:
 
     record = asdict(parameters)
     record["convergence_iterations"] = list(parameters.convergence_iterations)
+    record["rescale_intensities"] = False
+    record["rescale_intensities_reason"] = (
+        "preserve corrected_magnitude = source_magnitude / bias_field"
+    )
     record["source"] = "ANTs human T1w quick-start contract"
     return record
 

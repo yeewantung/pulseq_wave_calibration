@@ -337,11 +337,12 @@ class SampleCommandTests(unittest.TestCase):
             anchor = root / "normal" / "rovir" / "source_inputs"
             expected = {"output_root": str(root.resolve())}
 
-            def bootstrap(*args: object) -> Path:
+            def bootstrap(*args: object, **kwargs: object) -> Path:
                 """Write the minimal manifest needed by the binding fixture.
 
                 Args:
-                    args: Unused bootstrap arguments.
+                    args: Unused bootstrap positional arguments.
+                    kwargs: Bootstrap options inspected by the fixture.
 
                 Returns:
                     Fixture source-anchor directory.
@@ -351,6 +352,7 @@ class SampleCommandTests(unittest.TestCase):
                 """
 
                 del args
+                self.assertFalse(kwargs["noise_prewhitening"])
                 anchor.mkdir(parents=True)
                 (anchor / "manifest.json").write_text("{}\n", encoding="utf-8")
                 (anchor / "sampling_class.txt").write_text("R1\n", encoding="utf-8")

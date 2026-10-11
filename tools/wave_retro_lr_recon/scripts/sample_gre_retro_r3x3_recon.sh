@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct only native-grid R3x3 Wave-GRE.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
 }
@@ -12,7 +12,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 ]] || { usage >&2; exit 2; }
 TWIX_FILE="$1"; OUTPUT_ROOT="${2%/}"; SEQUENCE_FILE="$3"; shift 3
 VIRTUAL_COILS=24; ECALIB_CROP="0.6"; USE_GPU=false
-NOISE_PREWHITENING=true
+NOISE_PREWHITENING=false
 RECON_PROFILE="fista-only"; PROFILE_EXPLICIT=false
 PSF_COEFFICIENT_PROCESSING="sine-line"; PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
 GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12="0.015"
@@ -20,6 +20,7 @@ select_profile() { [[ "$PROFILE_EXPLICIT" == false ]] || { echo "Error: reconstr
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
+        --noise-prewhitening) NOISE_PREWHITENING=true; shift ;;
         -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
@@ -41,7 +42,7 @@ command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
-[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREP_ARGS+=(--noise-prewhitening); else PREP_ARGS+=(--no-noise-prewhitening); fi
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX"); elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then echo "Error: both kx bounds are required." >&2; exit 2; fi
 if [[ "$PSF_COEFFICIENT_PROCESSING" == smooth && -n "$PSF_FIT_KX_MIN" ]]; then echo "Error: kx bounds require sine-line." >&2; exit 2; fi
 python "$SCRIPT_DIR/prepare_gre_retro_r3x3.py" "${PREP_ARGS[@]}"

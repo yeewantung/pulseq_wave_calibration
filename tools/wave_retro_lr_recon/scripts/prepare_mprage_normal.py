@@ -61,13 +61,20 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_VIRTUAL_COILS,
         help="Standard-PCA channel count written below OUTPUT_ROOT/vccN.",
     )
-    parser.add_argument(
+    prewhitening = parser.add_mutually_exclusive_group()
+    prewhitening.add_argument(
+        "--noise-prewhitening",
+        dest="noise_prewhitening",
+        action="store_true",
+        default=False,
+        help="Explicitly enable experimental TWIX noise-scan prewhitening.",
+    )
+    prewhitening.add_argument(
         "-no-noise-prewhitening",
         "--no-noise-prewhitening",
         dest="noise_prewhitening",
         action="store_false",
-        default=True,
-        help="Force off automatic TWIX noise-scan prewhitening.",
+        help="Explicitly retain the current no-prewhitening default.",
     )
     parser.add_argument(
         "--psf-coefficient-processing",

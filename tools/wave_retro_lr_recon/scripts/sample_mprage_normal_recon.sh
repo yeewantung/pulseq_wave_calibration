@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct one count-specific standard-PCA MPRAGE variant.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --wavelet-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -27,7 +27,7 @@ R3_LAMBDA_EXPLICIT=false
 RECON_PROFILE="wavelet-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
-NOISE_PREWHITENING=true
+NOISE_PREWHITENING=false
 N4_BIAS_CORRECTION=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
@@ -49,6 +49,7 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
+        --noise-prewhitening) NOISE_PREWHITENING=true; shift ;;
         -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
@@ -89,7 +90,7 @@ run_optional_n4() {
 }
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
-[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREP_ARGS+=(--noise-prewhitening); else PREP_ARGS+=(--no-noise-prewhitening); fi
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
     PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then

@@ -1718,7 +1718,7 @@ def prepare_normal_gre(
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
     reuse: bool = True,
     allow_legacy_artifact_reuse: bool = False,
 ) -> dict[str, Any]:
@@ -2216,7 +2216,7 @@ def prepare_retro_gre(
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
 ) -> list[dict[str, Any]]:
     """Prepare measured native and LIN-cropped retrospective R3x2 GRE inputs.
 
@@ -2492,7 +2492,7 @@ def prepare_retro_gre_r3x3(
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
-    noise_prewhitening: bool = True,
+    noise_prewhitening: bool = False,
 ) -> dict[str, Any]:
     """Prepare only native-grid R3x3 retrospective multi-echo GRE inputs.
 
