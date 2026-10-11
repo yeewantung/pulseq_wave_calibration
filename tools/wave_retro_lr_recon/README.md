@@ -336,8 +336,14 @@ Omit `--require-retro` to collect every currently available normal and
 retrospective reconstruction. For new `vccN` trees, `--require-retro` requires
 the reduced default cases but accepts any complete branch per case; normal and
 retro branch names need not match. Historical root-level layouts remain
-discoverable under their legacy requirements. This script never runs k-space
-preparation, ecalib, or Wave reconstruction.
+discoverable under their legacy requirements. A canonical ROVir-only output
+root is also supported when standard `normal/` and `vccN/normal/` outputs are
+absent. Its prepared and source-input sampling records are cross-checked, and
+the selected path and SHA-256 are recorded in collection provenance. This
+script never runs k-space preparation, ecalib, or Wave reconstruction.
+Historical mixed standard-plus-ROVir trees that predate ROVir-owned sampling
+records fall back to the root-level standard sampling record and explicitly
+record that fallback in provenance.
 
 The default collection contains only byte-identical canonical files below
 `original_nifti`. Add `--head-mask` to explicitly request the historical

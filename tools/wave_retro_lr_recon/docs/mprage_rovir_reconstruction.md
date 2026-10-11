@@ -235,6 +235,14 @@ idempotently. Count-specific standard products appear below
 `nifti_collection/rovir/`. They remain additive even for the same case and
 method. A partially populated ROVir set does not become a global
 `--require-retro` requirement.
+The collection also supports a ROVir-only output root with no standard
+`normal/` or `vccN/normal/` reconstruction. It reads sampling provenance from
+the canonical ROVir prepared inputs, cross-checks the ROVir source-input record
+when available, and records the selected path and hash in the collection
+manifest.
+For historical mixed standard-plus-ROVir trees without either ROVir-owned
+record, the builder uses the root-level standard sampling record and marks the
+legacy fallback in provenance.
 
 ## Failure handling
 

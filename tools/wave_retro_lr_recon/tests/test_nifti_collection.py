@@ -483,6 +483,14 @@ class NiftiCollectionTests(unittest.TestCase):
                 item for item in manifest["variants"] if item["collection_id"] == "rovir"
             )
             self.assertEqual(rovir_variant["head_mask"]["source_branch"], "fista_r0")
+            sampling_record = rovir_variant["source_contract"][
+                "sampling_class_record"
+            ]
+            self.assertTrue(sampling_record["legacy_standard_fallback"])
+            self.assertEqual(
+                sampling_record["selected"]["path"],
+                "normal/bart_inputs/sampling_class.txt",
+            )
             self.assertEqual(
                 manifest["synchronization"]["rovir_replacements"],
                 [],
@@ -505,6 +513,92 @@ class NiftiCollectionTests(unittest.TestCase):
             self.assertEqual(len(refreshed["cases"]), 13)
             self.assertEqual(refreshed["synchronization"]["added_case_groups"], [])
             self.assertEqual(refreshed["synchronization"]["rovir_replacements"], [])
+
+    def test_rovir_only_collection_uses_its_own_sampling_provenance(self) -> None:
+        """Build a required-retro collection without any standard normal tree.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_case(
+                root / "normal" / "rovir" / "nifti" / "optimal_wavelet",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            for case, shape, spacing in (
+                ("native_r3x2", (32, 32, 32), (1.0, 1.0, 1.0)),
+                ("lr_y_1p5mm_r3x2", (32, 22, 32), (1.0, 1.5, 1.0)),
+                ("native_r3x3", (32, 32, 32), (1.0, 1.0, 1.0)),
+            ):
+                self._write_case(
+                    root / "retro" / case / "rovir" / "nifti" / "fista_r0",
+                    shape,
+                    spacing,
+                )
+            rovir_root = root / "normal" / "rovir"
+            (rovir_root / "manifest.json").write_text(
+                json.dumps({"status": "mprage_normal_rovir_complete"}) + "\n",
+                encoding="utf-8",
+            )
+            for directory in ("bart_inputs", "source_inputs"):
+                sampling = rovir_root / directory / "sampling_class.txt"
+                sampling.parent.mkdir(parents=True, exist_ok=True)
+                sampling.write_text("R3x1\n", encoding="utf-8")
+
+            manifest = build_mprage_nifti_collection(root, require_retro=True)
+
+            self.assertEqual(
+                [variant["collection_id"] for variant in manifest["variants"]],
+                ["rovir"],
+            )
+            self.assertEqual(len(manifest["cases"]), 4)
+            self.assertTrue(
+                (
+                    root
+                    / "nifti_collection"
+                    / "rovir"
+                    / "original_nifti"
+                    / "optimal_wavelet"
+                    / "normal"
+                ).is_dir()
+            )
+            record = manifest["variants"][0]["source_contract"][
+                "sampling_class_record"
+            ]
+            self.assertEqual(record["value"], "R3x1")
+            self.assertEqual(
+                record["selected"]["path"],
+                "normal/rovir/bart_inputs/sampling_class.txt",
+            )
+            self.assertEqual(len(record["matching_records"]), 2)
+            for item in record["matching_records"]:
+                source = root / item["path"]
+                self.assertEqual(item["sha256"], sha256_file(source))
+
+    def test_rovir_only_collection_rejects_sampling_record_mismatch(self) -> None:
+        """Reject inconsistent ROVir source and prepared sampling records.
+
+        Returns:
+            None.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_case(
+                root / "normal" / "rovir" / "nifti" / "fista_r0",
+                (32, 32, 32),
+                (1.0, 1.0, 1.0),
+            )
+            rovir_root = root / "normal" / "rovir"
+            (rovir_root / "manifest.json").write_text("{}\n", encoding="utf-8")
+            for directory, value in (("bart_inputs", "R3x1"), ("source_inputs", "R1")):
+                sampling = rovir_root / directory / "sampling_class.txt"
+                sampling.parent.mkdir(parents=True, exist_ok=True)
+                sampling.write_text(f"{value}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "sampling-class records disagree"):
+                build_mprage_nifti_collection(root)
 
     def _write_complete_source_tree(
         self, root: Path, *, include_r3x3: bool = True

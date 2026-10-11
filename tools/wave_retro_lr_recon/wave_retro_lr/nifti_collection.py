@@ -439,18 +439,20 @@ def _discover_collection_variants(
 
     rovir_manifest = root / "normal" / "rovir" / "manifest.json"
     if rovir_manifest.is_file() and (root / "normal" / "rovir" / "nifti").is_dir():
+        sampling_class, sampling_record = _read_rovir_sampling_class(root)
         sources = _discover_rovir_sources(root)
         variants.append(
             {
                 "collection_id": "rovir",
                 "kind": "canonical_rovir",
                 "collection_relative": Path("rovir"),
-                "sampling_class": _read_sampling_class(root),
+                "sampling_class": sampling_class,
                 "sources": sources,
                 "run_manifests": {},
                 "source_contract": {
                     "canonical_rovir_manifest": str(rovir_manifest.relative_to(root)),
                     "canonical_rovir_manifest_sha256": sha256_file(rovir_manifest),
+                    "sampling_class_record": sampling_record,
                     "independent_of_standard_pca_counts": True,
                 },
             }
@@ -930,6 +932,72 @@ def _read_sampling_class(output_root: Path) -> str:
     if sampling_class not in {"R1", "R3x1"}:
         raise ValueError(f"Unsupported normal sampling class: {sampling_class!r}")
     return sampling_class
+
+
+def _read_rovir_sampling_class(root: Path) -> tuple[str, dict[str, Any]]:
+    """Read and cross-check sampling records owned by canonical ROVir.
+
+    Args:
+        root: Top-level reconstruction root containing ``normal/rovir``.
+
+    Returns:
+        Validated sampling label and exact path/hash provenance for every
+        available matching ROVir record. The prepared BART-input record is
+        selected when both supported records are present. Historical mixed
+        trees may return the root-level standard record as a marked fallback.
+
+    Raises:
+        FileNotFoundError: If neither canonical ROVir nor a historical
+            root-level standard tree has a sampling-class record.
+        ValueError: If a record is unsupported or available records disagree.
+    """
+    candidates = (
+        root / "normal" / "rovir" / "bart_inputs" / "sampling_class.txt",
+        root / "normal" / "rovir" / "source_inputs" / "sampling_class.txt",
+    )
+    available = [path for path in candidates if path.is_file()]
+    used_legacy_standard_fallback = False
+    if not available:
+        legacy_standard = root / "normal" / "bart_inputs" / "sampling_class.txt"
+        if legacy_standard.is_file():
+            available = [legacy_standard]
+            used_legacy_standard_fallback = True
+        else:
+            raise FileNotFoundError(
+                "Canonical ROVir sampling-class record does not exist; checked: "
+                + ", ".join(str(path) for path in (*candidates, legacy_standard))
+            )
+
+    records: list[dict[str, str]] = []
+    sampling_classes: set[str] = set()
+    for path in available:
+        sampling_class = path.read_text(encoding="utf-8").strip()
+        if sampling_class not in {"R1", "R3x1"}:
+            raise ValueError(
+                f"Unsupported canonical ROVir sampling class in {path}: "
+                f"{sampling_class!r}"
+            )
+        sampling_classes.add(sampling_class)
+        records.append(
+            {
+                "path": str(path.relative_to(root)),
+                "sha256": sha256_file(path),
+            }
+        )
+    if len(sampling_classes) != 1:
+        details = ", ".join(
+            f"{record['path']}={path.read_text(encoding='utf-8').strip()!r}"
+            for record, path in zip(records, available)
+        )
+        raise ValueError(f"Canonical ROVir sampling-class records disagree: {details}")
+
+    sampling_class = next(iter(sampling_classes))
+    return sampling_class, {
+        "value": sampling_class,
+        "selected": records[0],
+        "matching_records": records,
+        "legacy_standard_fallback": used_legacy_standard_fallback,
+    }
 
 
 def _discover_nifti_pairs(directory: Path) -> list[tuple[Path, Path]]:
