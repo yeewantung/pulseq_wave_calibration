@@ -324,13 +324,19 @@ def classify_mprage_sampling(
 
 
 def inspect_twix_sampling(
-    twix_path: str | Path, *, matrix_lin_par: tuple[int, int]
+    twix_path: str | Path,
+    *,
+    matrix_lin_par: tuple[int, int],
+    measurement_sink: list[Any] | None = None,
 ) -> tuple[SamplingPattern, Any]:
     """Inspect TWIX MDH counters and select the image measurement.
 
     Args:
         twix_path: Siemens TWIX file read without modifying it.
         matrix_lin_par: Expected logical PE matrix from the sequence.
+        measurement_sink: Optional caller-owned list populated with every
+            parsed mapVBVD measurement so a later validation stage can reuse
+            the same metadata traversal.
 
     Returns:
         Validated sampling contract and its selected mapVBVD measurement.
@@ -340,6 +346,8 @@ def inspect_twix_sampling(
 
     root = mapvbvd.mapVBVD(str(Path(twix_path)), quiet=True)
     measurements = list(root) if isinstance(root, (list, tuple)) else [root]
+    if measurement_sink is not None:
+        measurement_sink[:] = measurements
     candidates: list[tuple[int, int, Any]] = []
     for index, measurement in enumerate(measurements):
         image = measurement.get("image") if hasattr(measurement, "get") else None

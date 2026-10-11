@@ -1581,6 +1581,15 @@ class ManifestReuseTests(unittest.TestCase):
                     manifest, twix, sequence, automatic
                 )
             )
+            self.assertTrue(
+                _native_manifest_matches_reusable_artifact(
+                    manifest,
+                    twix,
+                    sequence,
+                    automatic,
+                    noise_prewhitening=True,
+                )
+            )
             self.assertFalse(
                 _native_manifest_matches_reusable_artifact(
                     manifest, other_twix, sequence, automatic
@@ -1987,7 +1996,11 @@ class PreparationIntegrationTests(unittest.TestCase):
                 ),
             ):
                 manifest = prepare_normal_mprage(
-                    twix, output, sequence, virtual_coils=24
+                    twix,
+                    output,
+                    sequence,
+                    virtual_coils=24,
+                    noise_prewhitening=False,
                 )
                 diagnostic = output / "vcc24" / "normal" / PSF_COEFFICIENT_PLOT_NAME
                 self.assertTrue(diagnostic.is_file())
@@ -2005,6 +2018,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                     output,
                     sequence,
                     virtual_coils=24,
+                    noise_prewhitening=False,
                     case_ids=(
                         "native_r3x2",
                         "lr_x_1p5mm_r3x2",
@@ -2079,6 +2093,7 @@ class PreparationIntegrationTests(unittest.TestCase):
                     output,
                     sequence,
                     virtual_coils=24,
+                    noise_prewhitening=False,
                     psf_coefficient_processing="sine-line",
                     psf_fit_kx_min=1,
                     psf_fit_kx_max=7,

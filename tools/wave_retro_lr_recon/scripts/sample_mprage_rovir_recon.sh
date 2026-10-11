@@ -6,8 +6,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq
-  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [ROI options] [run options]
+  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq [-no-noise-prewhitening]
+  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [-no-noise-prewhitening] [ROI options] [run options]
 
 ROI options (choose exactly one mode):
   --use-recommended                       requires a prior inspect
@@ -15,6 +15,8 @@ ROI options (choose exactly one mode):
   --null-box-file ROI_BOXES.json          may run directly
 
 Run options:
+  -no-noise-prewhitening
+                         force off automatic TWIX noise-scan prewhitening
   --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
   -g                     use GPU for BART Wave only
 
@@ -38,6 +40,16 @@ TWIX_FILE="$1"
 RECONSTRUCTION_ROOT="${2%/}"
 SEQUENCE_FILE="$3"
 shift 3
+NOISE_PREWHITENING=true
+FILTERED_ARGS=()
+for argument in "$@"; do
+    if [[ "$argument" == "-no-noise-prewhitening" || "$argument" == "--no-noise-prewhitening" ]]; then
+        NOISE_PREWHITENING=false
+    else
+        FILTERED_ARGS+=("$argument")
+    fi
+done
+set -- "${FILTERED_ARGS[@]}"
 [[ -d "$RECONSTRUCTION_ROOT" ]] || {
     echo "Error: selected reconstruction root does not exist: $RECONSTRUCTION_ROOT" >&2
     exit 2
@@ -51,7 +63,9 @@ echo "ROVir reconstruction root: $RECONSTRUCTION_ROOT"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
-python "$WORKFLOW" prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE" >/dev/null
+PREPARE_INVOCATION_ARGS=(prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE")
+[[ "$NOISE_PREWHITENING" == true ]] || PREPARE_INVOCATION_ARGS+=(--no-noise-prewhitening)
+python "$WORKFLOW" "${PREPARE_INVOCATION_ARGS[@]}" >/dev/null
 # Use the validated canonical source paths recorded by the normal manifest.
 TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sequence)"

@@ -11,6 +11,12 @@ Installing CUDA-enabled PyTorch or CuPy in Python does not make BART
 GPU-enabled. Conversely, a CUDA-enabled BART build does not install the Python
 dependencies. Prepare and validate both layers before using the sample scripts.
 
+The Python layer must use a pyMapVBVD build that exposes populated Siemens
+noise-adjust acquisitions as `measurement["noise"]` and supports
+`noise.unsorted()`. Prewhitening does not depend on a BART whitening command;
+Python estimates the physical-coil covariance and writes the exact transform
+identity before BART ecalib or Wave reconstruction starts.
+
 ## Obtain the source and submodules
 
 From the parent repository root, initialize the pinned Wave-MPRAGE and

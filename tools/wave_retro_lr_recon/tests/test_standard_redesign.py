@@ -68,6 +68,12 @@ class StandardPcaContractTests(unittest.TestCase):
                 inspect.signature(function).parameters["virtual_coils"].default,
                 24,
             )
+            self.assertIs(
+                inspect.signature(function).parameters[
+                    "noise_prewhitening"
+                ].default,
+                True,
+            )
         self.assertEqual(
             inspect.signature(prepare_retro_mprage).parameters["case_ids"].default,
             DEFAULT_RETRO_CASE_IDS,

@@ -40,6 +40,7 @@ MASK_BRANCH_PREFERENCE = (
     "rovir_optimal_wavelet",
     "rovir_fista_r0",
     "wavelet_selected_vcc24",
+    "wavelet_prewhitening_unvalidated",
     "wavelet_candidate",
     "wavelet_transferred_vcc12",
     "optimal_wavelet",

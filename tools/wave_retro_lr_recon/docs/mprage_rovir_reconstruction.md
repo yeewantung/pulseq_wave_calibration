@@ -60,6 +60,17 @@ configuration file.
 ROVir writes only below `normal/rovir/` and leaves the standard normal branch
 unchanged.
 
+ROVir shares the same default noise-prewhitening policy as standard PCA but
+keeps its virtual-coil transform independent. If its bound standard source
+records an applied whitening matrix, ROVir hash-validates and applies that
+exact physical-coil transform to both ACS and image data before the ROVir
+projection. A ROVir-only source anchor estimates and records the same contract
+itself. Missing noise data are an explicit no-op fallback. Use
+`-no-noise-prewhitening` (or `--no-noise-prewhitening`) on `inspect` or `run`
+to force off whitening. A default invocation may reuse a complete historical
+unwhitened source, but records it as legacy and never reinterprets or relabels
+it as whitened.
+
 ROVir's canonical virtual-coil count is independent of the standard-PCA
 default. The combined retrospective launcher accepts `--rovir` without a
 standard Ncc override, but rejects `--rovir --virtual-coils N` and standard

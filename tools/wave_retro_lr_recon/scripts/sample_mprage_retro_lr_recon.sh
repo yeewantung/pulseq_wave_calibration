@@ -4,7 +4,7 @@ set -euo pipefail
 # Reconstruct the reduced standard MPRAGE retro set or canonical legacy ROVir.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -24,6 +24,7 @@ RECON_PROFILE="fista-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
 USE_ROVIR=false
+NOISE_PREWHITENING=true
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
 PSF_FIT_Y_MIN=""; PSF_FIT_Y_MAX=""
@@ -40,6 +41,7 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; VIRTUAL_COILS_EXPLICIT=true; shift 2 ;;
+        -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; ECALIB_CROP_EXPLICIT=true; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
         --wavelet-only) select_profile wavelet-only; shift ;;
@@ -94,6 +96,7 @@ RETRO_ROOT="$STANDARD_ROOT/retro"
 ECALIB_RECORD="$NORMAL_OUTPUT/ecalib_command.txt"
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
+[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
     PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then
@@ -113,6 +116,7 @@ elif [[ -n "$PSF_FIT_Z_MIN" || -n "$PSF_FIT_Z_MAX" ]]; then
     echo "Error: manual PSF z fitting requires both bounds." >&2; exit 2
 fi
 python "$SCRIPT_DIR/prepare_mprage_retro.py" "${PREP_ARGS[@]}"
+PREWHITENING_APPLIED="$(python -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1], encoding="utf-8")).get("noise_prewhitening", {}).get("applied", False))).lower())' "$NORMAL_INPUTS/manifest.json")"
 
 mkdir -p "$NORMAL_OUTPUT"
 printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$NORMAL_INPUTS/kspace_calib" "$NORMAL_OUTPUT/coil_sens"
@@ -160,11 +164,16 @@ for case_id in native_r3x2 lr_y_1p5mm_r3x2; do
         run_case_branch "$case_id" "$maps" fista_r0 fista 0 "BARTWaveMPRAGE${case_id}FISTAR0"
     fi
     if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then
-        run_case_branch "$case_id" "$maps" wavelet_transferred_vcc12 wavelet "$wavelet_lambda" "BARTWaveMPRAGE${case_id}WaveletTransferredFromVCC12"
+        if [[ "$PREWHITENING_APPLIED" == true ]]; then
+            run_case_branch "$case_id" "$maps" wavelet_prewhitening_unvalidated wavelet "$wavelet_lambda" "BARTWaveMPRAGE${case_id}WaveletPrewhiteningUnvalidated"
+        else
+            run_case_branch "$case_id" "$maps" wavelet_transferred_vcc12 wavelet "$wavelet_lambda" "BARTWaveMPRAGE${case_id}WaveletTransferredFromVCC12"
+        fi
     fi
 done
 
 R3X3_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --ecalib-crop "$ECALIB_CROP" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING" "--$RECON_PROFILE")
+[[ "$NOISE_PREWHITENING" == true ]] || R3X3_ARGS+=(--no-noise-prewhitening)
 [[ -n "$PSF_FIT_KX_MIN" ]] && R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 [[ -n "$PSF_FIT_Y_MIN" ]] && R3X3_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")
 [[ -n "$PSF_FIT_Z_MIN" ]] && R3X3_ARGS+=(--psf-fit-z-min "$PSF_FIT_Z_MIN" --psf-fit-z-max "$PSF_FIT_Z_MAX")

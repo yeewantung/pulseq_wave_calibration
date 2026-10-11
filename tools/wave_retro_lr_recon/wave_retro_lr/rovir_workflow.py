@@ -49,7 +49,11 @@ NORMAL_ROVIR_WAVELET_LAMBDA = 0.035
 
 
 def prepare_normal_rovir_invocation(
-    twix: str | Path, output_root: str | Path, sequence: str | Path
+    twix: str | Path,
+    output_root: str | Path,
+    sequence: str | Path,
+    *,
+    noise_prewhitening: bool = True,
 ) -> dict[str, Any]:
     """Select, bind, or minimally prepare the source contract for ROVir.
 
@@ -57,6 +61,8 @@ def prepare_normal_rovir_invocation(
         twix: Measured Wave-MPRAGE TWIX supplied on the command line.
         output_root: Existing user-selected reconstruction root.
         sequence: Matching Pulseq sequence supplied on the command line.
+        noise_prewhitening: Require automatic noise prewhitening for a selected
+            source, or explicitly permit legacy/unwhitened source preparation.
 
     Returns:
         Validated canonical workflow context.
@@ -81,6 +87,7 @@ def prepare_normal_rovir_invocation(
             root,
             include_twix_hash=False,
             source_inputs=inputs,
+            noise_prewhitening=noise_prewhitening,
         )
         _validate_rovir_source_artifacts(inputs, source)
         return normal_rovir_context(root)
@@ -96,6 +103,7 @@ def prepare_normal_rovir_invocation(
                 root,
                 include_twix_hash=False,
                 source_inputs=inputs,
+                noise_prewhitening=noise_prewhitening,
             )
             _validate_rovir_source_artifacts(inputs, source)
         except (FileNotFoundError, ValueError) as exc:
@@ -116,13 +124,20 @@ def prepare_normal_rovir_invocation(
                 "Incomplete normal or vccN source layouts exist; refusing to "
                 "bootstrap around them: " + ", ".join(str(path) for path in incomplete)
             )
-        selected = prepare_mprage_rovir_source_anchor(twix, sequence, root)
+        selected = (
+            prepare_mprage_rovir_source_anchor(twix, sequence, root)
+            if noise_prewhitening
+            else prepare_mprage_rovir_source_anchor(
+                twix, sequence, root, noise_prewhitening=False
+            )
+        )
         source = _validated_source_contract(
             twix,
             sequence,
             root,
             include_twix_hash=False,
             source_inputs=selected,
+            noise_prewhitening=noise_prewhitening,
         )
         _validate_rovir_source_artifacts(selected, source)
     bind_rovir_source_inputs(root, selected)

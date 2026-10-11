@@ -28,6 +28,22 @@ and are never overwritten, moved, or relabeled. Preparation rejects Ncc above
 the measured physical receive-coil count and records retained energy, PCA-basis
 identity, source and geometry provenance, and prepared-artifact hashes.
 
+Noise prewhitening is enabled by default for new MPRAGE and GRE standard-PCA
+preparation. The tool searches for a real `MDH_NOISEADJSCAN`, validates its
+physical-coil count and finite covariance, applies the same physical-coil
+transform to image k-space and integrated ACS before PCA, and records the
+covariance, transform, hashes, empirical already-white assessment, and Siemens
+raw-data-correction bits. The raw-data-correction bit is audit evidence only;
+it is not relabeled as proof of scanner-side whitening. If no noise scan
+exists, preparation continues without whitening and records
+`not_applied_no_noise_scan`. A populated but invalid noise scan is a hard
+error. Use either `-no-noise-prewhitening` (the requested spelling) or
+`--no-noise-prewhitening` to force the pipeline off. A complete historical
+manifest that predates this field remains reusable as an unchanged legacy
+unwhitened result, including under the default launcher invocation. It is not
+rewritten or relabeled. Among newly prepared manifests, a whitening-mode
+change never reuses a mismatched PCA basis or CSM.
+
 The four main launchers accept mutually exclusive profiles: `--reg-full`
 (FISTA-r0 plus Wavelet), `--wavelet-only`, and `--fista-only`. Normal defaults
 to Wavelet-only; retrospective reconstruction defaults to FISTA-only. The
@@ -39,6 +55,13 @@ normal reconstruction also uses `wavelet_selected_vcc24`. Counts other than 24
 and unswept retrospective cases retain their Ncc=12 values under
 `wavelet_transferred_vcc12`. MPRAGE R1 rejects profiles containing Wavelet
 because no positive R1 value has been approved.
+
+Those selected lambdas predate noise prewhitening. When a noise transform is
+actually applied, the launchers retain `3e-2` or `1.5e-2` only as an unselected
+starting reference under `wavelet_prewhitening_unvalidated`; they do not call
+it optimal. A new compact, modality-specific sweep and user review are needed
+before promoting a whitened-pipeline value. If whitening is a recorded no-op,
+the earlier selected branch remains applicable.
 
 The default MPRAGE retrospective batch is `native_r3x2`,
 `lr_y_1p5mm_r3x2`, and `native_r3x3`. LR-X and LR-XY remain explicit options

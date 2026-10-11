@@ -10,6 +10,33 @@ manifest differs, reuse fails closed. Do not edit manifests or copy a CSM
 between counts; rerun with the intended count so preparation and ecalib remain
 matched.
 
+## Noise prewhitening is skipped or an existing tree is rejected
+
+New preparation enables TWIX noise-scan prewhitening by default. Inspect
+`normal/bart_inputs/manifest.json` at `noise_prewhitening.status`:
+
+- `applied` means image data and integrated ACS used the recorded transform;
+- `not_applied_no_noise_scan` is the allowed missing-noise fallback;
+- `not_applied_empirically_already_white` means the measured covariance met
+  both recorded identity thresholds; and
+- `disabled_by_user` means one of the explicit disable flags was supplied.
+
+`MDH_RAWDATACORRECTION` is recorded but is not interpreted as proof of noise
+whitening because pyMapVBVD does not implement that correction. A populated
+noise scan with non-finite values, too few samples, a singular covariance, an
+ambiguous measurement, or a coil-count mismatch fails instead of falling back.
+Do not delete the matrix or edit the status. Switching between enabled and
+forced-off modes requires a separate clean source tree and a newly matched
+PCA basis and CSM for newly prepared manifests. Historical complete manifests
+without this field remain reusable under the default invocation as unchanged
+legacy unwhitened inputs; they are neither rewritten nor claimed to be
+prewhitened.
+
+If whitening is actually applied, the earlier MPRAGE `3e-2` and GRE `1.5e-2`
+Ncc=24 selections are not automatically promoted to the modified pipeline.
+Normal output is labeled `wavelet_prewhitening_unvalidated` until a new compact
+modality-specific sweep is reviewed.
+
 If preparation stops before writing `bart_inputs/manifest.json`, the non-empty
 directory is deliberately not resumed because its PCA basis and large CFL
 payloads do not yet have an immutable completion record. Preserve the failed

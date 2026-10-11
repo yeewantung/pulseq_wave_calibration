@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct one count-specific standard-PCA MPRAGE variant.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --wavelet-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -27,6 +27,7 @@ R3_LAMBDA_EXPLICIT=false
 RECON_PROFILE="wavelet-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
+NOISE_PREWHITENING=true
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
@@ -47,6 +48,7 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
+        -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --r3-lambda) R3_LAMBDA="$2"; R3_LAMBDA_EXPLICIT=true; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
@@ -79,6 +81,7 @@ command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
+[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
     PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then
@@ -98,6 +101,7 @@ elif [[ -n "$PSF_FIT_Z_MIN" || -n "$PSF_FIT_Z_MAX" ]]; then
     echo "Error: manual PSF z fitting requires both bounds." >&2; exit 2
 fi
 python "$SCRIPT_DIR/prepare_mprage_normal.py" "${PREP_ARGS[@]}"
+PREWHITENING_APPLIED="$(python -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1], encoding="utf-8")).get("noise_prewhitening", {}).get("applied", False))).lower())' "$BART_INPUTS/manifest.json")"
 
 SAMPLING_CLASS="$(<"$BART_INPUTS/sampling_class.txt")"
 if [[ "$SAMPLING_CLASS" == "R1" && "$RECON_PROFILE" != "fista-only" ]]; then
@@ -159,6 +163,10 @@ fi
 if [[ "$RECON_PROFILE" == "reg-full" || "$RECON_PROFILE" == "wavelet-only" ]]; then
     if [[ "$R3_LAMBDA_EXPLICIT" == true ]]; then
         run_branch wavelet_candidate wavelet "$R3_LAMBDA" BARTWaveMPRAGENormalWaveletCandidate
+    elif [[ "$PREWHITENING_APPLIED" == true ]]; then
+        PREWHITENING_REFERENCE_LAMBDA="$R3_LAMBDA_TRANSFERRED_VCC12"
+        [[ "$VIRTUAL_COILS" == 24 ]] && PREWHITENING_REFERENCE_LAMBDA="$R3_LAMBDA_SELECTED_VCC24"
+        run_branch wavelet_prewhitening_unvalidated wavelet "$PREWHITENING_REFERENCE_LAMBDA" BARTWaveMPRAGENormalWaveletPrewhiteningUnvalidated
     elif [[ "$VIRTUAL_COILS" == 24 ]]; then
         run_branch wavelet_selected_vcc24 wavelet "$R3_LAMBDA_SELECTED_VCC24" BARTWaveMPRAGENormalWaveletSelectedVCC24
     else

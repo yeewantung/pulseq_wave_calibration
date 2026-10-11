@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct only native-grid R3x3 Wave-MPRAGE.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line]"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -15,6 +15,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 ]] || { usage >&2; exit 2; }
 TWIX_FILE="$1"; OUTPUT_ROOT="${2%/}"; SEQUENCE_FILE="$3"; shift 3
 VIRTUAL_COILS=24; ECALIB_CROP="0.6"; USE_GPU=false
+NOISE_PREWHITENING=true
 RECON_PROFILE="fista-only"; PROFILE_EXPLICIT=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""; PSF_FIT_Y_MIN=""; PSF_FIT_Y_MAX=""; PSF_FIT_Z_MIN=""; PSF_FIT_Z_MAX=""
@@ -27,6 +28,7 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
+        -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
         --wavelet-only) select_profile wavelet-only; shift ;;
@@ -54,6 +56,7 @@ command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
+[[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
 for axis in KX Y Z; do
     min_name="PSF_FIT_${axis}_MIN"; max_name="PSF_FIT_${axis}_MAX"
     minimum="${!min_name}"; maximum="${!max_name}"
@@ -66,6 +69,7 @@ for axis in KX Y Z; do
 done
 if [[ "$PSF_COEFFICIENT_PROCESSING" == smooth && -n "$PSF_FIT_KX_MIN" ]]; then echo "Error: kx bounds require sine-line." >&2; exit 2; fi
 python "$SCRIPT_DIR/prepare_mprage_retro_r3x3.py" "${PREP_ARGS[@]}"
+PREWHITENING_APPLIED="$(python -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1], encoding="utf-8")).get("noise_prewhitening", {}).get("applied", False))).lower())' "$NORMAL_INPUTS/manifest.json")"
 
 mkdir -p "$NORMAL_OUTPUT"
 printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$NORMAL_INPUTS/kspace_calib" "$NORMAL_OUTPUT/coil_sens"
@@ -99,5 +103,11 @@ run_branch() {
 }
 
 if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == fista-only ]]; then run_branch fista_r0 fista 0 BARTWaveMPRAGENativeR3x3FISTAR0; fi
-if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then run_branch wavelet_transferred_vcc12 wavelet "$R3X3_LAMBDA" BARTWaveMPRAGENativeR3x3WaveletTransferredFromVCC12; fi
+if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then
+    if [[ "$PREWHITENING_APPLIED" == true ]]; then
+        run_branch wavelet_prewhitening_unvalidated wavelet "$R3X3_LAMBDA" BARTWaveMPRAGENativeR3x3WaveletPrewhiteningUnvalidated
+    else
+        run_branch wavelet_transferred_vcc12 wavelet "$R3X3_LAMBDA" BARTWaveMPRAGENativeR3x3WaveletTransferredFromVCC12
+    fi
+fi
 echo "Native R3x3 retrospective MPRAGE complete: $CASE_ROOT ($RECON_PROFILE)"

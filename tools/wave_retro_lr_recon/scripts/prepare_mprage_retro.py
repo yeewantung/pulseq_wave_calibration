@@ -41,6 +41,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         psf_fit_y_max=args.psf_fit_y_max,
         psf_fit_z_min=args.psf_fit_z_min,
         psf_fit_z_max=args.psf_fit_z_max,
+        noise_prewhitening=args.noise_prewhitening,
     )
     return 0
 
@@ -64,6 +65,14 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_VIRTUAL_COILS,
         help="Standard-PCA channel count written below OUTPUT_ROOT/vccN.",
+    )
+    parser.add_argument(
+        "-no-noise-prewhitening",
+        "--no-noise-prewhitening",
+        dest="noise_prewhitening",
+        action="store_false",
+        default=True,
+        help="Force off automatic TWIX noise-scan prewhitening.",
     )
     parser.add_argument(
         "--case",

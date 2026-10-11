@@ -50,6 +50,13 @@ def _parser() -> argparse.ArgumentParser:
     prepare_invocation.add_argument("twix", type=Path)
     prepare_invocation.add_argument("output_root", type=Path)
     prepare_invocation.add_argument("sequence", type=Path)
+    prepare_invocation.add_argument(
+        "-no-noise-prewhitening",
+        "--no-noise-prewhitening",
+        dest="noise_prewhitening",
+        action="store_false",
+        default=True,
+    )
     finish = commands.add_parser("inspect-finish")
     finish.add_argument("output_root", type=Path)
     finish.add_argument("bart_version_file", type=Path)
@@ -125,7 +132,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     elif args.stage == "prepare-invocation":
         result = prepare_normal_rovir_invocation(
-            args.twix, args.output_root, args.sequence
+            args.twix,
+            args.output_root,
+            args.sequence,
+            noise_prewhitening=args.noise_prewhitening,
         )
     elif args.stage == "inspect-prepare":
         result = prepare_inspection(args.output_root)

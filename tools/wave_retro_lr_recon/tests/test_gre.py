@@ -273,6 +273,15 @@ class GreGeometryAndEchoTests(unittest.TestCase):
                     manifest, twix, sequence, automatic
                 )
             )
+            self.assertTrue(
+                _normal_manifest_matches_reusable_artifact(
+                    manifest,
+                    twix,
+                    sequence,
+                    automatic,
+                    noise_prewhitening=True,
+                )
+            )
             manual = _normalize_psf_settings("sine-line", 10, 900)
             self.assertFalse(
                 _normal_manifest_matches_reusable_artifact(
