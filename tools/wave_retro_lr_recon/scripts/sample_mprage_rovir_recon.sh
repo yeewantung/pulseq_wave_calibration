@@ -7,7 +7,7 @@ usage() {
     cat <<'EOF'
 Usage:
   sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq [-no-noise-prewhitening]
-  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [-no-noise-prewhitening] [ROI options] [run options]
+  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [-no-noise-prewhitening] [--n4-bias-correction] [ROI options] [run options]
 
 ROI options (choose exactly one mode):
   --use-recommended                       requires a prior inspect
@@ -17,6 +17,7 @@ ROI options (choose exactly one mode):
 Run options:
   -no-noise-prewhitening
                          force off automatic TWIX noise-scan prewhitening
+  --n4-bias-correction   create optional magnitude-only ANTs N4 derivatives
   --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
   -g                     use GPU for BART Wave only
 
@@ -41,10 +42,13 @@ RECONSTRUCTION_ROOT="${2%/}"
 SEQUENCE_FILE="$3"
 shift 3
 NOISE_PREWHITENING=true
+N4_BIAS_CORRECTION=false
 FILTERED_ARGS=()
 for argument in "$@"; do
     if [[ "$argument" == "-no-noise-prewhitening" || "$argument" == "--no-noise-prewhitening" ]]; then
         NOISE_PREWHITENING=false
+    elif [[ "$argument" == "--n4-bias-correction" ]]; then
+        N4_BIAS_CORRECTION=true
     else
         FILTERED_ARGS+=("$argument")
     fi
@@ -108,12 +112,18 @@ bart rss 8 $CALIBRATION/physical_set4_coil_images $CALIBRATION/physical_set4_rss
 }
 
 if [[ "$STAGE" == "inspect" ]]; then
+    [[ "$N4_BIAS_CORRECTION" == false ]] || { echo "Error: --n4-bias-correction applies only to run." >&2; exit 2; }
     [[ $# -eq 0 ]] || { echo "Error: inspect accepts exactly TWIX.dat OUTPUT_ROOT SEQUENCE.seq." >&2; exit 2; }
     prepare_calibration_inspection
     echo "Inspect figures: $FEASIBILITY_ROOT/diagnostics/calibration_views"
     echo "ROI recommendation: $FEASIBILITY_ROOT/diagnostics/roi_recommendation/roi_recommendation.json"
     exit 0
 fi
+
+run_optional_n4() {
+    [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+}
 
 VIRTUAL_COILS=""
 ECALIB_CROP=""
@@ -237,6 +247,7 @@ else
         --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$NIFTI_OUTPUT" \
         --suffix "BARTWaveMPRAGEROVir${VIRTUAL_COILS}FISTAR0"
 fi
+run_optional_n4 "$NIFTI_OUTPUT" "$ROVIR_ROOT/n4_bias_corrected_nifti/fista_r0"
 python "$WORKFLOW" finalize "$RECONSTRUCTION_ROOT" "$VIRTUAL_COILS" >/dev/null
 if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_class)" == "R3x1" ]]; then
     # Keep the selected R3x1 Wavelet branch visible and resumable in this launcher.
@@ -283,6 +294,9 @@ if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_clas
             --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$WAVELET_NIFTI_OUTPUT" \
             --suffix "BARTWaveMPRAGENativeR3x1ROVir${VIRTUAL_COILS}OptimalWavelet"
     fi
+    run_optional_n4 \
+        "$WAVELET_NIFTI_OUTPUT" \
+        "$ROVIR_ROOT/n4_bias_corrected_nifti/optimal_wavelet"
     python "$WORKFLOW" finalize-wavelet "$RECONSTRUCTION_ROOT" >/dev/null
 else
     echo "Normal R1 ROVir remains FISTA-r0-only; no R1 Wavelet value is selected."

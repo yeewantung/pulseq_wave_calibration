@@ -17,6 +17,22 @@ noise-adjust acquisitions as `measurement["noise"]` and supports
 Python estimates the physical-coil covariance and writes the exact transform
 identity before BART ecalib or Wave reconstruction starts.
 
+Optional MPRAGE N4 postprocessing requires the ANTs
+`N4BiasFieldCorrection` executable on `PATH`. It is deliberately not a Python
+package dependency and is not required for preparation, BART reconstruction,
+NIfTI conversion, or collection. Verify an ANTs environment with:
+
+```bash
+command -v N4BiasFieldCorrection
+N4BiasFieldCorrection --version
+```
+
+The sample MPRAGE launchers check this dependency only when
+`--n4-bias-correction` is requested. The reviewed default follows the ANTs
+human-T1w quick-start settings: 3D input, shrink factor 4, 180-mm initial
+B-spline spacing, and four 50-iteration resolution levels. Original NIfTIs
+are never overwritten.
+
 ## Obtain the source and submodules
 
 From the parent repository root, initialize the pinned Wave-MPRAGE and

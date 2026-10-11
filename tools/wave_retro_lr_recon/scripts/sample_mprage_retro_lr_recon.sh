@@ -4,7 +4,7 @@ set -euo pipefail
 # Reconstruct the reduced standard MPRAGE retro set or canonical legacy ROVir.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -25,6 +25,7 @@ PROFILE_EXPLICIT=false
 USE_GPU=false
 USE_ROVIR=false
 NOISE_PREWHITENING=true
+N4_BIAS_CORRECTION=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
 PSF_FIT_Y_MIN=""; PSF_FIT_Y_MAX=""
@@ -42,6 +43,7 @@ while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; VIRTUAL_COILS_EXPLICIT=true; shift 2 ;;
         -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
+        --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; ECALIB_CROP_EXPLICIT=true; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
         --wavelet-only) select_profile wavelet-only; shift ;;
@@ -66,6 +68,11 @@ done
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 
+run_optional_n4() {
+    [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+}
+
 if [[ "$USE_ROVIR" == true ]]; then
     [[ "$VIRTUAL_COILS_EXPLICIT" == false ]] || {
         echo "Error: --virtual-coils configures standard PCA and is incompatible with --rovir; use the canonical ROVir count." >&2; exit 2;
@@ -83,6 +90,7 @@ if [[ "$USE_ROVIR" == true ]]; then
     python "$SCRIPT_DIR/mprage_rovir_workflow.py" validate-invocation "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" >/dev/null
     python "$SCRIPT_DIR/mprage_rovir_workflow.py" finalize-existing "$OUTPUT_ROOT" >/dev/null
     ROVIR_ARGS=("$OUTPUT_ROOT"); [[ "$USE_GPU" == true ]] && ROVIR_ARGS+=(-g)
+    [[ "$N4_BIAS_CORRECTION" == true ]] && ROVIR_ARGS+=(--n4-bias-correction)
     bash "$SCRIPT_DIR/sample_mprage_rovir_retro_recon.sh" "${ROVIR_ARGS[@]}"
     exit 0
 fi
@@ -148,13 +156,18 @@ run_case_branch() {
     printf -v expected '%q ' "${command[@]}"; expected="${expected% }"
     state_args=(--run-manifest "$run_manifest" --prepared-manifest "$inputs/manifest.json" --normal-manifest "$NORMAL_INPUTS/manifest.json" --profile "$RECON_PROFILE" --case "$case_id" --branch "$branch" --method "$method" --regularization "$lambda_value" --maps "$maps" --psf "$inputs/psf" --kspace "$inputs/wave_kspace" --image "$image" --command-record "$command_record" --expected-command "$expected" --nifti-directory "$nifti_root")
     status="$(python "$SCRIPT_DIR/manage_standard_reconstruction.py" status "${state_args[@]}")"
-    if [[ "$status" == "complete" ]]; then echo "Reusing completed $case_id/$branch"; return; fi
+    if [[ "$status" == "complete" ]]; then
+        echo "Reusing completed $case_id/$branch"
+        run_optional_n4 "$nifti_root" "$RETRO_ROOT/$case_id/n4_bias_corrected_nifti/$branch"
+        return
+    fi
     if [[ "$status" == "run" ]]; then mkdir -p "$branch_root"; "${command[@]}"; printf '%s\n' "$expected" > "$command_record"; fi
     if [[ "$status" == "run" || "$status" == "convert" ]]; then
         mkdir -p "$nifti_root"
         python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$inputs" --image "$image" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$nifti_root" --suffix "$suffix"
     fi
     python "$SCRIPT_DIR/manage_standard_reconstruction.py" record "${state_args[@]}" >/dev/null
+    run_optional_n4 "$nifti_root" "$RETRO_ROOT/$case_id/n4_bias_corrected_nifti/$branch"
 }
 
 for case_id in native_r3x2 lr_y_1p5mm_r3x2; do
@@ -174,6 +187,7 @@ done
 
 R3X3_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --ecalib-crop "$ECALIB_CROP" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING" "--$RECON_PROFILE")
 [[ "$NOISE_PREWHITENING" == true ]] || R3X3_ARGS+=(--no-noise-prewhitening)
+[[ "$N4_BIAS_CORRECTION" == true ]] && R3X3_ARGS+=(--n4-bias-correction)
 [[ -n "$PSF_FIT_KX_MIN" ]] && R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 [[ -n "$PSF_FIT_Y_MIN" ]] && R3X3_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")
 [[ -n "$PSF_FIT_Z_MIN" ]] && R3X3_ARGS+=(--psf-fit-z-min "$PSF_FIT_Z_MIN" --psf-fit-z-max "$PSF_FIT_Z_MAX")

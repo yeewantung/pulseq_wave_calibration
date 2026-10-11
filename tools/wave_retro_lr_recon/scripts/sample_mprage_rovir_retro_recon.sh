@@ -4,7 +4,7 @@ set -euo pipefail
 # Reconstruct all MPRAGE retro cases directly from the canonical normal ROVir branch.
 
 usage() {
-    echo "Usage: $0 RECONSTRUCTION_ROOT [-g]"
+    echo "Usage: $0 RECONSTRUCTION_ROOT [--n4-bias-correction] [-g]"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -12,8 +12,10 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 ROOT="${1%/}"
 shift
 USE_GPU=false
+N4_BIAS_CORRECTION=false
 while (($#)); do
     case "$1" in
+        --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         -g) USE_GPU=true; shift ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -21,6 +23,11 @@ done
 ROOT="$(cd -- "$ROOT" && pwd -P)"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
+
+run_optional_n4() {
+    [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+}
 echo "Preparing pure-mask cases from the canonical normal ROVir contract; validation can be quiet for several minutes."
 python "$SCRIPT_DIR/prepare_mprage_rovir_retro.py" "$ROOT" >/dev/null
 TWIX_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field twix)"
@@ -64,6 +71,9 @@ run_method() {
         --bart-inputs "$inputs" --image "$output/image_wave" \
         --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$nifti" \
         --suffix "BARTWaveMPRAGE${suffix}ROVir${branch}"
+    run_optional_n4 \
+        "$nifti" \
+        "$ROOT/retro/$case_name/rovir/n4_bias_corrected_nifti/$branch"
 }
 
 for index in "${!CASES[@]}"; do

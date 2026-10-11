@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct one count-specific standard-PCA MPRAGE variant.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [-no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --wavelet-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -28,6 +28,7 @@ RECON_PROFILE="wavelet-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
 NOISE_PREWHITENING=true
+N4_BIAS_CORRECTION=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""
 PSF_FIT_KX_MAX=""
@@ -49,6 +50,7 @@ while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
         -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
+        --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --r3-lambda) R3_LAMBDA="$2"; R3_LAMBDA_EXPLICIT=true; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
@@ -75,10 +77,16 @@ STANDARD_ROOT="$OUTPUT_ROOT/vcc$VIRTUAL_COILS"
 BART_INPUTS="$STANDARD_ROOT/normal/bart_inputs"
 BART_OUTPUT_ROOT="$STANDARD_ROOT/normal/bart_output"
 NIFTI_OUTPUT_ROOT="$STANDARD_ROOT/normal/nifti"
+N4_OUTPUT_ROOT="$STANDARD_ROOT/normal/n4_bias_corrected_nifti"
 ECALIB_RECORD="$BART_OUTPUT_ROOT/ecalib_command.txt"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
+
+run_optional_n4() {
+    [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+}
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
 [[ "$NOISE_PREWHITENING" == true ]] || PREP_ARGS+=(--no-noise-prewhitening)
@@ -143,7 +151,9 @@ run_branch() {
     state_args=(--run-manifest "$run_manifest" --prepared-manifest "$BART_INPUTS/manifest.json" --normal-manifest "$BART_INPUTS/manifest.json" --profile "$RECON_PROFILE" --case normal --branch "$branch" --method "$method" --regularization "$lambda_value" --maps "$BART_OUTPUT_ROOT/coil_sens" --psf "$BART_INPUTS/psf" --kspace "$BART_INPUTS/wave_kspace" --image "$image" --command-record "$command_record" --expected-command "$expected" --nifti-directory "$nifti_root")
     status="$(python "$SCRIPT_DIR/manage_standard_reconstruction.py" status "${state_args[@]}")"
     if [[ "$status" == "complete" ]]; then
-        echo "Reusing completed $branch reconstruction: $run_manifest"; return
+        echo "Reusing completed $branch reconstruction: $run_manifest"
+        run_optional_n4 "$nifti_root" "$N4_OUTPUT_ROOT/$branch"
+        return
     fi
     if [[ "$status" == "run" ]]; then
         mkdir -p "$branch_root"
@@ -155,6 +165,7 @@ run_branch() {
         python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$BART_INPUTS" --image "$image" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$nifti_root" --suffix "$suffix"
     fi
     python "$SCRIPT_DIR/manage_standard_reconstruction.py" record "${state_args[@]}" >/dev/null
+    run_optional_n4 "$nifti_root" "$N4_OUTPUT_ROOT/$branch"
 }
 
 if [[ "$RECON_PROFILE" == "reg-full" || "$RECON_PROFILE" == "fista-only" ]]; then

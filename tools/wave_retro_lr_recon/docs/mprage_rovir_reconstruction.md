@@ -71,6 +71,14 @@ to force off whitening. A default invocation may reuse a complete historical
 unwhitened source, but records it as legacy and never reinterprets or relabels
 it as whitened.
 
+N4 is independent of the ROVir transform and remains disabled by default.
+Supplying `--n4-bias-correction` to `run` creates magnitude-only derivatives
+for the completed normal ROVir branches. The retrospective ROVir launcher
+accepts the same flag and writes case-local derivatives. Canonical magnitude
+and phase NIfTIs are unchanged; the temporary N4 estimation mask is not
+retained. `inspect` rejects the N4 flag because it produces no reconstructed
+magnitude image.
+
 ROVir's canonical virtual-coil count is independent of the standard-PCA
 default. The combined retrospective launcher accepts `--rovir` without a
 standard Ncc override, but rejects `--rovir --virtual-coils N` and standard

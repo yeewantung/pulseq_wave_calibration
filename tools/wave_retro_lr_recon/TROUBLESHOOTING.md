@@ -37,6 +37,28 @@ Ncc=24 selections are not automatically promoted to the modified pipeline.
 Normal output is labeled `wavelet_prewhitening_unvalidated` until a new compact
 modality-specific sweep is reviewed.
 
+## Optional N4 correction is unavailable or rejected
+
+N4 is disabled unless `--n4-bias-correction` is supplied to an MPRAGE
+launcher. If requested, `N4BiasFieldCorrection --version` must succeed in the
+active environment. This repository does not bundle ANTs. N4 outputs are
+separate from canonical reconstruction NIfTIs:
+
+```text
+.../n4_bias_corrected_nifti/<branch>/
+  images/
+  metadata/n4_manifest.json
+```
+
+The manifest binds the original magnitude and untouched phase hashes, tool
+binary/version, parameters, temporary estimation-mask identity, output hashes,
+and the numerical `corrected = source / bias` check. A matching completed
+derivative is reused without rerunning ANTs. Changed sources or parameters are
+rejected; do not edit the manifest or copy a bias field between geometries.
+Original magnitude/phase files and the default `nifti_collection` remain
+unchanged. GRE launchers intentionally reject no N4 option because separate
+per-echo correction would disturb inter-echo scaling and downstream delta-B0.
+
 If preparation stops before writing `bart_inputs/manifest.json`, the non-empty
 directory is deliberately not resumed because its PCA basis and large CFL
 payloads do not yet have an immutable completion record. Preserve the failed

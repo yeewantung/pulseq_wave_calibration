@@ -44,6 +44,20 @@ unwhitened result, including under the default launcher invocation. It is not
 rewritten or relabeled. Among newly prepared manifests, a whitening-mode
 change never reuses a mismatched PCA basis or CSM.
 
+ANTs N4 bias-field correction is an optional MPRAGE-only postprocessing step,
+disabled by default. Pass `--n4-bias-correction` to an MPRAGE normal,
+retrospective, or ROVir reconstruction launcher after installing
+`N4BiasFieldCorrection`. It operates only on the magnitude NIfTI, never changes
+the canonical magnitude/phase pair, and writes a separate derivative below
+`n4_bias_corrected_nifti/<branch>/`. The derivative contains the corrected
+magnitude, multiplicative bias field, source/output hashes, ANTs identity and
+parameters, numerical validation, and logs. A temporary whole-head estimation
+mask is used because N4 operates in the log domain, but the mask is not
+retained. GRE is intentionally excluded: independently estimated echo bias
+fields would violate the shared inter-echo scaling contract. The default
+NIfTI collection remains a byte-identical collection of canonical originals;
+N4 derivatives are not silently substituted for them.
+
 The four main launchers accept mutually exclusive profiles: `--reg-full`
 (FISTA-r0 plus Wavelet), `--wavelet-only`, and `--fista-only`. Normal defaults
 to Wavelet-only; retrospective reconstruction defaults to FISTA-only. The
