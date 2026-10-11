@@ -522,6 +522,12 @@ reused rather than ROVir-optimized. The Wavelet block is directly visible in
 the main ROVir launcher and is resumable with the rest of that workflow. It
 reuses the canonical ROVir transform, CSM, PSF, FISTA output, and manifest.
 
+ROVir retrospective reconstruction defaults independently to FISTA-r0 for
+`native_r3x2`, `lr_y_1p5mm_r3x2`, and `native_r3x3`. `--reg-full` and
+`--wavelet-only` expose the transferred Wavelet comparisons; LR-X and LR-XY
+are opt-in through `--include-legacy-lr`. Existing extra cases and branches
+remain discoverable and are never deleted by a narrower rerun.
+
 ## GRE workflow
 
 GRE mirrors the same normal, retrospective, and collection stages. The main

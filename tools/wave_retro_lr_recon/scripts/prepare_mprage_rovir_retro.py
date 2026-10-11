@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare manifest-bound ROVir inputs for all MPRAGE retrospective cases."""
+"""Prepare manifest-bound ROVir inputs for selected MPRAGE retrospective cases."""
 
 from __future__ import annotations
 
@@ -12,11 +12,14 @@ from typing import Sequence
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
 
-from wave_retro_lr.rovir_retro import prepare_mprage_rovir_retro  # noqa: E402
+from wave_retro_lr.rovir_retro import (  # noqa: E402
+    ROVIR_RETRO_CASES,
+    prepare_mprage_rovir_retro,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Prepare all ROVir retro inputs and print their manifests.
+    """Prepare selected ROVir retro inputs and print their manifests.
 
     Args:
         argv: Optional arguments; ``None`` reads process arguments.
@@ -26,8 +29,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_root", type=Path)
+    parser.add_argument(
+        "--case",
+        dest="case_ids",
+        action="append",
+        choices=ROVIR_RETRO_CASES,
+        help="case to prepare; repeat to override the reduced default set",
+    )
     args = parser.parse_args(argv)
-    print(json.dumps(prepare_mprage_rovir_retro(args.output_root), indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            prepare_mprage_rovir_retro(args.output_root, case_ids=args.case_ids),
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 

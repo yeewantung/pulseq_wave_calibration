@@ -313,8 +313,9 @@ hard error and must be reviewed rather than silently bypassed.
 `sample_mprage_retro_lr_recon.sh --rovir` never estimates another transform.
 It does not prepare or reconstruct the standard-coil branches. Instead, it
 validates the canonical normal ROVir image k-space, CSM, PSF, transform, ROI,
-and corrected ACS provenance, then directly prepares all five pure-mask cases
-below `retro/<case>/rovir/`. Standard retro BART inputs are not prerequisites.
+and corrected ACS provenance, then directly prepares the three default
+pure-mask cases below `retro/<case>/rovir/`. Standard retro BART inputs are not
+prerequisites.
 This is intentional for legacy roots whose standard Ncc inputs predate the
 corrected centered image-domain ACS readout crop.
 

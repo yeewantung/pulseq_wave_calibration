@@ -224,13 +224,32 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn("wavelet-context", source)
         self.assertIn("finalize-wavelet", source)
         rovir_retro_source = retro.read_text(encoding="utf-8")
-        self.assertIn("LAMBDAS=(3.5e-2 2.5e-2 2.5e-2 2.2e-2 4.5e-2)", rovir_retro_source)
+        self.assertIn('RECON_PROFILE="fista-only"', rovir_retro_source)
+        self.assertIn(
+            "CASES=(native_r3x2 lr_y_1p5mm_r3x2 native_r3x3)",
+            rovir_retro_source,
+        )
+        self.assertIn("--include-legacy-lr", rovir_retro_source)
+        self.assertIn("CASES+=(lr_x_1p5mm_r3x2 lr_xy_1p25mm_r3x2)", rovir_retro_source)
+        self.assertIn(
+            'if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == fista-only ]]',
+            rovir_retro_source,
+        )
+        conflict = subprocess.run(
+            ["bash", str(retro), "/unused", "--reg-full", "--fista-only"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(conflict.returncode, 2)
+        self.assertIn("mutually exclusive", conflict.stderr)
         retro_source = (SCRIPTS / "sample_mprage_retro_lr_recon.sh").read_text(
             encoding="utf-8"
         )
         self.assertIn("--rovir", retro_source)
         self.assertIn("sample_mprage_rovir_retro_recon.sh", retro_source)
         self.assertIn("finalize-existing", retro_source)
+        self.assertIn('ROVIR_ARGS=("$OUTPUT_ROOT" "--$RECON_PROFILE")', retro_source)
         self.assertLess(
             retro_source.index('if [[ "$USE_ROVIR" == true ]]'),
             retro_source.index('python "$SCRIPT_DIR/prepare_mprage_retro.py"'),

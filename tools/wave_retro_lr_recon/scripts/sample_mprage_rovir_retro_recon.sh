@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Reconstruct all MPRAGE retro cases directly from the canonical normal ROVir branch.
+# Reconstruct selected MPRAGE retro cases from the canonical normal ROVir branch.
 
 usage() {
-    echo "Usage: $0 RECONSTRUCTION_ROOT [--n4-bias-correction] [-g]"
+    echo "Usage: $0 RECONSTRUCTION_ROOT [--reg-full | --wavelet-only | --fista-only] [--include-legacy-lr] [--n4-bias-correction] [-g]"
+    echo "       default: FISTA-r0 for native R3x2, LR-Y R3x2, and native R3x3"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -13,8 +14,25 @@ ROOT="${1%/}"
 shift
 USE_GPU=false
 N4_BIAS_CORRECTION=false
+RECON_PROFILE="fista-only"
+PROFILE_EXPLICIT=false
+INCLUDE_LEGACY_LR=false
+
+select_profile() {
+    [[ "$PROFILE_EXPLICIT" == false ]] || {
+        echo "Error: --reg-full, --wavelet-only, and --fista-only are mutually exclusive." >&2
+        exit 2
+    }
+    RECON_PROFILE="$1"
+    PROFILE_EXPLICIT=true
+}
+
 while (($#)); do
     case "$1" in
+        --reg-full) select_profile reg-full; shift ;;
+        --wavelet-only) select_profile wavelet-only; shift ;;
+        --fista-only) select_profile fista-only; shift ;;
+        --include-legacy-lr) INCLUDE_LEGACY_LR=true; shift ;;
         --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         -g) USE_GPU=true; shift ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
@@ -29,8 +47,28 @@ run_optional_n4() {
     python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" \
         "$1" "$2" --reference-derivative "$N4_REFERENCE"
 }
-echo "Preparing pure-mask cases from the canonical normal ROVir contract; validation can be quiet for several minutes."
-python "$SCRIPT_DIR/prepare_mprage_rovir_retro.py" "$ROOT" >/dev/null
+CASES=(native_r3x2 lr_y_1p5mm_r3x2 native_r3x3)
+if [[ "$INCLUDE_LEGACY_LR" == true ]]; then
+    CASES+=(lr_x_1p5mm_r3x2 lr_xy_1p25mm_r3x2)
+fi
+declare -A LAMBDAS=(
+    [native_r3x2]=3.5e-2
+    [lr_x_1p5mm_r3x2]=2.5e-2
+    [lr_y_1p5mm_r3x2]=2.5e-2
+    [lr_xy_1p25mm_r3x2]=2.2e-2
+    [native_r3x3]=4.5e-2
+)
+declare -A SUFFIXES=(
+    [native_r3x2]=NativeR3x2
+    [lr_x_1p5mm_r3x2]=LRX1p5mmR3x2
+    [lr_y_1p5mm_r3x2]=LRY1p5mmR3x2
+    [lr_xy_1p25mm_r3x2]=LRXY1p25mmR3x2
+    [native_r3x3]=NativeR3x3
+)
+PREPARE_ARGS=("$ROOT")
+for case_name in "${CASES[@]}"; do PREPARE_ARGS+=(--case "$case_name"); done
+echo "Preparing selected pure-mask cases from the canonical normal ROVir contract; validation can be quiet for several minutes."
+python "$SCRIPT_DIR/prepare_mprage_rovir_retro.py" "${PREPARE_ARGS[@]}" >/dev/null
 TWIX_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field sequence)"
 SAMPLING_CLASS="$(python "$SCRIPT_DIR/mprage_rovir_workflow.py" context "$ROOT" --field sampling_class)"
@@ -47,10 +85,6 @@ if [[ "$N4_BIAS_CORRECTION" == true ]]; then
         exit 2
     }
 fi
-
-CASES=(native_r3x2 lr_x_1p5mm_r3x2 lr_y_1p5mm_r3x2 lr_xy_1p25mm_r3x2 native_r3x3)
-LAMBDAS=(3.5e-2 2.5e-2 2.5e-2 2.2e-2 4.5e-2)
-SUFFIXES=(NativeR3x2 LRX1p5mmR3x2 LRY1p5mmR3x2 LRXY1p25mmR3x2 NativeR3x3)
 
 run_method() {
     local case_name="$1"
@@ -91,8 +125,12 @@ run_method() {
         "$ROOT/retro/$case_name/rovir/n4_bias_corrected_nifti/$branch"
 }
 
-for index in "${!CASES[@]}"; do
-    run_method "${CASES[$index]}" fista_r0 0 "${SUFFIXES[$index]}"
-    run_method "${CASES[$index]}" optimal_wavelet "${LAMBDAS[$index]}" "${SUFFIXES[$index]}"
+for case_name in "${CASES[@]}"; do
+    if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == fista-only ]]; then
+        run_method "$case_name" fista_r0 0 "${SUFFIXES[$case_name]}"
+    fi
+    if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then
+        run_method "$case_name" optimal_wavelet "${LAMBDAS[$case_name]}" "${SUFFIXES[$case_name]}"
+    fi
 done
-echo "Completed ROVir retrospective branches below: $ROOT/retro"
+echo "Completed selected ROVir retrospective branches below: $ROOT/retro ($RECON_PROFILE)"

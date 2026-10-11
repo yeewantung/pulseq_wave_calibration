@@ -244,9 +244,14 @@ unchanged and are not prerequisites. ROVir results are written under:
 retro/<case>/rovir/{bart_inputs,bart_output,nifti}/
 ```
 
-FISTA-r0 remains the mandatory control. The existing standard-coil Wavelet
-lambdas are available for comparison but are explicitly labeled as reused,
-not ROVir-optimized.
+The default ROVir retrospective profile is FISTA-r0 only for exactly three
+cases: `native_r3x2`, `lr_y_1p5mm_r3x2`, and `native_r3x3`. This matches the
+reduced standard retrospective case policy. Use `--reg-full` to add the
+transferred Wavelet comparisons or `--wavelet-only` to request those
+comparisons alone. The profile flags are mutually exclusive. LR-X and LR-XY
+remain implementation-compatible but are prepared only with
+`--include-legacy-lr`; that option does not remove or relabel existing cases.
+Transferred Wavelet lambdas remain labeled as reused, not ROVir-optimized.
 
 Each case is resolved directly from the canonical normal FOV and matrix. Its
 sampling mask is a pure Cartesian image lattice with exact count and logical

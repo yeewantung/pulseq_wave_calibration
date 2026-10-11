@@ -9,7 +9,7 @@ usage() {
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
-    echo "       [--rovir]  use only the completed canonical root-level ROVir branch"
+    echo "       [--rovir] [--include-legacy-lr]  use the completed canonical root-level ROVir branch"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -24,6 +24,7 @@ RECON_PROFILE="fista-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
 USE_ROVIR=false
+INCLUDE_LEGACY_LR=false
 NOISE_PREWHITENING=false
 N4_BIAS_CORRECTION=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
@@ -57,6 +58,7 @@ while (($#)); do
         --psf-fit-z-min) PSF_FIT_Z_MIN="$2"; shift 2 ;;
         --psf-fit-z-max) PSF_FIT_Z_MAX="$2"; shift 2 ;;
         --rovir) USE_ROVIR=true; shift ;;
+        --include-legacy-lr) INCLUDE_LEGACY_LR=true; shift ;;
         -g) USE_GPU=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
@@ -78,9 +80,6 @@ if [[ "$USE_ROVIR" == true ]]; then
     [[ "$VIRTUAL_COILS_EXPLICIT" == false ]] || {
         echo "Error: --virtual-coils configures standard PCA and is incompatible with --rovir; use the canonical ROVir count." >&2; exit 2;
     }
-    [[ "$PROFILE_EXPLICIT" == false ]] || {
-        echo "Error: standard reconstruction-profile flags are incompatible with --rovir." >&2; exit 2;
-    }
     [[ "$ECALIB_CROP_EXPLICIT" == false ]] || {
         echo "Error: --rovir reuses its canonical CSM; do not supply --ecalib-crop." >&2; exit 2;
     }
@@ -90,11 +89,16 @@ if [[ "$USE_ROVIR" == true ]]; then
     command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
     python "$SCRIPT_DIR/mprage_rovir_workflow.py" validate-invocation "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" >/dev/null
     python "$SCRIPT_DIR/mprage_rovir_workflow.py" finalize-existing "$OUTPUT_ROOT" >/dev/null
-    ROVIR_ARGS=("$OUTPUT_ROOT"); [[ "$USE_GPU" == true ]] && ROVIR_ARGS+=(-g)
+    ROVIR_ARGS=("$OUTPUT_ROOT" "--$RECON_PROFILE"); [[ "$USE_GPU" == true ]] && ROVIR_ARGS+=(-g)
+    [[ "$INCLUDE_LEGACY_LR" == true ]] && ROVIR_ARGS+=(--include-legacy-lr)
     [[ "$N4_BIAS_CORRECTION" == true ]] && ROVIR_ARGS+=(--n4-bias-correction)
     bash "$SCRIPT_DIR/sample_mprage_rovir_retro_recon.sh" "${ROVIR_ARGS[@]}"
     exit 0
 fi
+
+[[ "$INCLUDE_LEGACY_LR" == false ]] || {
+    echo "Error: --include-legacy-lr is available only with --rovir." >&2; exit 2;
+}
 
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
