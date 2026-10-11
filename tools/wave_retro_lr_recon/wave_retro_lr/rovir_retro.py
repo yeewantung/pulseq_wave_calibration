@@ -36,6 +36,7 @@ from .sampling import (
     pure_cartesian_image_lattice_mask,
     validate_pure_cartesian_image_lattice,
 )
+from .rovir_source import discover_rovir_source_inputs
 
 ROVIR_RETRO_CASES = tuple(name for name, _ in RETRO_CASES) + (R3X3_CASE_ID,)
 ROVIR_REUSED_WAVELET_LAMBDAS = {
@@ -73,8 +74,19 @@ def prepare_mprage_rovir_retro(output_root: str | Path) -> list[dict[str, Any]]:
         raise ValueError("Canonical normal ROVir contract is incomplete or not retro-consumable.")
     for label in ("twix", "sequence"):
         _validate_source_identity(contract.get("source", {}).get(label), label)
-    normal_manifest_path = root / "normal" / "bart_inputs" / "manifest.json"
-    if contract.get("normal_source_manifest", {}).get("sha256") != sha256_file(normal_manifest_path):
+    normal_manifest_record = contract.get("normal_source_manifest")
+    if not isinstance(normal_manifest_record, Mapping) or not isinstance(
+        normal_manifest_record.get("path"), str
+    ):
+        raise ValueError("ROVir contract lacks its standard normal manifest path.")
+    normal_manifest_path = Path(normal_manifest_record["path"]).expanduser().resolve()
+    allowed_normal_manifests = {
+        (inputs / "manifest.json").resolve()
+        for inputs in discover_rovir_source_inputs(root)
+    }
+    if normal_manifest_path not in allowed_normal_manifests:
+        raise ValueError("ROVir contract references an unsupported standard normal manifest.")
+    if normal_manifest_record.get("sha256") != sha256_file(normal_manifest_path):
         raise ValueError("ROVir contract no longer matches the standard normal manifest.")
     normal = _read_json(normal_manifest_path)
     normal_rovir_inputs = root / "normal" / "rovir" / "bart_inputs"

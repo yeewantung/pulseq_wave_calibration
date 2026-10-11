@@ -42,7 +42,7 @@ class RovirControlTests(unittest.TestCase):
             accepted = root / "accepted"
             feasibility = root / "feasibility"
             output = root / "comparison"
-            source_inputs = accepted / "normal" / "bart_inputs"
+            source_inputs = accepted / "vcc24" / "normal" / "bart_inputs"
             source_inputs.mkdir(parents=True)
             (feasibility / "manifests").mkdir(parents=True)
             (feasibility / "manifests" / "physical_calibration.json").write_text(
@@ -138,6 +138,7 @@ class RovirControlTests(unittest.TestCase):
                 load_img=lambda _: torch.from_numpy(image_values.copy()),
             )
             source = {
+                "normal_manifest": file_record(source_inputs / "manifest.json"),
                 "geometry": {
                     "logical_matrix_ro_lin_par": [4, 6, 4],
                     "physical_fov_mm_xyz": [4.0, 6.0, 4.0],
@@ -232,6 +233,10 @@ class RovirControlTests(unittest.TestCase):
             self.assertEqual(shared["channel_counts"], [2, 3])
             self.assertTrue(shared["same_transform_image_source_acs_psf_and_sampling"])
             self.assertFalse(shared["automatic_winner_selected"])
+            self.assertIn(
+                "/vcc24/normal/bart_inputs/manifest.json",
+                shared["source"]["normal_manifest"]["path"],
+            )
 
     def test_qc_uses_one_neutral_window(self) -> None:
         """Use one shared display scale and avoid automatic selection.

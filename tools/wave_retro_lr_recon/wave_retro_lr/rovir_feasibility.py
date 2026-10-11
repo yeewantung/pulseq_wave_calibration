@@ -29,6 +29,7 @@ from .rovir import (
     validate_region_masks,
     validate_rovir_transform,
 )
+from .rovir_source import resolve_rovir_source_inputs
 
 PHYSICAL_CALIBRATION_MANIFEST = Path("manifests") / "physical_calibration.json"
 CALIBRATION_IMAGES_MANIFEST = Path("manifests") / "calibration_images.json"
@@ -103,6 +104,7 @@ def export_mprage_physical_calibration(
     feasibility_output_root: str | Path,
     *,
     acs_set_index: int = 4,
+    preloaded_reference: Any | None = None,
 ) -> dict[str, Any]:
     """Export the physical-coil set-4 refscan on its calibration grid.
 
@@ -114,6 +116,8 @@ def export_mprage_physical_calibration(
         feasibility_output_root: User-approved independent diagnostic root.
         acs_set_index: Zero-based integrated-refscan set index; set 4 is the
             required Wave-MPRAGE sensitivity-calibration stream.
+        preloaded_reference: Optional already loaded physical refscan used by
+            the ROVir-only source bootstrap to avoid a second TWIX read.
 
     Returns:
         Manifest describing the source and exported BART CFL pair.
@@ -150,7 +154,11 @@ def export_mprage_physical_calibration(
         from .mprage import load_wave_mprage_helpers
 
         native = load_wave_mprage_helpers()
-        reference = native.load_ref(os.fspath(Path(twix).expanduser().resolve()))
+        reference = (
+            native.load_ref(os.fspath(Path(twix).expanduser().resolve()))
+            if preloaded_reference is None
+            else preloaded_reference
+        )
         geometry = source["geometry"]
         ro_oversampled = int(geometry["readout_oversampled"])
         readout_oversampling = int(geometry["readout_oversampling_factor"])
@@ -276,6 +284,313 @@ def export_mprage_physical_calibration(
             shutil.rmtree(staging)
         raise
     return manifest
+
+
+def prepare_mprage_rovir_source_anchor(
+    twix: str | Path,
+    sequence: str | Path,
+    output_root: str | Path,
+) -> Path:
+    """Prepare minimal source, PSF, and physical-ACS inputs for ROVir.
+
+    Args:
+        twix: Measured Wave-MPRAGE TWIX file.
+        sequence: Matching Pulseq sequence file.
+        output_root: User-selected top-level reconstruction root.
+
+    Returns:
+        Installed ``normal/rovir/source_inputs`` directory.
+
+    Raises:
+        FileExistsError: If a partial source-anchor directory exists.
+        ValueError: If geometry, sampling, refscan, PSF, or finite-value
+            validation fails.
+
+    Side Effects:
+        Writes only a ROVir-specific source anchor and its physical set-4 ACS.
+        It does not load image k-space, estimate standard PCA, or launch BART.
+    """
+
+    from .mprage import (
+        _calibrated_psf_inputs,
+        _ensure_r3x1_psf_coefficient_plot,
+        _normalize_psf_coefficient_settings,
+        _normalize_psf_spatial_settings,
+        _psf_processing_implementation_identity,
+        _read_sequence,
+        _write_real_vectors,
+        load_wave_mprage_helpers,
+    )
+    from .psf import (
+        PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
+        PSF_COEFFICIENT_PLOT_NAME,
+        PSF_PLANE_COMPARISON_PLOT_NAME,
+        evaluate_calibrated_psf,
+        write_psf_plane_comparison_plot,
+    )
+    from .rovir_source import ROVIR_SOURCE_ANCHOR
+    from .sampling import inspect_twix_sampling
+
+    twix_path = Path(twix).expanduser().resolve()
+    sequence_path = Path(sequence).expanduser().resolve()
+    root = Path(output_root).expanduser().resolve()
+    destination = root / ROVIR_SOURCE_ANCHOR
+    manifest_path = destination / "manifest.json"
+    if manifest_path.is_file():
+        _validated_source_contract(
+            twix_path,
+            sequence_path,
+            root,
+            include_twix_hash=False,
+            source_inputs=destination,
+        )
+        return destination
+    if destination.exists() and any(destination.iterdir()):
+        raise FileExistsError(f"ROVir source-anchor directory is not empty: {destination}")
+
+    native = load_wave_mprage_helpers()
+    definitions, upstream_geometry = _read_sequence(sequence_path)
+    nro = int(upstream_geometry["Nro"])
+    nlin = int(upstream_geometry["Nlin"])
+    npar = int(upstream_geometry["Npar"])
+    os_factor = int(definitions.get("ReadoutOversamplingFactor", 4))
+    ro_oversampled = nro * os_factor
+    ncalib = int(definitions.get("Calibration_Ncalib1", 72))
+    nacs = int(definitions.get("Calibration_Nacs", 32))
+    native._resolve_mprage_wave_mode(
+        "wave",
+        str(sequence_path),
+        ro_oversampled,
+        ncalib,
+        nacs,
+        slice_orientation="SAG",
+    )
+    sampling, _ = inspect_twix_sampling(
+        twix_path, matrix_lin_par=(nlin, npar)
+    )
+    psf_settings = _normalize_psf_coefficient_settings("sine-line", None, None)
+    psf_settings.update(_normalize_psf_spatial_settings(None, None, None, None))
+    psf_settings["processing_implementation"] = (
+        _psf_processing_implementation_identity()
+    )
+    (
+        delta_lin,
+        delta_par,
+        a_fit,
+        b_fit,
+        c_fit,
+        raw_coefficients,
+        processing_input_coefficients,
+        c_branch_turns,
+        psf_processing_diagnostics,
+        projection_planes,
+    ) = _calibrated_psf_inputs(
+        native,
+        twix_path=twix_path,
+        sequence_path=sequence_path,
+        readout_oversampled=ro_oversampled,
+        ncalib=ncalib,
+        nacs=nacs,
+        coefficient_processing="sine-line",
+        fit_kx_min=None,
+        fit_kx_max=None,
+    )
+    selected_fit_kx_range = psf_processing_diagnostics.get("kx_range")
+    effective_psf_settings = {
+        **psf_settings,
+        "fit_kx_range": selected_fit_kx_range,
+    }
+    calibrated_psf = evaluate_calibrated_psf(
+        delta_lin,
+        delta_par,
+        a_fit,
+        b_fit,
+        c_fit,
+        nlin=nlin,
+        npar=npar,
+    )
+    expected_psf_shape = (ro_oversampled, nlin, npar)
+    if tuple(calibrated_psf.shape) != expected_psf_shape:
+        raise ValueError(
+            f"ROVir source-anchor PSF shape {tuple(calibrated_psf.shape)} "
+            f"does not match {expected_psf_shape}."
+        )
+    if not np.isfinite(calibrated_psf).all():
+        raise ValueError("ROVir source-anchor PSF contains nonfinite values.")
+
+    # Determine physical receive-coil count once and retain this refscan for
+    # the immediately following physical-ACS export.
+    reference = native.load_ref(os.fspath(twix_path))
+    native._check_integrated_refscan_shape(reference, Nacs=nacs, Ncalib=ncalib)
+    physical_coils = int(reference.shape[-1])
+    if reference.shape[0] != ro_oversampled or physical_coils < 1:
+        raise ValueError("ROVir source-anchor refscan geometry is incompatible.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=".source_inputs-", dir=destination.parent)
+    )
+    try:
+        psf_output = create_cfl(staging / "psf", (*expected_psf_shape, 1, 1))
+        psf_output[:, :, :, 0, 0] = calibrated_psf
+        psf_output.flush()
+        del psf_output
+        _write_real_vectors(staging / "wave_trajectory", (delta_lin, delta_par))
+        _write_real_vectors(staging / "psf_coefficients", (a_fit, b_fit, c_fit))
+        _write_real_vectors(staging / "psf_coefficients_raw", raw_coefficients)
+        _write_real_vectors(
+            staging / "psf_coefficients_processing_input",
+            processing_input_coefficients,
+        )
+        _write_real_vectors(
+            staging / "psf_coefficient_c_branch_turns",
+            (c_branch_turns.astype(np.float64),),
+        )
+        (staging / "sampling_class.txt").write_text(
+            sampling.name + "\n", encoding="utf-8"
+        )
+        diagnostic = _ensure_r3x1_psf_coefficient_plot(
+            staging,
+            sampling.name,
+            (a_fit, b_fit, c_fit),
+            effective_psf_settings,
+            raw_coefficient_vectors=raw_coefficients,
+            processing_diagnostics=psf_processing_diagnostics,
+            overwrite=True,
+        )
+        plane_diagnostic = (
+            write_psf_plane_comparison_plot(
+                projection_planes,
+                staging / PSF_PLANE_COMPARISON_PLOT_NAME,
+            )
+            if projection_planes
+            else None
+        )
+        physical_fov_mm_xyz = [
+            float(value) * 1000.0 for value in upstream_geometry["FOVxyz"]
+        ]
+        cfl_names = (
+            "psf",
+            "wave_trajectory",
+            "psf_coefficients",
+            "psf_coefficients_raw",
+            "psf_coefficients_processing_input",
+            "psf_coefficient_c_branch_turns",
+        )
+        artifacts = {
+            name: _relocate_cfl_record(
+                cfl_record(staging / name), staging, destination
+            )
+            for name in cfl_names
+        }
+        diagnostic_artifacts = {}
+        for name, staged_path in (
+            ("psf_visual_assessment_plot", diagnostic),
+            (
+                "psf_full_range_plot",
+                staging / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
+            ),
+            ("psf_plane_comparison_plot", plane_diagnostic),
+        ):
+            if staged_path is None or not Path(staged_path).is_file():
+                continue
+            staged_file = Path(staged_path)
+            diagnostic_artifacts[name] = {
+                "path": str(destination / staged_file.name),
+                "size_bytes": staged_file.stat().st_size,
+                "sha256": sha256_file(staged_file),
+            }
+        manifest = {
+            "format_version": 1,
+            "status": "mprage_rovir_source_anchor_ready",
+            "source": {
+                "twix": _file_identity(twix_path, include_hash=False),
+                "sequence": _file_identity(sequence_path, include_hash=True),
+                "source_anchor": "ROVir-only; no standard PCA image data prepared",
+            },
+            "geometry": {
+                "physical_fov_mm_xyz": physical_fov_mm_xyz,
+                "logical_matrix_ro_lin_par": [nro, nlin, npar],
+                "readout_oversampling_factor": os_factor,
+            },
+            "sampling": sampling.to_json(),
+            "coil_compression": {
+                "physical_coils": physical_coils,
+                "virtual_coils": None,
+                "method": "not_applied_in_rovir_source_anchor",
+            },
+            "psf_calibration": {
+                "method": "sequence trajectory plus processed integrated projection a,b,c",
+                **effective_psf_settings,
+                "effective_coefficient_processing": psf_processing_diagnostics.get(
+                    "effective_coefficient_processing", "sine-line"
+                ),
+                "processing_diagnostics": psf_processing_diagnostics,
+                "trajectory_sign_lin_par": [-1, -1],
+                "ncalib": ncalib,
+                "nacs": nacs,
+                "wave_trajectory": "wave_trajectory",
+                "psf_coefficients": "psf_coefficients",
+                "raw_psf_coefficients": "psf_coefficients_raw",
+                "processing_input_psf_coefficients": (
+                    "psf_coefficients_processing_input"
+                ),
+                "c_phase_branch_turns": "psf_coefficient_c_branch_turns",
+                "visual_assessment_plot": (
+                    None
+                    if "psf_visual_assessment_plot" not in diagnostic_artifacts
+                    else str(destination / PSF_COEFFICIENT_PLOT_NAME)
+                ),
+                "full_range_plot": (
+                    None
+                    if "psf_full_range_plot" not in diagnostic_artifacts
+                    else str(destination / PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME)
+                ),
+                "plane_comparison_plot": (
+                    None
+                    if "psf_plane_comparison_plot" not in diagnostic_artifacts
+                    else str(destination / PSF_PLANE_COMPARISON_PLOT_NAME)
+                ),
+                "reused_without_recalibration": False,
+            },
+            "output_artifacts": {
+                **artifacts,
+                **diagnostic_artifacts,
+                "sampling_class": {
+                    "path": str(destination / "sampling_class.txt"),
+                    "size_bytes": (staging / "sampling_class.txt").stat().st_size,
+                    "sha256": sha256_file(staging / "sampling_class.txt"),
+                },
+            },
+            "scientific_actions": {
+                "standard_pca_estimated": False,
+                "standard_wave_kspace_loaded_or_written": False,
+                "rovir_psf_calibrated": True,
+                "physical_refscan_loaded_once": True,
+                "bart_launched": False,
+            },
+            "prepared_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_json(staging / "manifest.json", manifest)
+        if destination.exists():
+            destination.rmdir()
+        staging.replace(destination)
+    except Exception:
+        del reference
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+    feasibility_root = root / "normal" / "rovir" / "feasibility"
+    export_mprage_physical_calibration(
+        twix_path,
+        sequence_path,
+        root,
+        feasibility_root,
+        preloaded_reference=reference,
+    )
+    del reference
+    return destination
 
 
 def record_calibration_images(
@@ -1807,6 +2122,7 @@ def _validated_source_contract(
     normal_output_root: str | Path,
     *,
     include_twix_hash: bool,
+    source_inputs: str | Path | None = None,
 ) -> dict[str, Any]:
     """Bind supplied sources to the accepted normal-input manifest.
 
@@ -1816,6 +2132,8 @@ def _validated_source_contract(
         normal_output_root: Existing normal reconstruction root.
         include_twix_hash: Whether to hash the large TWIX payload for an
             immutable production export record.
+        source_inputs: Optional explicit candidate input directory used while
+            selecting among multiple discovered ``vccN`` variants.
 
     Returns:
         Source and acquisition fields required by feasibility preparation.
@@ -1827,7 +2145,12 @@ def _validated_source_contract(
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
     normal_root = Path(normal_output_root).expanduser().resolve()
-    manifest_path = normal_root / "normal" / "bart_inputs" / "manifest.json"
+    inputs = (
+        resolve_rovir_source_inputs(normal_root)
+        if source_inputs is None
+        else Path(source_inputs).expanduser().resolve()
+    )
+    manifest_path = inputs / "manifest.json"
     manifest = _read_json(manifest_path)
     for path in (twix_path, sequence_path):
         if not path.is_file():

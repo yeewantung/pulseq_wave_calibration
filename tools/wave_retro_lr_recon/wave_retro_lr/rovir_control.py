@@ -24,10 +24,11 @@ from .pca_control import (
     _same_cfl_content,
     _sampling_from_json,
     _validate_physical_calibration_export,
-    _validated_source_contract,
     _write_json,
 )
 from .rovir import rovir_matrix_view, validate_rovir_transform
+from .rovir_feasibility import _validated_source_contract
+from .rovir_source import resolve_rovir_source_inputs
 from .sampling import inspect_twix_sampling
 
 ROVIR_INPUT_MANIFEST = Path("manifests") / "rovir_inputs.json"
@@ -90,6 +91,7 @@ def prepare_mprage_rovir_comparison(
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
     accepted_root = Path(accepted_normal_root).expanduser().resolve()
+    accepted_inputs = resolve_rovir_source_inputs(accepted_root)
     feasibility = Path(feasibility_root).expanduser().resolve()
     root = Path(output_root).expanduser().resolve()
 
@@ -204,7 +206,7 @@ def prepare_mprage_rovir_comparison(
         raise ValueError("ROVir-projected ACS contains nonfinite values.")
 
     sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
-    accepted_manifest = _read_json(accepted_root / "normal" / "bart_inputs" / "manifest.json")
+    accepted_manifest = _read_json(accepted_inputs / "manifest.json")
     if sampling.to_json() != accepted_manifest.get("sampling"):
         raise ValueError("Current TWIX sampling differs from the accepted normal manifest.")
     sampling_value = _sampling_from_json(accepted_manifest["sampling"])
@@ -214,7 +216,7 @@ def prepare_mprage_rovir_comparison(
     stagings: dict[int, Path] = {}
     wave_outputs: dict[int, np.memmap] = {}
     norms_squared = {count: 0.0 for count in missing}
-    source_inputs = accepted_root / "normal" / "bart_inputs"
+    source_inputs = accepted_inputs
     source_psf = source_inputs / "psf"
     source_psf_record = cfl_record(source_psf)
     expected_psf_shape = (ro_oversampled, nlin, npar, 1, 1)

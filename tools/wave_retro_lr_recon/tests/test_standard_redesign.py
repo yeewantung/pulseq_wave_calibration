@@ -32,11 +32,18 @@ from wave_retro_lr.reconstruction_state import (  # noqa: E402
     record_completed_reconstruction,
     reconstruction_status,
 )
+from wave_retro_lr.rovir_source import (  # noqa: E402
+    ROVIR_SOURCE_ANCHOR,
+    bind_rovir_source_inputs,
+    discover_rovir_source_inputs,
+    resolve_rovir_source_inputs,
+)
 from wave_retro_lr.standard import (  # noqa: E402
     DEFAULT_VIRTUAL_COILS,
     prepared_artifact_records,
     profile_branches,
     retained_energy_diagnostics,
+    resolve_standard_normal_inputs,
     standard_variant_root,
     validate_virtual_coils,
     write_pca_basis,
@@ -83,6 +90,83 @@ class StandardPcaContractTests(unittest.TestCase):
         self.assertEqual(profile_branches("reg-full"), ("fista_r0", "wavelet"))
         self.assertEqual(profile_branches("wavelet-only"), ("wavelet",))
         self.assertEqual(profile_branches("fista-only"), ("fista_r0",))
+
+    def test_normal_input_resolution_supports_all_vcc_counts(self) -> None:
+        """Prefer legacy and VCC24, then discover other count-specific trees.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fallback = root / "vcc24" / "normal" / "bart_inputs"
+            fallback.mkdir(parents=True)
+            (fallback / "manifest.json").write_text("{}\n", encoding="utf-8")
+            self.assertEqual(resolve_standard_normal_inputs(root), fallback)
+
+            vcc16 = root / "vcc16" / "normal" / "bart_inputs"
+            vcc20 = root / "vcc20" / "normal" / "bart_inputs"
+            for inputs in (vcc16, vcc20):
+                inputs.mkdir(parents=True)
+                (inputs / "manifest.json").write_text("{}\n", encoding="utf-8")
+            self.assertEqual(resolve_standard_normal_inputs(root), fallback)
+
+            (fallback / "manifest.json").unlink()
+            self.assertEqual(resolve_standard_normal_inputs(root), vcc20)
+
+            legacy = root / "normal" / "bart_inputs"
+            legacy.mkdir(parents=True)
+            (legacy / "manifest.json").write_text("{}\n", encoding="utf-8")
+            self.assertEqual(resolve_standard_normal_inputs(root), legacy)
+
+            (legacy / "manifest.json").unlink()
+            (vcc20 / "manifest.json").unlink()
+            (vcc16 / "manifest.json").unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "any vccN tree"):
+                resolve_standard_normal_inputs(root)
+
+    def test_rovir_source_binding_is_stable_across_new_variants(self) -> None:
+        """Keep an explicitly selected source after another VCC tree appears.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            vcc16 = root / "vcc16" / "normal" / "bart_inputs"
+            vcc16.mkdir(parents=True)
+            (vcc16 / "manifest.json").write_text('{"source":"vcc16"}\n')
+            (vcc16 / "sampling_class.txt").write_text("R1\n")
+            psf = create_cfl(vcc16 / "psf", (2, 2, 2, 1, 1))
+            psf[...] = 1
+            psf.flush()
+            del psf
+            anchor = root / ROVIR_SOURCE_ANCHOR
+            anchor.mkdir(parents=True)
+            (anchor / "manifest.json").write_text('{"source":"anchor"}\n')
+            self.assertEqual(
+                discover_rovir_source_inputs(root),
+                (vcc16.resolve(), anchor.resolve()),
+            )
+            bind_rovir_source_inputs(root, vcc16)
+            self.assertEqual(resolve_rovir_source_inputs(root), vcc16.resolve())
+
+            vcc24 = root / "vcc24" / "normal" / "bart_inputs"
+            vcc24.mkdir(parents=True)
+            (vcc24 / "manifest.json").write_text('{"source":"vcc24"}\n')
+            (vcc24 / "sampling_class.txt").write_text("R1\n")
+            psf = create_cfl(vcc24 / "psf", (2, 2, 2, 1, 1))
+            psf[...] = 1
+            psf.flush()
+            del psf
+            self.assertEqual(resolve_rovir_source_inputs(root), vcc16.resolve())
+            with self.assertRaisesRegex(ValueError, "different immutable"):
+                bind_rovir_source_inputs(root, vcc24)
+            (vcc16 / "manifest.json").write_text('{"source":"changed"}\n')
+            with self.assertRaisesRegex(ValueError, "changed after it was bound"):
+                resolve_rovir_source_inputs(root)
 
     def test_shell_profile_exclusion_and_rovir_isolation(self) -> None:
         """Reject conflicting profiles and standard Ncc overrides for ROVir."""

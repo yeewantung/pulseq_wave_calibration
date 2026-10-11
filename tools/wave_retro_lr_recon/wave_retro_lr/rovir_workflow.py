@@ -14,7 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .bart_io import cfl_record, sha256_file
+import numpy as np
+
+from .bart_io import cfl_record, open_cfl, sha256_file
 from .rovir_control import (
     prepare_mprage_rovir_comparison,
     write_mprage_rovir_mask_series_qc,
@@ -26,14 +28,191 @@ from .rovir_feasibility import (
     approve_region_mask_candidate,
     derive_box_union_mask_candidate,
     export_mprage_physical_calibration,
+    prepare_mprage_rovir_source_anchor,
     prepare_masked_rovir_inputs,
     recommend_null_boxes,
     record_calibration_images,
     write_rovir_transform_qc,
 )
+from .rovir_source import (
+    ROVIR_SOURCE_ANCHOR,
+    ROVIR_SOURCE_BINDING,
+    bind_rovir_source_inputs,
+    discover_rovir_source_inputs,
+    incomplete_rovir_source_layouts,
+    resolve_rovir_source_inputs,
+)
+from .standard import STANDARD_VARIANT_PATTERN
 
 CANONICAL_ROVIR_MANIFEST = Path("normal") / "rovir" / "manifest.json"
 NORMAL_ROVIR_WAVELET_LAMBDA = 0.035
+
+
+def prepare_normal_rovir_invocation(
+    twix: str | Path, output_root: str | Path, sequence: str | Path
+) -> dict[str, Any]:
+    """Select, bind, or minimally prepare the source contract for ROVir.
+
+    Args:
+        twix: Measured Wave-MPRAGE TWIX supplied on the command line.
+        output_root: Existing user-selected reconstruction root.
+        sequence: Matching Pulseq sequence supplied on the command line.
+
+    Returns:
+        Validated canonical workflow context.
+
+    Raises:
+        ValueError: If discovered normal variants exist but none match the
+            supplied acquisition, or an immutable binding has changed.
+
+    Side Effects:
+        Binds one compatible source manifest. When no legacy or ``vccN``
+        source exists, prepares a ROVir-only PSF/source anchor and physical ACS
+        without loading standard image k-space or launching BART.
+    """
+
+    root = Path(output_root).expanduser().resolve()
+    binding_path = root / ROVIR_SOURCE_BINDING
+    if binding_path.is_file():
+        inputs = resolve_rovir_source_inputs(root)
+        source = _validated_source_contract(
+            twix,
+            sequence,
+            root,
+            include_twix_hash=False,
+            source_inputs=inputs,
+        )
+        _validate_rovir_source_artifacts(inputs, source)
+        return normal_rovir_context(root)
+
+    candidates = discover_rovir_source_inputs(root)
+    failures: list[str] = []
+    selected: Path | None = None
+    for inputs in candidates:
+        try:
+            source = _validated_source_contract(
+                twix,
+                sequence,
+                root,
+                include_twix_hash=False,
+                source_inputs=inputs,
+            )
+            _validate_rovir_source_artifacts(inputs, source)
+        except (FileNotFoundError, ValueError) as exc:
+            failures.append(f"{inputs}: {exc}")
+            continue
+        selected = inputs
+        break
+    if selected is None and candidates:
+        raise ValueError(
+            "No discovered normal or vccN source manifest matches the supplied "
+            "TWIX and sequence; refusing to replace it with a new ROVir anchor. "
+            + " | ".join(failures)
+        )
+    if selected is None:
+        incomplete = incomplete_rovir_source_layouts(root)
+        if incomplete:
+            raise ValueError(
+                "Incomplete normal or vccN source layouts exist; refusing to "
+                "bootstrap around them: " + ", ".join(str(path) for path in incomplete)
+            )
+        selected = prepare_mprage_rovir_source_anchor(twix, sequence, root)
+        source = _validated_source_contract(
+            twix,
+            sequence,
+            root,
+            include_twix_hash=False,
+            source_inputs=selected,
+        )
+        _validate_rovir_source_artifacts(selected, source)
+    bind_rovir_source_inputs(root, selected)
+    return normal_rovir_context(root)
+
+
+def _validate_rovir_source_artifacts(
+    source_inputs: str | Path, source: Mapping[str, Any]
+) -> None:
+    """Validate sampling and accepted PSF artifacts before source binding.
+
+    Args:
+        source_inputs: Candidate source-input directory.
+        source: Validated source contract derived from its manifest.
+
+    Returns:
+        None.
+
+    Raises:
+        FileNotFoundError: If sampling or PSF artifacts are absent.
+        ValueError: If their geometry or values are incompatible.
+    """
+
+    inputs = Path(source_inputs).expanduser().resolve()
+    manifest = _read_json(inputs / "manifest.json")
+    variant_match = STANDARD_VARIANT_PATTERN.fullmatch(inputs.parents[1].name)
+    if variant_match is not None:
+        variant_count = int(variant_match.group(1))
+        compression = manifest.get("coil_compression")
+        try:
+            recorded_virtual = int(compression["virtual_coils"])
+            recorded_physical = int(compression["physical_coils"])
+        except (KeyError, TypeError, ValueError):
+            recorded_virtual = 0
+            recorded_physical = 0
+        if (
+            not isinstance(compression, Mapping)
+            or recorded_virtual != variant_count
+            or recorded_physical < variant_count
+            or manifest.get("standard_pca_variant", inputs.parents[1].name)
+            != inputs.parents[1].name
+        ):
+            raise ValueError(
+                f"{inputs.parents[1].name} has an incompatible coil-count contract."
+            )
+    sampling = manifest.get("sampling")
+    sampling_path = inputs / "sampling_class.txt"
+    if not sampling_path.is_file():
+        raise FileNotFoundError(sampling_path)
+    sampling_class = sampling_path.read_text(encoding="utf-8").strip()
+    if not isinstance(sampling, Mapping) or sampling.get("name") != sampling_class:
+        raise ValueError("Sampling-class file differs from the source manifest.")
+    geometry = source["geometry"]
+    matrix = tuple(int(value) for value in geometry["logical_matrix_ro_lin_par"])
+    expected_shape = (
+        int(geometry["readout_oversampled"]),
+        matrix[1],
+        matrix[2],
+        1,
+        1,
+    )
+    psf = inputs / "psf"
+    record = cfl_record(psf)
+    if tuple(record["shape"]) != expected_shape:
+        raise ValueError("Accepted PSF geometry differs from the source manifest.")
+    output_artifacts = manifest.get("output_artifacts")
+    recorded_psf = (
+        output_artifacts.get("psf")
+        if isinstance(output_artifacts, Mapping)
+        else None
+    )
+    if isinstance(recorded_psf, Mapping) and any(
+        recorded_psf.get(key) != record.get(key)
+        for key in ("shape", "header_sha256", "payload_sha256")
+    ):
+        raise ValueError("Accepted PSF differs from its source-manifest hashes.")
+    recorded_sampling = (
+        output_artifacts.get("sampling_class")
+        if isinstance(output_artifacts, Mapping)
+        else None
+    )
+    if isinstance(recorded_sampling, Mapping) and (
+        recorded_sampling.get("sha256") != sha256_file(sampling_path)
+    ):
+        raise ValueError("Sampling class differs from its source-manifest hash.")
+    values = open_cfl(psf)
+    for start in range(0, expected_shape[0], 16):
+        if not np.isfinite(values[start : start + 16]).all():
+            raise ValueError("Accepted PSF contains nonfinite values.")
+    del values
 
 
 def validate_normal_rovir_invocation(
@@ -78,16 +257,23 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
         ValueError: If manifests, source paths, or command records are invalid.
     """
     root = Path(output_root).expanduser().resolve()
-    manifest_path = root / "normal" / "bart_inputs" / "manifest.json"
+    source_inputs = resolve_rovir_source_inputs(root)
+    source_normal_root = source_inputs.parent
+    source_is_rovir_anchor = source_inputs == (root / ROVIR_SOURCE_ANCHOR)
+    manifest_path = source_inputs / "manifest.json"
     manifest = _read_json(manifest_path)
     source = manifest.get("source")
     if not isinstance(source, Mapping):
         raise ValueError("Normal manifest lacks source provenance.")
     twix = _source_path(source.get("twix"), "TWIX")
     sequence = _source_path(source.get("sequence"), "sequence")
-    normal_output = root / "normal" / "bart_output"
-    normal_magnitudes = _magnitude_candidates(
-        root / "normal" / "nifti" / "fista_r0", recursive=True
+    normal_output = source_normal_root / "bart_output"
+    normal_magnitudes = (
+        []
+        if source_is_rovir_anchor
+        else _magnitude_candidates(
+            source_normal_root / "nifti" / "fista_r0", recursive=True
+        )
     )
     normal_nifti = normal_magnitudes[0] if len(normal_magnitudes) == 1 else None
     comparison_status = (
@@ -98,14 +284,14 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
         else "ambiguous_multiple_magnitude_niftis"
     )
     ecalib_record = normal_output / "ecalib_command.txt"
-    if ecalib_record.is_file():
+    if not source_is_rovir_anchor and ecalib_record.is_file():
         crop = _ecalib_crop(ecalib_record, "Standard normal")
         crop_source = "standard_normal_ecalib_command"
     else:
         crop = 0.6
         crop_source = "mprage_launcher_default"
     rovir_root = root / "normal" / "rovir"
-    sampling_class_path = root / "normal" / "bart_inputs" / "sampling_class.txt"
+    sampling_class_path = source_inputs / "sampling_class.txt"
     if not sampling_class_path.is_file():
         raise FileNotFoundError(sampling_class_path)
     sampling_class = sampling_class_path.read_text(encoding="utf-8").strip()
@@ -113,6 +299,8 @@ def normal_rovir_context(output_root: str | Path) -> dict[str, Any]:
         raise ValueError(f"Unsupported normal sampling class: {sampling_class!r}")
     return {
         "output_root": str(root),
+        "source_normal_root": str(source_normal_root),
+        "source_is_rovir_anchor": source_is_rovir_anchor,
         "normal_manifest": str(manifest_path),
         "normal_manifest_sha256": sha256_file(manifest_path),
         "twix": str(twix),

@@ -24,9 +24,28 @@ and development history, see
 Start from an existing reconstruction root with accepted prepared MPRAGE
 inputs, including:
 
-- `normal/bart_inputs/manifest.json`;
+- `normal/bart_inputs/manifest.json` or a complete `vccN/normal/bart_inputs`
+  source tree;
 - the accepted case-matched PSF recorded by that manifest; and
 - the original TWIX and sequence at the paths recorded by the normal manifest.
+
+Source discovery prefers the legacy location, then `vcc24`, then other
+available `vccN` variants in descending count order. It skips variants whose
+source identity or required PSF artifacts do not match the explicit TWIX and
+sequence. The selected source is immutably recorded in
+`normal/rovir/source_binding.json`; adding another variant later does not
+silently change a resumable ROVir run. Falling back to a standard tree supplies
+only the source contract, sampling class, optional standard comparison, and
+accepted PSF. ROVir still exports physical-coil image k-space and ACS from the
+original TWIX and never consumes standard-PCA `wave_kspace`, `kspace_calib`, or
+the compression basis.
+
+If no legacy or `vccN` layout exists, the public `inspect` entry point prepares
+`normal/rovir/source_inputs` directly from the supplied TWIX and sequence. This
+ROVir-only anchor contains geometry, sampling, physical-coil provenance, the
+calibrated PSF and its diagnostics, but no standard PCA basis or standard image
+k-space. The same refscan read is passed directly into physical-ACS export. A
+partial legacy or `vccN` layout is rejected rather than bypassed by bootstrap.
 
 A standard normal CSM, ecalib command, FISTA output, and NIfTI are optional.
 When exactly one standard FISTA-r0 magnitude exists, including below a nested

@@ -16,6 +16,7 @@ import numpy as np
 from .bart_io import cfl_record, create_cfl, open_cfl, sha256_file
 from .mprage import _embed_image_stream, load_wave_mprage_helpers
 from .sampling import SamplingPattern, inspect_twix_sampling
+from .standard import resolve_standard_normal_inputs
 
 PHYSICAL_CALIBRATION_MANIFEST = Path("manifests") / "physical_calibration.json"
 
@@ -61,6 +62,7 @@ def prepare_mprage_pca_control(
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
     accepted_root = Path(accepted_normal_root).expanduser().resolve()
+    accepted_inputs = resolve_standard_normal_inputs(accepted_root)
     feasibility = Path(feasibility_root).expanduser().resolve()
     root = Path(output_root).expanduser().resolve()
     destination = root / "normal" / "bart_inputs"
@@ -179,9 +181,7 @@ def prepare_mprage_pca_control(
         raise ValueError("Compressed ACS has unexpected geometry.")
 
     sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
-    accepted_manifest = _read_json(
-        accepted_root / "normal" / "bart_inputs" / "manifest.json"
-    )
+    accepted_manifest = _read_json(accepted_inputs / "manifest.json")
     if sampling.to_json() != accepted_manifest.get("sampling"):
         raise ValueError("Current TWIX sampling differs from the accepted normal manifest.")
 
@@ -209,7 +209,7 @@ def prepare_mprage_pca_control(
     if not np.isfinite(kspace_norm) or kspace_norm <= 0:
         raise ValueError("Compressed image k-space norm is invalid.")
 
-    source_inputs = accepted_root / "normal" / "bart_inputs"
+    source_inputs = accepted_inputs
     source_psf = source_inputs / "psf"
     source_psf_record = cfl_record(source_psf)
     expected_psf_shape = (ro_oversampled, nlin, npar, 1, 1)
@@ -497,7 +497,7 @@ def _validated_source_contract(
     twix_path = Path(twix).expanduser().resolve()
     sequence_path = Path(sequence).expanduser().resolve()
     normal_root = Path(normal_output_root).expanduser().resolve()
-    manifest_path = normal_root / "normal" / "bart_inputs" / "manifest.json"
+    manifest_path = resolve_standard_normal_inputs(normal_root) / "manifest.json"
     manifest = _read_json(manifest_path)
     for path in (twix_path, sequence_path):
         if not path.is_file():

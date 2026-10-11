@@ -27,6 +27,7 @@ from wave_retro_lr.rovir_workflow import (  # noqa: E402
     finalize_normal_rovir_wavelet,
     finalize_existing_normal_rovir,
     normal_rovir_context,
+    prepare_normal_rovir_invocation,
     validate_normal_rovir_invocation,
 )
 from scripts.prepare_mprage_normal import _parser as normal_parser  # noqa: E402
@@ -214,7 +215,7 @@ class SampleCommandTests(unittest.TestCase):
         self.assertIn("bart rovir", source)
         self.assertIn("bart ecalib -m 1 -c", source)
         self.assertIn('WAVE_ARGS=(-w -f -r 0 -i 100 -t 1e-6)', source)
-        self.assertIn('validate-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT"', source)
+        self.assertIn('prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT"', source)
         self.assertIn("Reusing complete nested ROVir magnitude/phase NIfTI outputs", source)
         self.assertIn("existing ROVir NIfTI output is incomplete or ambiguous", source)
         self.assertNotIn("sample_mprage_rovir_normal_wavelet_recon.sh", source)
@@ -261,6 +262,144 @@ class SampleCommandTests(unittest.TestCase):
         )
         context.assert_called_once_with("/reconstruction")
         self.assertEqual(actual, expected)
+
+    def test_rovir_invocation_selects_a_compatible_nondefault_vcc(self) -> None:
+        """Skip an incompatible variant and bind another discovered vccN source.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            vcc20 = root / "vcc20" / "normal" / "bart_inputs"
+            vcc16 = root / "vcc16" / "normal" / "bart_inputs"
+            for inputs in (vcc20, vcc16):
+                inputs.mkdir(parents=True)
+                (inputs / "manifest.json").write_text("{}\n", encoding="utf-8")
+                (inputs / "sampling_class.txt").write_text("R1\n", encoding="utf-8")
+                psf = create_cfl(inputs / "psf", (2, 2, 2, 1, 1))
+                psf[...] = 1
+                psf.flush()
+                del psf
+            expected = {"output_root": str(root.resolve())}
+
+            def validate(*args: object, **kwargs: object) -> dict[str, object]:
+                """Accept only the VCC16 fixture candidate.
+
+                Args:
+                    args: Unused positional validation arguments.
+                    kwargs: Validation keywords containing ``source_inputs``.
+
+                Returns:
+                    Empty source fixture for VCC16.
+
+                Raises:
+                    ValueError: When the candidate is VCC20.
+                """
+
+                del args
+                source_inputs = Path(str(kwargs["source_inputs"]))
+                if source_inputs == vcc20.resolve():
+                    raise ValueError("different source")
+                return {}
+
+            with patch(
+                "wave_retro_lr.rovir_workflow._validated_source_contract",
+                side_effect=validate,
+            ), patch(
+                "wave_retro_lr.rovir_workflow._validate_rovir_source_artifacts"
+            ), patch(
+                "wave_retro_lr.rovir_workflow.normal_rovir_context",
+                return_value=expected,
+            ):
+                actual = prepare_normal_rovir_invocation(
+                    "input.dat", root, "input.seq"
+                )
+            self.assertEqual(actual, expected)
+            binding = json.loads(
+                (root / "normal" / "rovir" / "source_binding.json").read_text()
+            )
+            self.assertEqual(
+                binding["source_inputs"], str(vcc16.resolve())
+            )
+
+    def test_rovir_invocation_bootstraps_only_when_no_variant_exists(self) -> None:
+        """Create and bind a ROVir-only anchor when discovery is empty.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            root.mkdir()
+            anchor = root / "normal" / "rovir" / "source_inputs"
+            expected = {"output_root": str(root.resolve())}
+
+            def bootstrap(*args: object) -> Path:
+                """Write the minimal manifest needed by the binding fixture.
+
+                Args:
+                    args: Unused bootstrap arguments.
+
+                Returns:
+                    Fixture source-anchor directory.
+
+                Side Effects:
+                    Creates the anchor manifest.
+                """
+
+                del args
+                anchor.mkdir(parents=True)
+                (anchor / "manifest.json").write_text("{}\n", encoding="utf-8")
+                (anchor / "sampling_class.txt").write_text("R1\n", encoding="utf-8")
+                psf = create_cfl(anchor / "psf", (2, 2, 2, 1, 1))
+                psf[...] = 1
+                psf.flush()
+                del psf
+                return anchor
+
+            with patch(
+                "wave_retro_lr.rovir_workflow.prepare_mprage_rovir_source_anchor",
+                side_effect=bootstrap,
+            ) as prepare, patch(
+                "wave_retro_lr.rovir_workflow._validated_source_contract",
+                return_value={},
+            ), patch(
+                "wave_retro_lr.rovir_workflow._validate_rovir_source_artifacts"
+            ), patch(
+                "wave_retro_lr.rovir_workflow.normal_rovir_context",
+                return_value=expected,
+            ):
+                actual = prepare_normal_rovir_invocation(
+                    "input.dat", root, "input.seq"
+                )
+            self.assertEqual(actual, expected)
+            prepare.assert_called_once()
+            binding = json.loads(
+                (root / "normal" / "rovir" / "source_binding.json").read_text()
+            )
+            self.assertEqual(binding["source_inputs"], str(anchor.resolve()))
+
+    def test_rovir_invocation_rejects_partial_vcc_before_bootstrap(self) -> None:
+        """Do not hide an incomplete standard variant behind a new anchor.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            (root / "vcc16" / "normal" / "bart_inputs").mkdir(parents=True)
+            with patch(
+                "wave_retro_lr.rovir_workflow.prepare_mprage_rovir_source_anchor"
+            ) as prepare:
+                with self.assertRaisesRegex(ValueError, "Incomplete normal or vccN"):
+                    prepare_normal_rovir_invocation(
+                        "input.dat", root, "input.seq"
+                    )
+            prepare.assert_not_called()
 
     def test_rovir_context_does_not_require_standard_reconstruction(self) -> None:
         """Use prepared inputs alone and treat nested normal NIfTI as optional.
@@ -322,6 +461,40 @@ class SampleCommandTests(unittest.TestCase):
                 ),
                 magnitude.resolve(),
             )
+
+    def test_rovir_context_falls_back_to_vcc24_inputs(self) -> None:
+        """Read source metadata from VCC24 while keeping canonical ROVir output.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            twix = root / "input.dat"
+            sequence = root / "input.seq"
+            inputs = root / "vcc24" / "normal" / "bart_inputs"
+            inputs.mkdir(parents=True)
+            twix.write_bytes(b"twix")
+            sequence.write_bytes(b"sequence")
+            (inputs / "sampling_class.txt").write_text("R3x1\n", encoding="utf-8")
+            (inputs / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "source": {
+                            "twix": {"path": str(twix)},
+                            "sequence": {"path": str(sequence)},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            context = normal_rovir_context(root)
+            self.assertEqual(context["source_normal_root"], str(inputs.parent.resolve()))
+            self.assertEqual(context["normal_manifest"], str(inputs / "manifest.json"))
+            self.assertEqual(context["rovir_root"], str((root / "normal" / "rovir").resolve()))
+            self.assertFalse((root / "normal" / "bart_inputs").exists())
 
     def test_finalize_existing_rovir_infers_ncc_or_reuses_contract(self) -> None:
         """Finalize interrupted output without asking the user for Ncc.

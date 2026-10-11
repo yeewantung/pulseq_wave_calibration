@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -15,6 +16,7 @@ from .bart_io import cfl_record, sha256_file
 
 DEFAULT_VIRTUAL_COILS = 24
 RECONSTRUCTION_PROFILES = ("reg-full", "wavelet-only", "fista-only")
+STANDARD_VARIANT_PATTERN = re.compile(r"^vcc([1-9][0-9]*)$")
 
 
 def validate_virtual_coils(
@@ -70,6 +72,59 @@ def standard_variant_root(output_root: str | Path, virtual_coils: int) -> Path:
 
     return Path(output_root).expanduser().resolve() / standard_variant_name(
         virtual_coils
+    )
+
+
+def resolve_standard_normal_inputs(output_root: str | Path) -> Path:
+    """Resolve accepted normal inputs for workflows shared with legacy trees.
+
+    Args:
+        output_root: Existing top-level reconstruction root.
+
+    Returns:
+        The legacy ``normal/bart_inputs`` directory when its manifest exists;
+        otherwise the first available count-specific standard-PCA directory.
+
+    Raises:
+        FileNotFoundError: If no supported location contains a manifest.
+
+    Notes:
+        The legacy location remains first so historical root-level VCC12 trees
+        retain their original meaning. VCC24 remains the preferred modern
+        variant, followed by other ``vccN`` variants in descending coil-count
+        order. This resolver does not reinterpret standard-PCA arrays as ROVir
+        inputs; consumers select only explicitly required source artifacts.
+    """
+
+    root = Path(output_root).expanduser().resolve()
+    legacy = root / "normal" / "bart_inputs"
+    if (legacy / "manifest.json").is_file():
+        return legacy
+    variants: list[tuple[int, Path]] = []
+    if root.is_dir():
+        for child in root.iterdir():
+            match = STANDARD_VARIANT_PATTERN.fullmatch(child.name)
+            if match is None or not child.is_dir():
+                continue
+            inputs = child / "normal" / "bart_inputs"
+            if (inputs / "manifest.json").is_file():
+                variants.append((int(match.group(1)), inputs))
+    variants.sort(
+        key=lambda item: (item[0] == DEFAULT_VIRTUAL_COILS, item[0]),
+        reverse=True,
+    )
+    if variants:
+        return variants[0][1]
+    expected_default = (
+        standard_variant_root(root, DEFAULT_VIRTUAL_COILS)
+        / "normal"
+        / "bart_inputs"
+        / "manifest.json"
+    )
+    raise FileNotFoundError(
+        "Accepted normal-input manifest was not found in the legacy tree or "
+        f"any vccN tree below {root}. Expected examples include "
+        f"{legacy / 'manifest.json'} and {expected_default}."
     )
 
 

@@ -27,6 +27,7 @@ from wave_retro_lr.rovir_feasibility import (  # noqa: E402
     export_mprage_physical_calibration,
     parse_null_box,
     prepare_masked_rovir_inputs,
+    prepare_mprage_rovir_source_anchor,
     recommend_null_boxes,
     record_calibration_images,
     validate_manual_roi_annotation,
@@ -533,6 +534,142 @@ class RovirFeasibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "template"):
                 derive_region_mask_candidates(root, config)
 
+    def test_source_anchor_prepares_psf_and_physical_acs_without_image_data(self) -> None:
+        """Bootstrap minimal ROVir inputs without standard PCA or image k-space.
+
+        Returns:
+            None.
+        """
+
+        import torch
+
+        from wave_retro_lr.sampling import SamplingPattern
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            root.mkdir()
+            twix = root / "source.dat"
+            sequence = root / "source.seq"
+            twix.write_bytes(b"synthetic twix")
+            sequence.write_text("synthetic sequence\n", encoding="utf-8")
+            sampling = SamplingPattern(
+                name="R1",
+                acceleration_lin_par=(1, 1),
+                lin_residue=None,
+                matrix_lin_par=(6, 4),
+                acquired_lin=tuple(range(6)),
+                acquired_par=tuple(range(4)),
+                measurement_index=0,
+                skip_lin_par=(0, 0),
+            )
+            reference = torch.zeros((8, 4, 4, 5, 3), dtype=torch.complex64)
+            reference[:, :2, :2, 4, :] = 1 + 2j
+            load_ref_calls = 0
+
+            def load_ref(_: str) -> object:
+                """Return the fixture refscan and count physical TWIX reads.
+
+                Args:
+                    _: Unused TWIX path.
+
+                Returns:
+                    Physical-coil refscan tensor.
+                """
+
+                nonlocal load_ref_calls
+                load_ref_calls += 1
+                return reference
+
+            helper = SimpleNamespace(
+                _resolve_mprage_wave_mode=lambda *args, **kwargs: None,
+                _check_integrated_refscan_shape=lambda *args, **kwargs: None,
+                load_ref=load_ref,
+                remove_readout_oversampling_kspace=(
+                    lambda values, factor, axis=0: values[::factor].contiguous()
+                ),
+            )
+            vector = np.linspace(0.0, 1.0, 8, dtype=np.float64)
+            psf_result = (
+                vector,
+                vector,
+                vector,
+                vector,
+                vector,
+                (vector, vector, vector),
+                (vector, vector, vector),
+                np.zeros(8, dtype=np.int64),
+                {
+                    "kx_range": [1, 7],
+                    "effective_coefficient_processing": "sine-line",
+                },
+                {},
+            )
+            with (
+                patch(
+                    "wave_retro_lr.mprage.load_wave_mprage_helpers",
+                    return_value=helper,
+                ),
+                patch(
+                    "wave_retro_lr.mprage._read_sequence",
+                    return_value=(
+                        {
+                            "ReadoutOversamplingFactor": 2,
+                            "Calibration_Ncalib1": 4,
+                            "Calibration_Nacs": 2,
+                        },
+                        {
+                            "Nro": 4,
+                            "Nlin": 6,
+                            "Npar": 4,
+                            "FOVxyz": (0.004, 0.006, 0.004),
+                        },
+                    ),
+                ),
+                patch(
+                    "wave_retro_lr.mprage._calibrated_psf_inputs",
+                    return_value=psf_result,
+                ),
+                patch(
+                    "wave_retro_lr.mprage._ensure_r3x1_psf_coefficient_plot",
+                    return_value=None,
+                ),
+                patch(
+                    "wave_retro_lr.mprage._psf_processing_implementation_identity",
+                    return_value={"fixture": True},
+                ),
+                patch(
+                    "wave_retro_lr.sampling.inspect_twix_sampling",
+                    return_value=(sampling, {}),
+                ),
+                patch(
+                    "wave_retro_lr.psf.evaluate_calibrated_psf",
+                    return_value=np.ones((8, 6, 4), dtype=np.complex64),
+                ),
+            ):
+                anchor = prepare_mprage_rovir_source_anchor(
+                    twix, sequence, root
+                )
+            manifest = json.loads((anchor / "manifest.json").read_text())
+            self.assertEqual(manifest["status"], "mprage_rovir_source_anchor_ready")
+            self.assertEqual(manifest["coil_compression"]["physical_coils"], 3)
+            self.assertFalse(
+                manifest["scientific_actions"]["standard_wave_kspace_loaded_or_written"]
+            )
+            self.assertFalse((anchor / "wave_kspace.hdr").exists())
+            self.assertEqual(
+                np.asarray(open_cfl(anchor / "psf")).shape, (8, 6, 4, 1, 1)
+            )
+            physical_manifest = (
+                root
+                / "normal"
+                / "rovir"
+                / "feasibility"
+                / "manifests"
+                / "physical_calibration.json"
+            )
+            self.assertTrue(physical_manifest.is_file())
+            self.assertEqual(load_ref_calls, 1)
+
     def test_set4_acs_is_centered_without_changing_acquired_samples(self) -> None:
         """Export only packed set 4 and preserve it during center embedding.
 
@@ -548,7 +685,7 @@ class RovirFeasibilityTests(unittest.TestCase):
             twix.write_bytes(b"small synthetic twix identity")
             sequence.write_text("synthetic sequence identity\n", encoding="utf-8")
             normal = base / "normal_root"
-            manifest_path = normal / "normal" / "bart_inputs" / "manifest.json"
+            manifest_path = normal / "vcc24" / "normal" / "bart_inputs" / "manifest.json"
             manifest_path.parent.mkdir(parents=True)
             twix_stat = twix.stat()
             sequence_stat = sequence.stat()

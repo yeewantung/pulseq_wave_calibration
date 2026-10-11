@@ -67,6 +67,38 @@ class RovirRetroTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "transform differs"):
                 prepare_mprage_rovir_retro(root)
 
+    def test_retro_uses_vcc24_manifest_recorded_by_normal_rovir(self) -> None:
+        """Keep retro bound to the exact VCC24 source manifest path and hash.
+
+        Returns:
+            None.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "reconstruction"
+            self._write_fixture(root)
+            legacy_manifest = root / "normal" / "bart_inputs" / "manifest.json"
+            vcc24_manifest = root / "vcc24" / "normal" / "bart_inputs" / "manifest.json"
+            vcc24_manifest.parent.mkdir(parents=True)
+            legacy_manifest.replace(vcc24_manifest)
+            contract_path = root / "normal" / "rovir" / "manifest.json"
+            contract = json.loads(contract_path.read_text(encoding="utf-8"))
+            contract["normal_source_manifest"] = {
+                "path": str(vcc24_manifest.resolve()),
+                "sha256": sha256_file(vcc24_manifest),
+            }
+            self._write_json(contract_path, contract)
+
+            manifests = prepare_mprage_rovir_retro(root)
+            self.assertEqual(len(manifests), len(ROVIR_RETRO_CASES))
+            self.assertTrue(
+                all(
+                    entry["coil_processing"]["normal_source_manifest_sha256"]
+                    == sha256_file(vcc24_manifest)
+                    for entry in manifests
+                )
+            )
+
     def _write_fixture(self, root: Path) -> Path:
         """Write a compact normal ROVir contract without standard retro cases.
 

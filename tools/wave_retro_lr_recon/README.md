@@ -445,6 +445,14 @@ ROVir is currently implemented only for MPRAGE. It is not exposed for GRE;
 the GRE acquisition FOV normally avoids the extended-body shoulder-wrap
 failure mode that motivated this feature.
 
+ROVir source discovery prefers accepted legacy `normal/bart_inputs`, then
+`vcc24/normal/bart_inputs`, then other compatible `vccN` normal trees. The
+choice is immutably bound below `normal/rovir`. If no standard source layout
+exists, `inspect` prepares a lightweight ROVir-only source/PSF anchor without
+loading or writing standard image k-space or estimating standard PCA. In every
+case physical-coil image k-space and ACS still come from the original TWIX, and
+canonical ROVir output remains under root-level `normal/rovir`.
+
 For R3x1 source data, the normal ROVir workflow retains both FISTA-r0 and the
 standard-selection Wavelet `lambda=3.5e-2` comparison. The latter is labeled as
 reused rather than ROVir-optimized. The Wavelet block is directly visible in

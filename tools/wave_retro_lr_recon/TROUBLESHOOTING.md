@@ -237,6 +237,16 @@ source. `--ecalib-crop` is a deliberate ROVir override and is recorded. Omit it
 to inherit an available standard normal crop; when no standard ecalib command
 exists, ROVir uses the MPRAGE launcher default `0.6`.
 
+ROVir first looks for the accepted source contract and PSF below legacy
+`normal/bart_inputs`, then `vcc24/normal/bart_inputs`, then other complete
+`vccN/normal/bart_inputs` trees. It records the compatible choice in
+`normal/rovir/source_binding.json`. The ROVir output remains canonical under
+root-level `normal/rovir`; no fallback reuses PCA-compressed standard k-space or
+ACS. If no standard source layout exists, `inspect` prepares a minimal
+`normal/rovir/source_inputs` PSF/provenance anchor and physical ACS directly
+from the explicit TWIX and sequence. An incomplete normal or `vccN` layout is a
+hard error and must be reviewed rather than silently bypassed.
+
 `sample_mprage_retro_lr_recon.sh --rovir` never estimates another transform.
 It does not prepare or reconstruct the standard-coil branches. Instead, it
 validates the canonical normal ROVir image k-space, CSM, PSF, transform, ROI,

@@ -21,6 +21,7 @@ from wave_retro_lr.rovir_workflow import (  # noqa: E402
     load_recommended_boxes,
     normal_rovir_context,
     normal_rovir_wavelet_context,
+    prepare_normal_rovir_invocation,
     prepare_inspection,
     prepare_reviewed_candidate,
     record_transform_and_prepare_reconstruction,
@@ -45,6 +46,10 @@ def _parser() -> argparse.ArgumentParser:
     invocation.add_argument("twix", type=Path)
     invocation.add_argument("output_root", type=Path)
     invocation.add_argument("sequence", type=Path)
+    prepare_invocation = commands.add_parser("prepare-invocation")
+    prepare_invocation.add_argument("twix", type=Path)
+    prepare_invocation.add_argument("output_root", type=Path)
+    prepare_invocation.add_argument("sequence", type=Path)
     finish = commands.add_parser("inspect-finish")
     finish.add_argument("output_root", type=Path)
     finish.add_argument("bart_version_file", type=Path)
@@ -116,6 +121,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = normal_rovir_wavelet_context(args.output_root)
     elif args.stage == "validate-invocation":
         result = validate_normal_rovir_invocation(
+            args.twix, args.output_root, args.sequence
+        )
+    elif args.stage == "prepare-invocation":
+        result = prepare_normal_rovir_invocation(
             args.twix, args.output_root, args.sequence
         )
     elif args.stage == "inspect-prepare":

@@ -18,8 +18,9 @@ Run options:
   --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
   -g                     use GPU for BART Wave only
 
-BART must already be on PATH. The three source arguments must exactly match the
-accepted prepared MPRAGE inputs recorded below OUTPUT_ROOT.
+BART must already be on PATH. Existing normal or vccN source inputs must match
+the explicit sources. When none exist, inspect prepares a minimal ROVir-only
+source/PSF anchor below OUTPUT_ROOT/normal/rovir.
 EOF
 }
 
@@ -38,7 +39,7 @@ RECONSTRUCTION_ROOT="${2%/}"
 SEQUENCE_FILE="$3"
 shift 3
 [[ -d "$RECONSTRUCTION_ROOT" ]] || {
-    echo "Error: completed reconstruction root does not exist: $RECONSTRUCTION_ROOT" >&2
+    echo "Error: selected reconstruction root does not exist: $RECONSTRUCTION_ROOT" >&2
     exit 2
 }
 RECONSTRUCTION_ROOT="$(cd -- "$RECONSTRUCTION_ROOT" && pwd -P)"
@@ -50,7 +51,7 @@ echo "ROVir reconstruction root: $RECONSTRUCTION_ROOT"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
-python "$WORKFLOW" validate-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE" >/dev/null
+python "$WORKFLOW" prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE" >/dev/null
 # Use the validated canonical source paths recorded by the normal manifest.
 TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sequence)"
