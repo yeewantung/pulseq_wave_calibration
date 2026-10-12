@@ -18,101 +18,29 @@ The sections below describe the fully validated MPRAGE workflow first. The GRE
 section then summarizes the corresponding three stages and highlights only the
 differences.
 
-## Current standard-PCA contract
+## Supported variants and defaults
 
-All new non-ROVir runs default to 24 virtual coils and accept an explicit
-`--virtual-coils N`. A run with count `N` is isolated below
-`OUTPUT_ROOT/vccN/{normal,retro}`; this includes an explicit Ncc=12 run. The
-historical root-level `normal/` and `retro/` trees are legacy VCC=12 products
-and are never overwritten, moved, or relabeled. Preparation rejects Ncc above
-the measured physical receive-coil count and records retained energy, PCA-basis
-identity, source and geometry provenance, and prepared-artifact hashes.
+Standard reconstruction defaults to 24 virtual coils and accepts
+`--virtual-coils N`; each count is isolated below
+`OUTPUT_ROOT/vccN/{normal,retro}`. Historical root-level VCC=12 trees remain
+read-only legacy products. Normal reconstruction defaults to Wavelet-only,
+retrospective reconstruction defaults to FISTA-only, and `--reg-full` requests
+both branches.
 
-Noise prewhitening is disabled by default for MPRAGE, GRE, and ROVir until the
-experimental path is validated on real data. Pass `--noise-prewhitening` to
-explicitly enable it. When enabled, the tool searches for a real
-`MDH_NOISEADJSCAN`, validates its
-physical-coil count and finite covariance, applies the same physical-coil
-transform to image k-space and integrated ACS before PCA, and records the
-covariance, transform, hashes, empirical already-white assessment, and Siemens
-raw-data-correction bits. The raw-data-correction bit is audit evidence only;
-it is not relabeled as proof of scanner-side whitening. If no noise scan
-exists, preparation continues without whitening and records
-`not_applied_no_noise_scan`. A populated but invalid noise scan is a hard
-error. The legacy `-no-noise-prewhitening` spelling and
-`--no-noise-prewhitening` remain accepted explicit opt-outs. A complete historical
-manifest that predates this field remains reusable as an unchanged legacy
-unwhitened result under the default launcher invocation. It is not
-rewritten or relabeled. Among newly prepared manifests, a whitening-mode
-change never reuses a mismatched PCA basis or CSM.
+MPRAGE additionally supports canonical ROVir reconstruction and opt-in
+`--n4-bias-correction`. Experimental noise prewhitening is available only when
+explicitly requested and remains disabled by default. GRE supports the same
+count-specific standard reconstruction profiles but intentionally excludes
+ROVir and N4. The single `OUTPUT_ROOT/nifti_collection/` keeps complete `vccN`
+and MPRAGE ROVir variants additive.
 
-ANTs N4 bias-field correction is an optional MPRAGE-only postprocessing step,
-disabled by default. Pass `--n4-bias-correction` to an MPRAGE normal,
-retrospective, or ROVir reconstruction launcher after installing
-`N4BiasFieldCorrection`. It operates only on the magnitude NIfTI, never changes
-the canonical magnitude/phase pair, and writes a separate derivative below
-`n4_bias_corrected_nifti/<branch>/`. The derivative contains the corrected
-magnitude, multiplicative bias field, source/output hashes, ANTs identity and
-parameters, numerical validation, and logs. A temporary whole-head estimation
-mask is used because N4 operates in the log domain, but the mask is not
-retained. Mask algorithm version and parameters are bound into the resumable
-request. Masked ANTs intensity rescaling is explicitly disabled so the saved
-bias field satisfies the validated `corrected = source / bias` identity. GRE
-is intentionally excluded: independently estimated echo bias
-fields would violate the shared inter-echo scaling contract. ROVir normal
-R3x1 fits the field on the selected Wavelet magnitude; ROVir retrospective
-cases reuse that one hash-bound field after physical-space field and mask
-resampling. R1 uses the normal FISTA field because no R1 Wavelet branch is
-selected. Retrospective ROVir never silently refits N4 per case.
-
-The NIfTI collection prefers a complete source-bound N4 magnitude when both
-canonical and corrected files exist. It keeps the canonical filename so
-downstream naming remains stable, while phase always remains canonical and
-unchanged. Every file record states the canonical source, collected source,
-N4 manifest and bias-field hashes, fitting/application mode, and validation;
-an incomplete or mismatched N4 tree is rejected rather than ignored.
-
-The four main launchers accept mutually exclusive profiles: `--reg-full`
-(FISTA-r0 plus Wavelet), `--wavelet-only`, and `--fista-only`. Normal defaults
-to Wavelet-only; retrospective reconstruction defaults to FISTA-only. The
-reviewed MPRAGE Ncc=24 native-R3x1 sweep selected `lambda=3e-2`, so default
-VCC24 normal reconstruction uses `wavelet_selected_vcc24`. Explicit lambda
-overrides use `wavelet_candidate`. The reviewed two-echo GRE Ncc=24 native-R3x1
-sweep independently retained the shared `lambda=1.5e-2`, so its default VCC24
-normal reconstruction also uses `wavelet_selected_vcc24`. Counts other than 24
-and unswept retrospective cases retain their Ncc=12 values under
-`wavelet_transferred_vcc12`. MPRAGE R1 rejects profiles containing Wavelet
-because no positive R1 value has been approved.
-
-Those selected lambdas predate noise prewhitening. When a noise transform is
-actually applied, the launchers retain `3e-2` or `1.5e-2` only as an unselected
-starting reference under `wavelet_prewhitening_unvalidated`; they do not call
-it optimal. A new compact, modality-specific sweep and user review are needed
-before promoting a whitened-pipeline value. If whitening is a recorded no-op,
-the earlier selected branch remains applicable.
-
-The default MPRAGE retrospective batch is `native_r3x2`,
-`lr_y_1p5mm_r3x2`, and `native_r3x3`. LR-X and LR-XY remain explicit options
-but are not prepared by default. GRE keeps `native_r3x2`,
-`lin_low_resolution_r3x2`, and `native_r3x3`.
-
-There is exactly one `OUTPUT_ROOT/nifti_collection/`. It places complete
-count-specific products below `nifti_collection/vccN/` and canonical MPRAGE
-ROVir below `nifti_collection/rovir/`. Variants are additive, and normal and
-retro may expose different branches. Every new `vccN` collection entry is
-bound to preparation and branch-run hashes, basis, Ncc, source, geometry,
-method, lambda, and copied-file hashes.
-
-The provenance of the MPRAGE Wavelet defaults, including the synthetic
-pure-mask coarse-to-fine sweep, manual review gates, presentation artifacts,
-and the boundary between parameter selection and measured reconstruction, is
-documented in
-[`synthetic_mprage_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_mprage_regularization_pipeline.md).
-
-The completed synthetic two-echo GRE native-R3x3 coarse-to-fine sweep,
-shared-lambda decision, presentation contract, and measured-reconstruction
-handoff boundary are documented in
-[`synthetic_gre_regularization_pipeline.md`](../synthetic_wave_for_reg_baseline/docs/synthetic_gre_regularization_pipeline.md).
+Detailed PCA rationale, retained-energy provenance, immutable tree rules,
+profile semantics, and lambda history are in the
+[virtual-coil and reconstruction-profile reference](docs/virtual_coil_reconstruction_redesign_plan.md).
+Operational failure and recovery guidance for PCA controls, prewhitening, N4,
+and ROVir is in [TROUBLESHOOTING.md](TROUBLESHOOTING.md); the public ROVir
+workflow is documented separately in
+[mprage_rovir_reconstruction.md](docs/mprage_rovir_reconstruction.md).
 
 ## MPRAGE workflow
 
@@ -499,39 +427,6 @@ large reviewed batch, `archive_collection_source_niftis.py` also accepts
 `--trust-manifest-hashes`; that mode still requires an exact owned-file set,
 matching recorded source/copy hashes, and both files to be present, but should
 only be used after representative collections pass full SHA-256 verification.
-
-### Optional MPRAGE troubleshooting features
-
-Higher-channel PCA controls and ROVir shoulder-wrap suppression are optional
-diagnostic/recovery tools, not stages of the standard workflow. See
-[`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for PCA controls and failure
-diagnosis, and
-[`mprage_rovir_reconstruction.md`](docs/mprage_rovir_reconstruction.md) for
-the user-facing ROVir pipeline.
-
-ROVir is currently implemented only for MPRAGE. It is not exposed for GRE;
-the GRE acquisition FOV normally avoids the extended-body shoulder-wrap
-failure mode that motivated this feature.
-
-ROVir source discovery prefers accepted legacy `normal/bart_inputs`, then
-`vcc24/normal/bart_inputs`, then other compatible `vccN` normal trees. The
-choice is immutably bound below `normal/rovir`. If no standard source layout
-exists, `inspect` prepares a lightweight ROVir-only source/PSF anchor without
-loading or writing standard image k-space or estimating standard PCA. In every
-case physical-coil image k-space and ACS still come from the original TWIX, and
-canonical ROVir output remains under root-level `normal/rovir`.
-
-For R3x1 source data, the normal ROVir workflow retains both FISTA-r0 and the
-standard-selection Wavelet `lambda=3.5e-2` comparison. The latter is labeled as
-reused rather than ROVir-optimized. The Wavelet block is directly visible in
-the main ROVir launcher and is resumable with the rest of that workflow. It
-reuses the canonical ROVir transform, CSM, PSF, FISTA output, and manifest.
-
-ROVir retrospective reconstruction defaults independently to FISTA-r0 for
-`native_r3x2`, `lr_y_1p5mm_r3x2`, and `native_r3x3`. `--reg-full` and
-`--wavelet-only` expose the transferred Wavelet comparisons; LR-X and LR-XY
-are opt-in through `--include-legacy-lr`. Existing extra cases and branches
-remain discoverable and are never deleted by a narrower rerun.
 
 ## GRE workflow
 
