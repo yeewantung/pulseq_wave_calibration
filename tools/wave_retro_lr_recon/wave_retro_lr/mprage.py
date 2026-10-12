@@ -48,6 +48,13 @@ from .sampling import (
     pure_cartesian_image_lattice_mask,
     validate_pure_cartesian_image_lattice,
 )
+from .noise_prewhitening import (
+    apply_noise_prewhitening_coillast,
+    combined_prewhitening_and_compression_basis,
+    persist_noise_prewhitening,
+    prepare_noise_prewhitening,
+    prewhitening_request_matches,
+)
 from .standard import (
     DEFAULT_VIRTUAL_COILS,
     prepared_artifact_records,
@@ -1826,6 +1833,7 @@ def _native_manifest_matches(
     sequence_path: Path,
     psf_settings: Mapping[str, Any],
     virtual_coils: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> bool:
     """Check whether a native manifest matches sources and PSF settings.
 
@@ -1834,6 +1842,8 @@ def _native_manifest_matches(
         twix_path: Requested measured TWIX file.
         sequence_path: Requested Pulseq sequence file.
         psf_settings: Normalized coefficient-processing settings.
+        virtual_coils: Optional requested standard-PCA channel count.
+        noise_prewhitening: Requested automatic-prewhitening mode.
 
     Returns:
         ``True`` when source, coil-calibration, and PSF settings match.
@@ -1924,6 +1934,9 @@ def _native_manifest_matches(
         and spatial_settings_match
         and implementation_matches
         and _uses_alias_free_coil_calibration(manifest)
+        and prewhitening_request_matches(
+            manifest, enabled=noise_prewhitening
+        )
         and (
             virtual_coils is None
             or (
@@ -1944,6 +1957,7 @@ def _native_manifest_matches_reusable_artifact(
     sequence_path: Path,
     psf_settings: Mapping[str, Any],
     virtual_coils: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> bool:
     """Check whether legacy normal artifacts are safe for retrospective reuse.
 
@@ -1959,6 +1973,8 @@ def _native_manifest_matches_reusable_artifact(
         twix_path: Requested measured TWIX file.
         sequence_path: Requested Pulseq sequence file.
         psf_settings: Normalized current request.
+        virtual_coils: Optional requested standard-PCA channel count.
+        noise_prewhitening: Requested automatic-prewhitening mode.
 
     Returns:
         ``True`` only when sources and every recorded scientific setting are
@@ -1972,6 +1988,9 @@ def _native_manifest_matches_reusable_artifact(
         or not isinstance(manifest.get("geometry"), Mapping)
         or not isinstance(manifest.get("sampling"), Mapping)
         or not _uses_alias_free_coil_calibration(manifest)
+        or not prewhitening_request_matches(
+            manifest, enabled=noise_prewhitening
+        )
         or (
             virtual_coils is not None
             and (
@@ -2213,6 +2232,7 @@ def prepare_normal_mprage(
     psf_fit_y_max: int | None = None,
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
+    noise_prewhitening: bool = False,
     reuse: bool = True,
     allow_legacy_artifact_reuse: bool = False,
 ) -> dict[str, Any]:
@@ -2232,6 +2252,9 @@ def prepare_normal_mprage(
         psf_fit_y_max: Optional exclusive manual sin-projection spatial index.
         psf_fit_z_min: Optional inclusive manual cos-projection spatial index.
         psf_fit_z_max: Optional exclusive manual cos-projection spatial index.
+        noise_prewhitening: Automatically use a compatible TWIX noise-adjust
+            scan before standard PCA. Missing noise data safely fall back to
+            an explicitly recorded no-op; malformed populated noise data fail.
         reuse: Reuse compatible inputs already present under ``output_root``.
         allow_legacy_artifact_reuse: Permit retrospective callers to reuse
             source-matched legacy core artifacts without rewriting their
@@ -2272,7 +2295,12 @@ def prepare_normal_mprage(
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
         exact_match = _native_manifest_matches(
-            existing, twix_path, sequence_path, psf_settings, virtual_coils
+            existing,
+            twix_path,
+            sequence_path,
+            psf_settings,
+            virtual_coils,
+            noise_prewhitening,
         )
         artifact_match = allow_legacy_artifact_reuse and (
             _native_manifest_matches_reusable_artifact(
@@ -2281,6 +2309,7 @@ def prepare_normal_mprage(
                 sequence_path,
                 psf_settings,
                 virtual_coils,
+                noise_prewhitening,
             )
         )
         if not exact_match and not artifact_match:
@@ -2419,7 +2448,12 @@ def prepare_normal_mprage(
 
     # Validate the measured Wave image stream independently of the set-4
     # no-Wave reference scan used for sensitivity-map calibration.
-    sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
+    twix_measurements: list[Any] = []
+    sampling, _ = inspect_twix_sampling(
+        twix_path,
+        matrix_lin_par=(nlin, npar),
+        measurement_sink=twix_measurements,
+    )
     # Load and consume the large dense reference before the image stream so
     # the two physical-coil payloads are never resident together unnecessarily.
     reference = native.load_ref(str(twix_path))
@@ -2445,8 +2479,17 @@ def prepare_normal_mprage(
             "Unexpected logical ACS shape after readout oversampling removal: "
             f"{tuple(integrated_acs.shape)}."
         )
+    prewhitening_plan = prepare_noise_prewhitening(
+        twix_path,
+        physical_coils,
+        enabled=noise_prewhitening,
+        measurements=twix_measurements,
+    )
+    whitened_acs = apply_noise_prewhitening_coillast(
+        integrated_acs, prewhitening_plan.matrix
+    )
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
-        integrated_acs,
+        whitened_acs,
         ncc=virtual_coils,
         acs=nacs,
         x_step=1,
@@ -2455,9 +2498,12 @@ def prepare_normal_mprage(
         destination / "coil_compression_basis.npy", basis
     )
     compressed_acs = native.apply_cc_coillast_torch(
-        integrated_acs, basis, x_chunk=8
+        whitened_acs, basis, x_chunk=8
     ).contiguous()
-    del integrated_acs, integrated_acs_oversampled, reference
+    image_basis = combined_prewhitening_and_compression_basis(
+        prewhitening_plan.matrix, basis
+    )
+    del integrated_acs, whitened_acs, integrated_acs_oversampled, reference
 
     image = native.load_img(str(twix_path))
     full_image = _embed_image_stream(
@@ -2466,7 +2512,9 @@ def prepare_normal_mprage(
         readout_oversampled=ro_os,
         physical_coils=physical_coils,
     )
-    compressed = native.apply_cc_coillast_torch(full_image, basis, x_chunk=8)
+    compressed = native.apply_cc_coillast_torch(
+        full_image, image_basis, x_chunk=8
+    )
     del full_image, image
     if tuple(compressed_acs.shape) != (nro, nacs, nacs, virtual_coils):
         raise ValueError(f"Unexpected compressed ACS shape: {tuple(compressed_acs.shape)}.")
@@ -2618,6 +2666,9 @@ def prepare_normal_mprage(
     (destination / "sampling_class.txt").write_text(
         sampling.name + "\n", encoding="utf-8"
     )
+    prewhitening_record, prewhitening_files = persist_noise_prewhitening(
+        destination, prewhitening_plan
+    )
     energy = retained_energy_diagnostics(retained_energy, virtual_coils)
     output_artifacts = prepared_artifact_records(
         destination,
@@ -2631,10 +2682,14 @@ def prepare_normal_mprage(
             "psf_coefficients_processing_input",
             "psf_coefficient_c_branch_turns",
         ),
-        ("coil_compression_basis.npy", "sampling_class.txt"),
+        (
+            "coil_compression_basis.npy",
+            "sampling_class.txt",
+            *prewhitening_files,
+        ),
     )
     manifest: dict[str, Any] = {
-        "format_version": 4,
+        "format_version": 5,
         "status": "measured_wave_mprage_bart_inputs_ready",
         "standard_pca_variant": variant_name,
         "source": {
@@ -2652,11 +2707,16 @@ def prepare_normal_mprage(
             "readout_oversampling_factor": os_factor,
         },
         "sampling": sampling.to_json(),
+        "noise_prewhitening": prewhitening_record,
         "coil_compression": {
             "physical_coils": physical_coils,
             "virtual_coils": virtual_coils,
             "method": "integrated ACS covariance eigendecomposition",
-            "basis_source": "alias-free integrated set-4 ACS",
+            "basis_source": (
+                "noise-prewhitened alias-free integrated set-4 ACS"
+                if prewhitening_record["applied"]
+                else "alias-free integrated set-4 ACS after recorded whitening no-op"
+            ),
             "basis": basis_identity,
             "retained_energy": energy["selected"],
             "retained_energy_diagnostics": energy,
@@ -2773,6 +2833,7 @@ def prepare_retro_mprage(
     psf_fit_y_max: int | None = None,
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> list[dict[str, Any]]:
     """Prepare selected direct-measured R3x2 MPRAGE BART input sets.
 
@@ -2791,6 +2852,8 @@ def prepare_retro_mprage(
         psf_fit_y_max: Optional exclusive manual sin-projection spatial index.
         psf_fit_z_min: Optional inclusive manual cos-projection spatial index.
         psf_fit_z_max: Optional exclusive manual cos-projection spatial index.
+        noise_prewhitening: Require automatic noise prewhitening in the normal
+            source contract; a missing noise scan is a recorded no-op.
 
     Returns:
         One manifest per resolved native or low-resolution case.
@@ -2816,8 +2879,18 @@ def prepare_retro_mprage(
         psf_fit_y_max=psf_fit_y_max,
         psf_fit_z_min=psf_fit_z_min,
         psf_fit_z_max=psf_fit_z_max,
+        noise_prewhitening=noise_prewhitening,
         reuse=True,
         allow_legacy_artifact_reuse=True,
+    )
+    normal_prewhitening = normal.get(
+        "noise_prewhitening",
+        {
+            "version": 0,
+            "status": "legacy_unwhitened_source",
+            "applied": False,
+            "request": {"enabled": False},
+        },
     )
     normal_inputs = output_path / NORMAL_INPUT_RELATIVE
     retro_root = output_path / RETRO_RELATIVE
@@ -2883,6 +2956,8 @@ def prepare_retro_mprage(
                 or existing.get("case") != case.to_json()
                 or existing.get("standard_pca_variant") != variant_name
                 or int(existing.get("virtual_coils", 0)) != virtual_coils
+                or existing.get("noise_prewhitening")
+                != normal_prewhitening
                 or existing.get("source_normal_manifest_identity", {}).get("sha256")
                 != sha256_file(normal_inputs / "manifest.json")
             ):
@@ -2924,6 +2999,7 @@ def prepare_retro_mprage(
             "status": "direct_measured_wave_crop_bart_inputs_ready",
             "standard_pca_variant": variant_name,
             "virtual_coils": virtual_coils,
+            "noise_prewhitening": normal_prewhitening,
             "source": source_identity,
             "source_normal_manifest": str(normal_inputs / "manifest.json"),
             "source_normal_manifest_identity": {
@@ -2965,6 +3041,7 @@ def prepare_retro_mprage(
             "status": "mprage_retro_cases_ready",
             "standard_pca_variant": variant_name,
             "virtual_coils": virtual_coils,
+            "noise_prewhitening": normal_prewhitening,
             "source": source_identity,
             "normal_inputs": str(normal_inputs),
             "cases": [payload["case_directory"] for payload in results],
@@ -3033,6 +3110,7 @@ def prepare_retro_mprage_r3x3(
     psf_fit_y_max: int | None = None,
     psf_fit_z_min: int | None = None,
     psf_fit_z_max: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> dict[str, Any]:
     """Prepare only native-grid R3x3 retrospective MPRAGE BART inputs.
 
@@ -3054,6 +3132,8 @@ def prepare_retro_mprage_r3x3(
         psf_fit_y_max: Optional exclusive sin-projection spatial index.
         psf_fit_z_min: Optional inclusive cos-projection spatial index.
         psf_fit_z_max: Optional exclusive cos-projection spatial index.
+        noise_prewhitening: Require automatic noise prewhitening in the normal
+            source contract; a missing noise scan is a recorded no-op.
 
     Returns:
         Complete case-local preparation manifest.
@@ -3078,8 +3158,18 @@ def prepare_retro_mprage_r3x3(
         psf_fit_y_max=psf_fit_y_max,
         psf_fit_z_min=psf_fit_z_min,
         psf_fit_z_max=psf_fit_z_max,
+        noise_prewhitening=noise_prewhitening,
         reuse=True,
         allow_legacy_artifact_reuse=True,
+    )
+    normal_prewhitening = normal.get(
+        "noise_prewhitening",
+        {
+            "version": 0,
+            "status": "legacy_unwhitened_source",
+            "applied": False,
+            "request": {"enabled": False},
+        },
     )
     source_sampling = _sampling_from_manifest(normal)
     geometry_payload = normal["geometry"]
@@ -3127,6 +3217,8 @@ def prepare_retro_mprage_r3x3(
             or existing.get("selected_regularization") != selection
             or existing.get("standard_pca_variant") != variant_name
             or int(existing.get("virtual_coils", 0)) != virtual_coils
+            or existing.get("noise_prewhitening")
+            != normal_prewhitening
             or not isinstance(source_normal_identity, Mapping)
             or source_normal_identity.get("sha256")
             != sha256_file(normal_inputs / "manifest.json")
@@ -3169,6 +3261,7 @@ def prepare_retro_mprage_r3x3(
         "status": "direct_measured_wave_r3x3_bart_inputs_ready",
         "standard_pca_variant": variant_name,
         "virtual_coils": virtual_coils,
+        "noise_prewhitening": normal_prewhitening,
         "source": normal["source"],
         "source_normal_manifest": str(normal_inputs / "manifest.json"),
         "source_normal_manifest_identity": {

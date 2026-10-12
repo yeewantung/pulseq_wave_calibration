@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -39,6 +39,15 @@ from .sampling import (
 from .rovir_source import discover_rovir_source_inputs
 
 ROVIR_RETRO_CASES = tuple(name for name, _ in RETRO_CASES) + (R3X3_CASE_ID,)
+ROVIR_DEFAULT_RETRO_CASES = (
+    "native_r3x2",
+    "lr_y_1p5mm_r3x2",
+    R3X3_CASE_ID,
+)
+ROVIR_LEGACY_OPTIONAL_CASES = (
+    "lr_x_1p5mm_r3x2",
+    "lr_xy_1p25mm_r3x2",
+)
 ROVIR_REUSED_WAVELET_LAMBDAS = {
     "native_r3x2": 0.035,
     "lr_x_1p5mm_r3x2": 0.025,
@@ -48,12 +57,18 @@ ROVIR_REUSED_WAVELET_LAMBDAS = {
 }
 
 
-def prepare_mprage_rovir_retro(output_root: str | Path) -> list[dict[str, Any]]:
-    """Prepare all ROVir retro cases directly from canonical normal ROVir data.
+def prepare_mprage_rovir_retro(
+    output_root: str | Path,
+    *,
+    case_ids: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Prepare selected ROVir retro cases from canonical normal ROVir data.
 
     Args:
         output_root: Reconstruction root containing a completed canonical
             normal ROVir branch.
+        case_ids: Stable case identifiers to prepare. ``None`` selects the
+            reduced default set: native R3x2, LR-Y R3x2, and native R3x3.
 
     Returns:
         One manifest for each prepared ROVir retrospective case.
@@ -67,6 +82,21 @@ def prepare_mprage_rovir_retro(output_root: str | Path) -> list[dict[str, Any]]:
         Writes only ``retro/<case>/rovir/bart_inputs`` trees. It does not
         launch BART reconstruction or create or alter standard retro cases.
     """
+    selected_cases = tuple(
+        ROVIR_DEFAULT_RETRO_CASES if case_ids is None else case_ids
+    )
+    if not selected_cases:
+        raise ValueError("At least one ROVir retrospective case is required.")
+    if len(set(selected_cases)) != len(selected_cases):
+        raise ValueError("ROVir retrospective case identifiers must be unique.")
+    unsupported = tuple(
+        case_id for case_id in selected_cases if case_id not in ROVIR_RETRO_CASES
+    )
+    if unsupported:
+        raise ValueError(
+            "Unsupported ROVir retrospective case(s): " + ", ".join(unsupported)
+        )
+
     root = Path(output_root).expanduser().resolve()
     contract_path = root / "normal" / "rovir" / "manifest.json"
     contract = _read_json(contract_path)
@@ -100,7 +130,7 @@ def prepare_mprage_rovir_retro(output_root: str | Path) -> list[dict[str, Any]]:
         raise ValueError("ROVir prepared inputs and canonical source provenance disagree.")
     source_sampling = _sampling_from_manifest(normal)
     geometry = _geometry_from_manifest(normal)
-    resolved_cases = _resolve_cases(geometry)
+    resolved_cases = _resolve_cases(geometry, selected_cases)
     source_wave = normal_rovir_inputs / "wave_kspace"
     _validate_cfl_record(
         rovir_inputs_manifest.get("artifacts", {}).get("wave_kspace"),
@@ -181,7 +211,7 @@ def prepare_mprage_rovir_retro(output_root: str | Path) -> list[dict[str, Any]]:
 
     psf_coefficients, psf_identity = _factor_source_psf(source_psf)
     results: list[dict[str, Any]] = []
-    for case_name in ROVIR_RETRO_CASES:
+    for case_name in selected_cases:
         case = resolved_cases[case_name]
         target_mask, sampling = _target_sampling(source_sampling, case)
         destination = root / "retro" / case_name / "rovir" / "bart_inputs"
@@ -324,11 +354,14 @@ def _geometry_from_manifest(manifest: Mapping[str, Any]) -> Geometry:
         raise ValueError("Normal manifest contains invalid MPRAGE geometry.") from exc
 
 
-def _resolve_cases(geometry: Geometry) -> dict[str, ResolvedCase]:
-    """Resolve the five fixed ROVir retrospective case geometries.
+def _resolve_cases(
+    geometry: Geometry, case_ids: Sequence[str]
+) -> dict[str, ResolvedCase]:
+    """Resolve selected supported ROVir retrospective case geometries.
 
     Args:
         geometry: Native physical FOV and logical matrix.
+        case_ids: Validated stable identifiers to resolve.
 
     Returns:
         Mapping from stable case directory name to resolved geometry.
@@ -337,8 +370,15 @@ def _resolve_cases(geometry: Geometry) -> dict[str, ResolvedCase]:
         ValueError: If requested LR cases collapse to duplicate grids.
     """
     native_resolution = geometry.physical_resolution_mm_xyz
+    definitions = dict(RETRO_CASES)
     cases: dict[str, ResolvedCase] = {}
-    for directory_name, requested_xy in RETRO_CASES:
+    for directory_name in case_ids:
+        if directory_name == R3X3_CASE_ID:
+            cases[directory_name] = resolve_case(
+                CaseSpec(native_resolution, (3, 3), "native R3x3"), geometry
+            )
+            continue
+        requested_xy = definitions[directory_name]
         requested = (
             native_resolution
             if requested_xy is None
@@ -347,11 +387,10 @@ def _resolve_cases(geometry: Geometry) -> dict[str, ResolvedCase]:
         cases[directory_name] = resolve_case(
             CaseSpec(requested, (3, 2), directory_name), geometry
         )
-    cases[R3X3_CASE_ID] = resolve_case(
-        CaseSpec(native_resolution, (3, 3), "native R3x3"), geometry
-    )
     matrices = [
-        cases[name].target_logical_matrix_ro_lin_par for name, _ in RETRO_CASES
+        case.target_logical_matrix_ro_lin_par
+        for name, case in cases.items()
+        if name != R3X3_CASE_ID
     ]
     if len(set(matrices)) != len(matrices):
         raise ValueError("ROVir LR requests collapse to duplicate PE grids.")

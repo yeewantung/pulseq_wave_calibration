@@ -15,6 +15,10 @@ import numpy as np
 
 from .bart_io import cfl_record, create_cfl, open_cfl, sha256_file
 from .mprage import _embed_image_stream, load_wave_mprage_helpers
+from .noise_prewhitening import (
+    combined_prewhitening_and_compression_basis,
+    load_recorded_whitening_matrix,
+)
 from .sampling import SamplingPattern, inspect_twix_sampling
 from .standard import resolve_standard_normal_inputs
 
@@ -193,7 +197,20 @@ def prepare_mprage_pca_control(
     image = native.load_img(os.fspath(twix_path))
     if image.ndim != 4 or image.shape[-1] != physical_coils:
         raise ValueError("TWIX image stream has incompatible physical-coil geometry.")
-    compressed_loaded = native.apply_cc_coillast_torch(image, basis, x_chunk=8)
+    source_prewhitening = source.get(
+        "noise_prewhitening", {"version": 0, "applied": False}
+    )
+    whitening_matrix = (
+        None
+        if source_prewhitening.get("version") == 0
+        else load_recorded_whitening_matrix(accepted_inputs, accepted_manifest)
+    )
+    image_basis = combined_prewhitening_and_compression_basis(
+        whitening_matrix, basis
+    )
+    compressed_loaded = native.apply_cc_coillast_torch(
+        image, image_basis, x_chunk=8
+    )
     del image
     compressed = _embed_image_stream(
         compressed_loaded,
@@ -295,6 +312,9 @@ def prepare_mprage_pca_control(
                 "virtual_coils": ncc,
                 "method": "integrated set-4 ACS covariance eigendecomposition",
                 "basis_applied_identically_to_image_and_acs": True,
+                "basis_estimated_after_source_noise_prewhitening": bool(
+                    source_prewhitening.get("applied")
+                ),
                 "basis_file": "coil_compression_basis.npy",
                 "basis_sha256": sha256_file(basis_path),
                 "basis_shape": list(basis.shape),
@@ -512,8 +532,18 @@ def _validated_source_contract(
     geometry = manifest.get("geometry")
     compression = manifest.get("coil_compression")
     psf = manifest.get("psf_calibration")
+    prewhitening = manifest.get("noise_prewhitening")
     if not all(isinstance(value, Mapping) for value in (geometry, compression, psf)):
         raise ValueError("Normal manifest lacks geometry, compression, or PSF provenance.")
+    if not isinstance(prewhitening, Mapping):
+        prewhitening = {
+            "version": 0,
+            "status": "legacy_unwhitened_source",
+            "applied": False,
+            "request": {"enabled": False},
+        }
+    else:
+        load_recorded_whitening_matrix(manifest_path.parent, manifest)
     matrix = [int(value) for value in geometry["logical_matrix_ro_lin_par"]]
     oversampling = int(geometry["readout_oversampling_factor"])
     if len(matrix) != 3 or min(matrix) < 1 or oversampling < 1:
@@ -527,6 +557,7 @@ def _validated_source_contract(
             "readout_oversampled": matrix[0] * oversampling,
         },
         "coil_compression": dict(compression),
+        "noise_prewhitening": dict(prewhitening),
         "psf_calibration": {
             "ncalib": int(psf["ncalib"]),
             "nacs": int(psf["nacs"]),

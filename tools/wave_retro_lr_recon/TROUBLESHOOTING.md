@@ -10,6 +10,69 @@ manifest differs, reuse fails closed. Do not edit manifests or copy a CSM
 between counts; rerun with the intended count so preparation and ecalib remain
 matched.
 
+## Noise prewhitening is skipped or an existing tree is rejected
+
+New preparation keeps TWIX noise-scan prewhitening off by default until the
+experimental path is validated on real data. Pass `--noise-prewhitening` to
+enable it explicitly. Inspect
+`normal/bart_inputs/manifest.json` at `noise_prewhitening.status`:
+
+- `applied` means image data and integrated ACS used the recorded transform;
+- `not_applied_no_noise_scan` is the allowed missing-noise fallback;
+- `not_applied_empirically_already_white` means the measured covariance met
+  both recorded identity thresholds; and
+- `not_applied_disabled` means the default-off policy or an explicit disable
+  flag selected no whitening.
+
+`MDH_RAWDATACORRECTION` is recorded but is not interpreted as proof of noise
+whitening because pyMapVBVD does not implement that correction. A populated
+noise scan with non-finite values, too few samples, a singular covariance, an
+ambiguous measurement, or a coil-count mismatch fails instead of falling back.
+Do not delete the matrix or edit the status. Switching between explicitly
+enabled and default/explicitly disabled modes requires a separate clean source tree and a newly matched
+PCA basis and CSM for newly prepared manifests. Historical complete manifests
+without this field remain reusable under the default invocation as unchanged
+legacy unwhitened inputs; they are neither rewritten nor claimed to be
+prewhitened.
+
+If whitening is actually applied, the earlier MPRAGE `3e-2` and GRE `1.5e-2`
+Ncc=24 selections are not automatically promoted to the modified pipeline.
+Normal output is labeled `wavelet_prewhitening_unvalidated` until a new compact
+modality-specific sweep is reviewed.
+
+## Optional N4 correction is unavailable or rejected
+
+N4 is disabled unless `--n4-bias-correction` is supplied to an MPRAGE
+launcher. If requested, `N4BiasFieldCorrection --version` must succeed in the
+active environment. This repository does not bundle ANTs. N4 outputs are
+separate from canonical reconstruction NIfTIs:
+
+```text
+.../n4_bias_corrected_nifti/<branch>/
+  images/
+  metadata/n4_manifest.json
+```
+
+The manifest binds the original magnitude and untouched phase hashes, tool
+binary/version, parameters, temporary estimation-mask identity, output hashes,
+and the numerical `corrected = source / bias` check. A matching completed
+derivative is reused without rerunning ANTs. Changed sources or parameters are
+rejected; do not edit the manifest or manually copy a bias field between
+geometries. The ROVir retrospective launcher performs the supported operation:
+it validates the normal fitted derivative, recreates and hash-checks its
+temporary mask, resamples field and mask in physical space, and records all
+reference and target hashes. A missing normal R3x1 `optimal_wavelet` derivative
+(or normal R1 `fista_r0` derivative) is an error; rerun the normal ROVir
+launcher with `--n4-bias-correction` first.
+The command records `--rescale-intensities 0` because ANTs otherwise rescales
+masked corrected outputs and breaks that exact multiplicative identity.
+Original magnitude/phase files remain unchanged. Collection prefers a complete,
+source-bound N4 magnitude under the unchanged canonical filename and leaves
+phase canonical; `manifest.json` records both sources, the N4 manifest and
+bias-field hashes, and the fitting or shared-field mode. GRE launchers
+intentionally expose no N4 option because separate
+per-echo correction would disturb inter-echo scaling and downstream delta-B0.
+
 If preparation stops before writing `bart_inputs/manifest.json`, the non-empty
 directory is deliberately not resumed because its PCA basis and large CFL
 payloads do not yet have an immutable completion record. Preserve the failed
@@ -250,8 +313,9 @@ hard error and must be reviewed rather than silently bypassed.
 `sample_mprage_retro_lr_recon.sh --rovir` never estimates another transform.
 It does not prepare or reconstruct the standard-coil branches. Instead, it
 validates the canonical normal ROVir image k-space, CSM, PSF, transform, ROI,
-and corrected ACS provenance, then directly prepares all five pure-mask cases
-below `retro/<case>/rovir/`. Standard retro BART inputs are not prerequisites.
+and corrected ACS provenance, then directly prepares the three default
+pure-mask cases below `retro/<case>/rovir/`. Standard retro BART inputs are not
+prerequisites.
 This is intentional for legacy roots whose standard Ncc inputs predate the
 corrected centered image-domain ACS readout crop.
 

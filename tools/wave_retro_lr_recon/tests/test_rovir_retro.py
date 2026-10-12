@@ -15,6 +15,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 
 from wave_retro_lr.bart_io import cfl_record, create_cfl, open_cfl, sha256_file  # noqa: E402
 from wave_retro_lr.rovir_retro import (  # noqa: E402
+    ROVIR_DEFAULT_RETRO_CASES,
     ROVIR_RETRO_CASES,
     ROVIR_REUSED_WAVELET_LAMBDAS,
     prepare_mprage_rovir_retro,
@@ -24,10 +25,10 @@ from wave_retro_lr.sampling import validate_pure_cartesian_image_lattice  # noqa
 
 
 class RovirRetroTests(unittest.TestCase):
-    """Exercise five-case preparation and immutable canonical reuse."""
+    """Exercise reduced defaults, legacy cases, and immutable canonical reuse."""
 
-    def test_prepares_all_cases_and_rejects_changed_transform(self) -> None:
-        """Bind every sibling branch to one normal contract and transform.
+    def test_prepares_defaults_and_explicit_legacy_cases(self) -> None:
+        """Bind default and opt-in sibling cases to one contract and transform.
 
         Returns:
             None.
@@ -36,7 +37,10 @@ class RovirRetroTests(unittest.TestCase):
             root = Path(temporary) / "reconstruction"
             transform = self._write_fixture(root)
             manifests = prepare_mprage_rovir_retro(root)
-            self.assertEqual([entry["case_directory"] for entry in manifests], list(ROVIR_RETRO_CASES))
+            self.assertEqual(
+                [entry["case_directory"] for entry in manifests],
+                list(ROVIR_DEFAULT_RETRO_CASES),
+            )
             for entry in manifests:
                 case = entry["case_directory"]
                 self.assertEqual(entry["coil_processing"]["candidate_id"], "reviewed_union")
@@ -57,8 +61,16 @@ class RovirRetroTests(unittest.TestCase):
                     self.assertEqual(entry["sampling"]["residue_lin_par"], [1, 2])
                 self.assertFalse((root / "retro" / case / "bart_inputs").exists())
             reused = prepare_mprage_rovir_retro(root)
-            self.assertEqual(len(reused), 5)
+            self.assertEqual(len(reused), 3)
             self.assertEqual(ROVIR_REUSED_WAVELET_LAMBDAS["native_r3x2"], 0.035)
+
+            all_cases = prepare_mprage_rovir_retro(
+                root, case_ids=ROVIR_RETRO_CASES
+            )
+            self.assertEqual(
+                [entry["case_directory"] for entry in all_cases],
+                list(ROVIR_RETRO_CASES),
+            )
 
             changed = create_cfl(transform, (1, 1, 1, 2, 2))
             changed[...] = 0
@@ -90,7 +102,7 @@ class RovirRetroTests(unittest.TestCase):
             self._write_json(contract_path, contract)
 
             manifests = prepare_mprage_rovir_retro(root)
-            self.assertEqual(len(manifests), len(ROVIR_RETRO_CASES))
+            self.assertEqual(len(manifests), len(ROVIR_DEFAULT_RETRO_CASES))
             self.assertTrue(
                 all(
                     entry["coil_processing"]["normal_source_manifest_sha256"]

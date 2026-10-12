@@ -36,6 +36,21 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_VIRTUAL_COILS,
         help="Standard-PCA channel count written below OUTPUT_ROOT/vccN.",
     )
+    prewhitening = parser.add_mutually_exclusive_group()
+    prewhitening.add_argument(
+        "--noise-prewhitening",
+        dest="noise_prewhitening",
+        action="store_true",
+        default=False,
+        help="Explicitly enable experimental TWIX noise-scan prewhitening.",
+    )
+    prewhitening.add_argument(
+        "-no-noise-prewhitening",
+        "--no-noise-prewhitening",
+        dest="noise_prewhitening",
+        action="store_false",
+        help="Explicitly retain the current no-prewhitening default.",
+    )
     parser.add_argument(
         "--psf-coefficient-processing",
         choices=("smooth", "sine-line"),
@@ -69,6 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         psf_coefficient_processing=args.psf_coefficient_processing,
         psf_fit_kx_min=args.psf_fit_kx_min,
         psf_fit_kx_max=args.psf_fit_kx_max,
+        noise_prewhitening=args.noise_prewhitening,
     )
     return 0
 

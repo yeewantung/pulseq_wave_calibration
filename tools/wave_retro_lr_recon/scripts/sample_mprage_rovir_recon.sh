@@ -6,8 +6,8 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq
-  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [ROI options] [run options]
+  sample_mprage_rovir_recon.sh inspect TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--noise-prewhitening | --no-noise-prewhitening]
+  sample_mprage_rovir_recon.sh run TWIX.dat OUTPUT_ROOT SEQUENCE.seq --virtual-coils N [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [ROI options] [run options]
 
 ROI options (choose exactly one mode):
   --use-recommended                       requires a prior inspect
@@ -15,6 +15,10 @@ ROI options (choose exactly one mode):
   --null-box-file ROI_BOXES.json          may run directly
 
 Run options:
+  --noise-prewhitening   explicitly enable experimental TWIX noise-scan prewhitening
+  --no-noise-prewhitening
+                         explicitly retain the current no-prewhitening default
+  --n4-bias-correction   create optional magnitude-only ANTs N4 derivatives
   --ecalib-crop VALUE    override normal ecalib crop or the MPRAGE default (0.6)
   -g                     use GPU for BART Wave only
 
@@ -38,6 +42,21 @@ TWIX_FILE="$1"
 RECONSTRUCTION_ROOT="${2%/}"
 SEQUENCE_FILE="$3"
 shift 3
+NOISE_PREWHITENING=false
+N4_BIAS_CORRECTION=false
+FILTERED_ARGS=()
+for argument in "$@"; do
+    if [[ "$argument" == "--noise-prewhitening" ]]; then
+        NOISE_PREWHITENING=true
+    elif [[ "$argument" == "-no-noise-prewhitening" || "$argument" == "--no-noise-prewhitening" ]]; then
+        NOISE_PREWHITENING=false
+    elif [[ "$argument" == "--n4-bias-correction" ]]; then
+        N4_BIAS_CORRECTION=true
+    else
+        FILTERED_ARGS+=("$argument")
+    fi
+done
+set -- "${FILTERED_ARGS[@]}"
 [[ -d "$RECONSTRUCTION_ROOT" ]] || {
     echo "Error: selected reconstruction root does not exist: $RECONSTRUCTION_ROOT" >&2
     exit 2
@@ -51,7 +70,9 @@ echo "ROVir reconstruction root: $RECONSTRUCTION_ROOT"
 
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
-python "$WORKFLOW" prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE" >/dev/null
+PREPARE_INVOCATION_ARGS=(prepare-invocation "$TWIX_FILE" "$RECONSTRUCTION_ROOT" "$SEQUENCE_FILE")
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREPARE_INVOCATION_ARGS+=(--noise-prewhitening); else PREPARE_INVOCATION_ARGS+=(--no-noise-prewhitening); fi
+python "$WORKFLOW" "${PREPARE_INVOCATION_ARGS[@]}" >/dev/null
 # Use the validated canonical source paths recorded by the normal manifest.
 TWIX_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field twix)"
 SEQUENCE_FILE="$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sequence)"
@@ -94,12 +115,18 @@ bart rss 8 $CALIBRATION/physical_set4_coil_images $CALIBRATION/physical_set4_rss
 }
 
 if [[ "$STAGE" == "inspect" ]]; then
+    [[ "$N4_BIAS_CORRECTION" == false ]] || { echo "Error: --n4-bias-correction applies only to run." >&2; exit 2; }
     [[ $# -eq 0 ]] || { echo "Error: inspect accepts exactly TWIX.dat OUTPUT_ROOT SEQUENCE.seq." >&2; exit 2; }
     prepare_calibration_inspection
     echo "Inspect figures: $FEASIBILITY_ROOT/diagnostics/calibration_views"
     echo "ROI recommendation: $FEASIBILITY_ROOT/diagnostics/roi_recommendation/roi_recommendation.json"
     exit 0
 fi
+
+run_optional_n4() {
+    [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+}
 
 VIRTUAL_COILS=""
 ECALIB_CROP=""
@@ -224,6 +251,7 @@ else
         --suffix "BARTWaveMPRAGEROVir${VIRTUAL_COILS}FISTAR0"
 fi
 python "$WORKFLOW" finalize "$RECONSTRUCTION_ROOT" "$VIRTUAL_COILS" >/dev/null
+run_optional_n4 "$NIFTI_OUTPUT" "$ROVIR_ROOT/n4_bias_corrected_nifti/fista_r0"
 if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_class)" == "R3x1" ]]; then
     # Keep the selected R3x1 Wavelet branch visible and resumable in this launcher.
     python "$WORKFLOW" wavelet-context "$RECONSTRUCTION_ROOT" >/dev/null
@@ -270,6 +298,9 @@ if [[ "$(python "$WORKFLOW" context "$RECONSTRUCTION_ROOT" --field sampling_clas
             --suffix "BARTWaveMPRAGENativeR3x1ROVir${VIRTUAL_COILS}OptimalWavelet"
     fi
     python "$WORKFLOW" finalize-wavelet "$RECONSTRUCTION_ROOT" >/dev/null
+    run_optional_n4 \
+        "$WAVELET_NIFTI_OUTPUT" \
+        "$ROVIR_ROOT/n4_bias_corrected_nifti/optimal_wavelet"
 else
     echo "Normal R1 ROVir remains FISTA-r0-only; no R1 Wavelet value is selected."
 fi

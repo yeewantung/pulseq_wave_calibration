@@ -11,6 +11,33 @@ Installing CUDA-enabled PyTorch or CuPy in Python does not make BART
 GPU-enabled. Conversely, a CUDA-enabled BART build does not install the Python
 dependencies. Prepare and validate both layers before using the sample scripts.
 
+The Python layer must use a pyMapVBVD build that exposes populated Siemens
+noise-adjust acquisitions as `measurement["noise"]` and supports
+`noise.unsorted()`. Prewhitening does not depend on a BART whitening command;
+Python estimates the physical-coil covariance and writes the exact transform
+identity before BART ecalib or Wave reconstruction starts.
+
+Optional MPRAGE N4 postprocessing requires the ANTs
+`N4BiasFieldCorrection` executable on `PATH`. It is deliberately not a Python
+package dependency and is not required for preparation, BART reconstruction,
+NIfTI conversion, or collection. Verify an ANTs environment with:
+
+```bash
+command -v N4BiasFieldCorrection
+N4BiasFieldCorrection --version
+```
+
+The sample MPRAGE launchers check this dependency only when
+`--n4-bias-correction` is requested. The reviewed default follows the ANTs
+human-T1w quick-start settings: 3D input, shrink factor 4, 180-mm initial
+B-spline spacing, and four 50-iteration resolution levels. Because supplying a
+mask makes ANTs rescale corrected intensities by default, the wrapper explicitly
+uses `--rescale-intensities 0`; this preserves the exact multiplicative
+`corrected = source / bias` contract. Original NIfTIs are never overwritten.
+ROVir retrospective N4 application does not run ANTs again: it requires the
+completed normal ROVir N4 derivative, validates its source and output hashes,
+and resamples the shared field in physical space.
+
 ## Obtain the source and submodules
 
 From the parent repository root, initialize the pinned Wave-MPRAGE and

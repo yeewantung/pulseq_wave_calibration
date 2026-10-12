@@ -4,12 +4,12 @@ set -euo pipefail
 # Reconstruct the reduced standard MPRAGE retro set or canonical legacy ROVir.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"
-    echo "       [--rovir]  use only the completed canonical root-level ROVir branch"
+    echo "       [--rovir] [--include-legacy-lr]  use the completed canonical root-level ROVir branch"
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
@@ -24,6 +24,9 @@ RECON_PROFILE="fista-only"
 PROFILE_EXPLICIT=false
 USE_GPU=false
 USE_ROVIR=false
+INCLUDE_LEGACY_LR=false
+NOISE_PREWHITENING=false
+N4_BIAS_CORRECTION=false
 PSF_COEFFICIENT_PROCESSING="sine-line"
 PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
 PSF_FIT_Y_MIN=""; PSF_FIT_Y_MAX=""
@@ -40,6 +43,9 @@ select_profile() {
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; VIRTUAL_COILS_EXPLICIT=true; shift 2 ;;
+        --noise-prewhitening) NOISE_PREWHITENING=true; shift ;;
+        -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
+        --n4-bias-correction) N4_BIAS_CORRECTION=true; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; ECALIB_CROP_EXPLICIT=true; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
         --wavelet-only) select_profile wavelet-only; shift ;;
@@ -52,6 +58,7 @@ while (($#)); do
         --psf-fit-z-min) PSF_FIT_Z_MIN="$2"; shift 2 ;;
         --psf-fit-z-max) PSF_FIT_Z_MAX="$2"; shift 2 ;;
         --rovir) USE_ROVIR=true; shift ;;
+        --include-legacy-lr) INCLUDE_LEGACY_LR=true; shift ;;
         -g) USE_GPU=true; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Error: unknown argument $1" >&2; usage >&2; exit 2 ;;
@@ -64,12 +71,14 @@ done
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit 2; }
 
+run_optional_n4() {
+    [[ "$N4_BIAS_CORRECTION" == true ]] || return 0
+    python "$SCRIPT_DIR/apply_mprage_n4_bias_correction.py" "$1" "$2"
+}
+
 if [[ "$USE_ROVIR" == true ]]; then
     [[ "$VIRTUAL_COILS_EXPLICIT" == false ]] || {
         echo "Error: --virtual-coils configures standard PCA and is incompatible with --rovir; use the canonical ROVir count." >&2; exit 2;
-    }
-    [[ "$PROFILE_EXPLICIT" == false ]] || {
-        echo "Error: standard reconstruction-profile flags are incompatible with --rovir." >&2; exit 2;
     }
     [[ "$ECALIB_CROP_EXPLICIT" == false ]] || {
         echo "Error: --rovir reuses its canonical CSM; do not supply --ecalib-crop." >&2; exit 2;
@@ -80,10 +89,16 @@ if [[ "$USE_ROVIR" == true ]]; then
     command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
     python "$SCRIPT_DIR/mprage_rovir_workflow.py" validate-invocation "$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" >/dev/null
     python "$SCRIPT_DIR/mprage_rovir_workflow.py" finalize-existing "$OUTPUT_ROOT" >/dev/null
-    ROVIR_ARGS=("$OUTPUT_ROOT"); [[ "$USE_GPU" == true ]] && ROVIR_ARGS+=(-g)
+    ROVIR_ARGS=("$OUTPUT_ROOT" "--$RECON_PROFILE"); [[ "$USE_GPU" == true ]] && ROVIR_ARGS+=(-g)
+    [[ "$INCLUDE_LEGACY_LR" == true ]] && ROVIR_ARGS+=(--include-legacy-lr)
+    [[ "$N4_BIAS_CORRECTION" == true ]] && ROVIR_ARGS+=(--n4-bias-correction)
     bash "$SCRIPT_DIR/sample_mprage_rovir_retro_recon.sh" "${ROVIR_ARGS[@]}"
     exit 0
 fi
+
+[[ "$INCLUDE_LEGACY_LR" == false ]] || {
+    echo "Error: --include-legacy-lr is available only with --rovir." >&2; exit 2;
+}
 
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
@@ -94,6 +109,7 @@ RETRO_ROOT="$STANDARD_ROOT/retro"
 ECALIB_RECORD="$NORMAL_OUTPUT/ecalib_command.txt"
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREP_ARGS+=(--noise-prewhitening); else PREP_ARGS+=(--no-noise-prewhitening); fi
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then
     PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then
@@ -113,6 +129,7 @@ elif [[ -n "$PSF_FIT_Z_MIN" || -n "$PSF_FIT_Z_MAX" ]]; then
     echo "Error: manual PSF z fitting requires both bounds." >&2; exit 2
 fi
 python "$SCRIPT_DIR/prepare_mprage_retro.py" "${PREP_ARGS[@]}"
+PREWHITENING_APPLIED="$(python -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1], encoding="utf-8")).get("noise_prewhitening", {}).get("applied", False))).lower())' "$NORMAL_INPUTS/manifest.json")"
 
 mkdir -p "$NORMAL_OUTPUT"
 printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$NORMAL_INPUTS/kspace_calib" "$NORMAL_OUTPUT/coil_sens"
@@ -144,13 +161,18 @@ run_case_branch() {
     printf -v expected '%q ' "${command[@]}"; expected="${expected% }"
     state_args=(--run-manifest "$run_manifest" --prepared-manifest "$inputs/manifest.json" --normal-manifest "$NORMAL_INPUTS/manifest.json" --profile "$RECON_PROFILE" --case "$case_id" --branch "$branch" --method "$method" --regularization "$lambda_value" --maps "$maps" --psf "$inputs/psf" --kspace "$inputs/wave_kspace" --image "$image" --command-record "$command_record" --expected-command "$expected" --nifti-directory "$nifti_root")
     status="$(python "$SCRIPT_DIR/manage_standard_reconstruction.py" status "${state_args[@]}")"
-    if [[ "$status" == "complete" ]]; then echo "Reusing completed $case_id/$branch"; return; fi
+    if [[ "$status" == "complete" ]]; then
+        echo "Reusing completed $case_id/$branch"
+        run_optional_n4 "$nifti_root" "$RETRO_ROOT/$case_id/n4_bias_corrected_nifti/$branch"
+        return
+    fi
     if [[ "$status" == "run" ]]; then mkdir -p "$branch_root"; "${command[@]}"; printf '%s\n' "$expected" > "$command_record"; fi
     if [[ "$status" == "run" || "$status" == "convert" ]]; then
         mkdir -p "$nifti_root"
         python "$SCRIPT_DIR/convert_mprage_bart_to_nifti.py" --bart-inputs "$inputs" --image "$image" --twix "$TWIX_FILE" --seq "$SEQUENCE_FILE" --output "$nifti_root" --suffix "$suffix"
     fi
     python "$SCRIPT_DIR/manage_standard_reconstruction.py" record "${state_args[@]}" >/dev/null
+    run_optional_n4 "$nifti_root" "$RETRO_ROOT/$case_id/n4_bias_corrected_nifti/$branch"
 }
 
 for case_id in native_r3x2 lr_y_1p5mm_r3x2; do
@@ -160,11 +182,17 @@ for case_id in native_r3x2 lr_y_1p5mm_r3x2; do
         run_case_branch "$case_id" "$maps" fista_r0 fista 0 "BARTWaveMPRAGE${case_id}FISTAR0"
     fi
     if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then
-        run_case_branch "$case_id" "$maps" wavelet_transferred_vcc12 wavelet "$wavelet_lambda" "BARTWaveMPRAGE${case_id}WaveletTransferredFromVCC12"
+        if [[ "$PREWHITENING_APPLIED" == true ]]; then
+            run_case_branch "$case_id" "$maps" wavelet_prewhitening_unvalidated wavelet "$wavelet_lambda" "BARTWaveMPRAGE${case_id}WaveletPrewhiteningUnvalidated"
+        else
+            run_case_branch "$case_id" "$maps" wavelet_transferred_vcc12 wavelet "$wavelet_lambda" "BARTWaveMPRAGE${case_id}WaveletTransferredFromVCC12"
+        fi
     fi
 done
 
 R3X3_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --ecalib-crop "$ECALIB_CROP" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING" "--$RECON_PROFILE")
+if [[ "$NOISE_PREWHITENING" == true ]]; then R3X3_ARGS+=(--noise-prewhitening); else R3X3_ARGS+=(--no-noise-prewhitening); fi
+[[ "$N4_BIAS_CORRECTION" == true ]] && R3X3_ARGS+=(--n4-bias-correction)
 [[ -n "$PSF_FIT_KX_MIN" ]] && R3X3_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX")
 [[ -n "$PSF_FIT_Y_MIN" ]] && R3X3_ARGS+=(--psf-fit-y-min "$PSF_FIT_Y_MIN" --psf-fit-y-max "$PSF_FIT_Y_MAX")
 [[ -n "$PSF_FIT_Z_MIN" ]] && R3X3_ARGS+=(--psf-fit-z-min "$PSF_FIT_Z_MIN" --psf-fit-z-max "$PSF_FIT_Z_MAX")

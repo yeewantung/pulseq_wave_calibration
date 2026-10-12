@@ -28,6 +28,13 @@ from .retrospective import (
     validate_same_grid_masked_wave,
 )
 from .sampling import pure_cartesian_image_lattice_mask, validate_pure_cartesian_image_lattice
+from .noise_prewhitening import (
+    apply_noise_prewhitening_coillast,
+    combined_prewhitening_and_compression_basis,
+    persist_noise_prewhitening,
+    prepare_noise_prewhitening,
+    prewhitening_request_matches,
+)
 from .standard import (
     DEFAULT_VIRTUAL_COILS,
     prepared_artifact_records,
@@ -647,6 +654,7 @@ def inspect_gre_twix(
     expected_echo_times_s: Sequence[Any],
     expected_matrix_ro_lin_par: Sequence[int],
     expected_fov_mm_ro_lin_par: Sequence[float],
+    measurement_sink: list[Any] | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Validate measured GRE TWIX geometry, echo order, and image sampling.
 
@@ -660,6 +668,9 @@ def inspect_gre_twix(
         expected_matrix_ro_lin_par: Sequence-derived logical matrix.
         expected_fov_mm_ro_lin_par: Sequence-derived logical FOV in
             millimeters.
+        measurement_sink: Optional caller-owned list populated with every
+            parsed mapVBVD measurement so noise validation can reuse the
+            metadata traversal.
 
     Returns:
         Native mask and JSON validation metadata.
@@ -669,6 +680,8 @@ def inspect_gre_twix(
 
     root = mapvbvd.mapVBVD(str(Path(twix_path)), quiet=True)
     measurements = list(root) if isinstance(root, (list, tuple)) else [root]
+    if measurement_sink is not None:
+        measurement_sink[:] = measurements
     candidates = []
     for index, measurement in enumerate(measurements):
         image = getattr(measurement, "image", None)
@@ -1060,6 +1073,7 @@ def _source_matches(
     sequence: Path,
     settings: Mapping[str, Any],
     virtual_coils: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> bool:
     """Check whether a native manifest can be safely reused.
 
@@ -1068,6 +1082,8 @@ def _source_matches(
         twix: Current measured TWIX path.
         sequence: Current sequence path.
         settings: Current PSF-processing request.
+        virtual_coils: Optional requested standard-PCA channel count.
+        noise_prewhitening: Requested automatic-prewhitening mode.
 
     Returns:
         True only when source identities and settings match.
@@ -1087,6 +1103,9 @@ def _source_matches(
         and existing.get("wavelet_selection")
         == gre_wavelet_selection_provenance("native_r3x1", echo_count)
         and _uses_alias_free_coil_calibration(existing)
+        and prewhitening_request_matches(
+            existing, enabled=noise_prewhitening
+        )
         and (
             virtual_coils is None
             or (
@@ -1107,6 +1126,7 @@ def _normal_manifest_matches_reusable_artifact(
     sequence: Path,
     settings: Mapping[str, Any],
     virtual_coils: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> bool:
     """Check whether legacy GRE normal artifacts may be reused unchanged.
 
@@ -1119,12 +1139,18 @@ def _normal_manifest_matches_reusable_artifact(
         twix: Requested measured GRE TWIX path.
         sequence: Requested matching Pulseq sequence path.
         settings: Normalized current PSF-processing request.
+        virtual_coils: Optional requested standard-PCA channel count.
+        noise_prewhitening: Requested automatic-prewhitening mode.
 
     Returns:
         ``True`` when source identity and the narrow compatibility policy match.
     """
 
     source = manifest.get("source", {})
+    if not prewhitening_request_matches(
+        manifest, enabled=noise_prewhitening
+    ):
+        return False
     echoes = manifest.get("echoes")
     if (
         manifest.get("status") != "measured_multi_echo_wave_gre_bart_inputs_ready"
@@ -1692,6 +1718,7 @@ def prepare_normal_gre(
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
+    noise_prewhitening: bool = False,
     reuse: bool = True,
     allow_legacy_artifact_reuse: bool = False,
 ) -> dict[str, Any]:
@@ -1707,6 +1734,8 @@ def prepare_normal_gre(
             explicit ``smooth`` processing.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
+        noise_prewhitening: Automatically use a compatible TWIX noise-adjust
+            scan before standard PCA. Missing noise data are recorded no-ops.
         reuse: Reuse an identity-matched completed input set.
         allow_legacy_artifact_reuse: Permit retrospective callers to reuse
             source-matched legacy measured k-space and PSFs without rewriting
@@ -1728,11 +1757,21 @@ def prepare_normal_gre(
     if manifest_path.is_file() and reuse:
         existing = _load_json(manifest_path)
         exact_match = _source_matches(
-            existing, twix_path, sequence_path, settings, virtual_coils
+            existing,
+            twix_path,
+            sequence_path,
+            settings,
+            virtual_coils,
+            noise_prewhitening,
         )
         artifact_match = allow_legacy_artifact_reuse and (
             _normal_manifest_matches_reusable_artifact(
-                existing, twix_path, sequence_path, settings, virtual_coils
+                existing,
+                twix_path,
+                sequence_path,
+                settings,
+                virtual_coils,
+                noise_prewhitening,
             )
         )
         if not exact_match and not artifact_match:
@@ -1869,11 +1908,13 @@ def prepare_normal_gre(
     cases = gre_cases(native_matrix, native_fov_mm)
     echo_count = int(cfg["Necho"])
     echo_times = tuple(float(value) for value in cfg["TE_s"])
+    twix_measurements: list[Any] = []
     source_mask, twix_metadata = inspect_gre_twix(
         twix_path,
         expected_echo_times_s=echo_times,
         expected_matrix_ro_lin_par=native_matrix,
         expected_fov_mm_ro_lin_par=native_fov_mm,
+        measurement_sink=twix_measurements,
     )
     reference = native._check_integrated_refscan_shape(
         native.load_ref(str(twix_path)),
@@ -1908,11 +1949,23 @@ def prepare_normal_gre(
             "Unexpected logical GRE ACS shape after readout oversampling removal: "
             f"{tuple(integrated_acs.shape)}."
         )
+    prewhitening_plan = prepare_noise_prewhitening(
+        twix_path,
+        physical_coils,
+        enabled=noise_prewhitening,
+        measurements=twix_measurements,
+    )
+    whitened_acs = apply_noise_prewhitening_coillast(
+        integrated_acs, prewhitening_plan.matrix
+    )
     basis, singular_values, retained_energy = native.estimate_cc_matrix_coillast(
-        integrated_acs, ncc=virtual_coils, acs=nacs
+        whitened_acs, ncc=virtual_coils, acs=nacs
     )
     basis_identity = write_pca_basis(
         destination / "coil_compression_basis.npy", basis
+    )
+    image_basis = combined_prewhitening_and_compression_basis(
+        prewhitening_plan.matrix, basis
     )
     image = native._normalize_gre_image_data(native.load_img(str(twix_path)), cfg)
     if int(image.shape[-1]) != physical_coils:
@@ -1922,7 +1975,7 @@ def prepare_normal_gre(
     )
     for echo_index in range(echo_count):
         compressed_compact[:, :, :, echo_index, :] = native.apply_cc_coillast_torch(
-            image[:, :, :, echo_index, :], basis, x_chunk=8
+            image[:, :, :, echo_index, :], image_basis, x_chunk=8
         )
     del image
     compressed = _embed_measured_echoes(
@@ -1934,9 +1987,9 @@ def prepare_normal_gre(
     )
     del compressed_compact
     compressed_acs = native.apply_cc_coillast_torch(
-        integrated_acs, basis, x_chunk=8
+        whitened_acs, basis, x_chunk=8
     ).contiguous()
-    del integrated_acs, integrated_acs_oversampled, reference
+    del integrated_acs, whitened_acs, integrated_acs_oversampled, reference
     if tuple(compressed_acs.shape) != (
         native_matrix[0],
         nacs,
@@ -2042,13 +2095,21 @@ def prepare_normal_gre(
     cfl_names = ["kspace_calib"]
     for echo in echo_records:
         cfl_names.extend((str(echo["wave_kspace"]), str(echo["psf"])))
-    file_names = ["coil_compression_basis.npy", "sampling_mask.npy", "shared_psf_coefficients.npz"]
+    prewhitening_record, prewhitening_files = persist_noise_prewhitening(
+        destination, prewhitening_plan
+    )
+    file_names = [
+        "coil_compression_basis.npy",
+        "sampling_mask.npy",
+        "shared_psf_coefficients.npz",
+        *prewhitening_files,
+    ]
     file_names.extend(str(echo["sequence_trajectory"]) for echo in echo_records)
     output_artifacts = prepared_artifact_records(
         destination, cfl_names, file_names
     )
     manifest = {
-        "format_version": 4,
+        "format_version": 5,
         "status": "measured_multi_echo_wave_gre_bart_inputs_ready",
         "standard_pca_variant": variant_name,
         "echo_count": echo_count,
@@ -2060,10 +2121,15 @@ def prepare_normal_gre(
         "geometry": native_geometry,
         "twix_validation": twix_metadata,
         "sampling": {**twix_metadata["sampling"], "path": str(mask_path)},
+        "noise_prewhitening": prewhitening_record,
         "coil_compression": {
             "physical_coils": physical_coils,
             "virtual_coils": virtual_coils,
-            "basis_source": "one integrated set-4 ACS shared across all echoes",
+            "basis_source": (
+                "one noise-prewhitened integrated set-4 ACS shared across all echoes"
+                if prewhitening_record["applied"]
+                else "one integrated set-4 ACS after recorded whitening no-op"
+            ),
             "basis": basis_identity,
             "retained_energy": energy["selected"],
             "retained_energy_diagnostics": energy,
@@ -2150,6 +2216,7 @@ def prepare_retro_gre(
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> list[dict[str, Any]]:
     """Prepare measured native and LIN-cropped retrospective R3x2 GRE inputs.
 
@@ -2162,6 +2229,8 @@ def prepare_retro_gre(
             explicit ``smooth`` processing.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
+        noise_prewhitening: Require automatic noise prewhitening in the normal
+            source contract; a missing noise scan is a recorded no-op.
 
     Returns:
         Native-R3x2 and LIN-low-resolution-R3x2 manifests.
@@ -2178,8 +2247,18 @@ def prepare_retro_gre(
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
+        noise_prewhitening=noise_prewhitening,
         reuse=True,
         allow_legacy_artifact_reuse=True,
+    )
+    normal_prewhitening = normal.get(
+        "noise_prewhitening",
+        {
+            "version": 0,
+            "status": "legacy_unwhitened_source",
+            "applied": False,
+            "request": {"enabled": False},
+        },
     )
     normal_inputs = root / NORMAL_INPUT_RELATIVE
     normal_echoes = normal.get("echoes")
@@ -2228,6 +2307,8 @@ def prepare_retro_gre(
             if (
                 existing.get("standard_pca_variant") != variant_name
                 or int(existing.get("virtual_coils", 0)) != virtual_coils
+                or existing.get("noise_prewhitening")
+                != normal_prewhitening
                 or existing.get("source_normal_manifest_identity", {}).get("sha256")
                 != sha256_file(normal_inputs / "manifest.json")
             ):
@@ -2284,6 +2365,7 @@ def prepare_retro_gre(
             "status": "direct_measured_wave_gre_crop_bart_inputs_ready",
             "standard_pca_variant": variant_name,
             "virtual_coils": virtual_coils,
+            "noise_prewhitening": normal_prewhitening,
             "source_normal_manifest": str(normal_inputs / "manifest.json"),
             "source_normal_manifest_identity": {
                 "path": str(normal_inputs / "manifest.json"),
@@ -2338,6 +2420,7 @@ def prepare_retro_gre(
             "status": "measured_multi_echo_gre_retro_cases_ready",
             "standard_pca_variant": variant_name,
             "virtual_coils": virtual_coils,
+            "noise_prewhitening": normal_prewhitening,
             "echo_count": echo_count,
             "source_normal_manifest": str(normal_inputs / "manifest.json"),
             "cases": ["native_r3x2", "lin_low_resolution_r3x2"],
@@ -2409,6 +2492,7 @@ def prepare_retro_gre_r3x3(
     psf_coefficient_processing: str = "sine-line",
     psf_fit_kx_min: int | None = None,
     psf_fit_kx_max: int | None = None,
+    noise_prewhitening: bool = False,
 ) -> dict[str, Any]:
     """Prepare only native-grid R3x3 retrospective multi-echo GRE inputs.
 
@@ -2425,6 +2509,8 @@ def prepare_retro_gre_r3x3(
         psf_coefficient_processing: Existing normal PSF processing contract.
         psf_fit_kx_min: Optional inclusive manual sine-line bound.
         psf_fit_kx_max: Optional exclusive manual sine-line bound.
+        noise_prewhitening: Require automatic noise prewhitening in the normal
+            source contract; a missing noise scan is a recorded no-op.
 
     Returns:
         Complete native-R3x3 case-local preparation manifest.
@@ -2445,8 +2531,18 @@ def prepare_retro_gre_r3x3(
         psf_coefficient_processing=psf_coefficient_processing,
         psf_fit_kx_min=psf_fit_kx_min,
         psf_fit_kx_max=psf_fit_kx_max,
+        noise_prewhitening=noise_prewhitening,
         reuse=True,
         allow_legacy_artifact_reuse=True,
+    )
+    normal_prewhitening = normal.get(
+        "noise_prewhitening",
+        {
+            "version": 0,
+            "status": "legacy_unwhitened_source",
+            "applied": False,
+            "request": {"enabled": False},
+        },
     )
     normal_inputs = root / NORMAL_INPUT_RELATIVE
     normal_echoes = normal.get("echoes")
@@ -2505,6 +2601,8 @@ def prepare_retro_gre_r3x3(
             or int(existing.get("echo_count", 0)) != echo_count
             or existing.get("standard_pca_variant") != variant_name
             or int(existing.get("virtual_coils", 0)) != virtual_coils
+            or existing.get("noise_prewhitening")
+            != normal_prewhitening
             or not isinstance(source_normal_identity, Mapping)
             or source_normal_identity.get("sha256")
             != sha256_file(normal_inputs / "manifest.json")
@@ -2596,6 +2694,7 @@ def prepare_retro_gre_r3x3(
         "status": "direct_measured_multi_echo_wave_gre_r3x3_bart_inputs_ready",
         "standard_pca_variant": variant_name,
         "virtual_coils": virtual_coils,
+        "noise_prewhitening": normal_prewhitening,
         "source": normal["source"],
         "source_normal_manifest": str(normal_inputs / "manifest.json"),
         "source_normal_manifest_identity": {

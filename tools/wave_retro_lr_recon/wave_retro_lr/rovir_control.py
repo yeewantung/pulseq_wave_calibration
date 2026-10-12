@@ -15,6 +15,10 @@ import numpy as np
 
 from .bart_io import cfl_record, create_cfl, open_cfl, sha256_file
 from .mprage import _embed_image_stream, load_wave_mprage_helpers
+from .noise_prewhitening import (
+    combined_prewhitening_and_compression_basis,
+    load_recorded_whitening_matrix,
+)
 from .pca_control import (
     PHYSICAL_CALIBRATION_MANIFEST,
     _copy_cfl_exact,
@@ -198,15 +202,26 @@ def prepare_mprage_rovir_comparison(
         raise ValueError("Physical set-4 calibration is not zero outside its ACS.")
 
     # BART forward ccapply conjugates its stored ROVir matrix.
-    projection_basis = np.ascontiguousarray(matrix[:, : counts[-1]].conj())
-    projected_acs = packed.reshape(-1, physical_coils) @ projection_basis
+    rovir_basis = np.ascontiguousarray(matrix[:, : counts[-1]].conj())
+    accepted_manifest = _read_json(accepted_inputs / "manifest.json")
+    source_prewhitening = source.get(
+        "noise_prewhitening", {"version": 0, "applied": False}
+    )
+    whitening_matrix = (
+        None
+        if source_prewhitening.get("version") == 0
+        else load_recorded_whitening_matrix(accepted_inputs, accepted_manifest)
+    )
+    image_projection_basis = combined_prewhitening_and_compression_basis(
+        whitening_matrix, rovir_basis
+    )
+    projected_acs = packed.reshape(-1, physical_coils) @ rovir_basis
     projected_acs = projected_acs.reshape(nro, nacs, nacs, counts[-1])
     del packed
     if not np.isfinite(projected_acs).all():
         raise ValueError("ROVir-projected ACS contains nonfinite values.")
 
     sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
-    accepted_manifest = _read_json(accepted_inputs / "manifest.json")
     if sampling.to_json() != accepted_manifest.get("sampling"):
         raise ValueError("Current TWIX sampling differs from the accepted normal manifest.")
     sampling_value = _sampling_from_json(accepted_manifest["sampling"])
@@ -252,7 +267,7 @@ def prepare_mprage_rovir_comparison(
             del calibration_output
             np.save(
                 staging / "rovir_projection_basis.npy",
-                projection_basis[:, :count],
+                image_projection_basis[:, :count],
                 allow_pickle=False,
             )
             _copy_cfl_exact(source_psf, staging / "psf")
@@ -272,7 +287,9 @@ def prepare_mprage_rovir_comparison(
             readout_oversampled=ro_oversampled,
             physical_coils=physical_coils,
         )
-        basis_tensor = torch.as_tensor(projection_basis, dtype=torch.complex64)
+        basis_tensor = torch.as_tensor(
+            image_projection_basis, dtype=torch.complex64
+        )
         acquired_lin = np.asarray(sampling_value.acquired_lin, dtype=np.int64)
         acquired_par = tuple(int(value) for value in sampling_value.acquired_par)
         for position, par in enumerate(acquired_par, start=1):
@@ -345,8 +362,14 @@ def prepare_mprage_rovir_comparison(
                     "solver_input_manifest": _file_record(rovir_input_manifest_path),
                     "physical_coils": physical_coils,
                     "virtual_coils": count,
-                    "projection_convention": "BART forward ccapply: data @ stored_transform.conj()",
+                    "projection_convention": (
+                        "raw data @ source_noise_prewhitening @ "
+                        "stored_bart_transform.conj()"
+                    ),
                     "basis_applied_identically_to_image_and_acs": True,
+                    "basis_includes_source_noise_prewhitening": bool(
+                        source_prewhitening.get("applied")
+                    ),
                     "projection_basis_file": "rovir_projection_basis.npy",
                     "projection_basis_sha256": sha256_file(basis_path),
                     "projection_basis_shape": [physical_coils, count],

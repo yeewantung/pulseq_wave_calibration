@@ -4,7 +4,7 @@ set -euo pipefail
 # Prepare and resumably reconstruct one count-specific multi-echo GRE variant.
 
 usage() {
-    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--ecalib-crop VALUE] [-g]"
+    echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --wavelet-only)"
     echo "       [--wavelet-lambda VALUE] (one shared value for every echo)"
     echo "       [--psf-coefficient-processing smooth|sine-line] [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
@@ -13,6 +13,7 @@ if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then usage; exit 0; fi
 [[ $# -ge 3 ]] || { usage >&2; exit 2; }
 TWIX_FILE="$1"; OUTPUT_ROOT="${2%/}"; SEQUENCE_FILE="$3"; shift 3
 VIRTUAL_COILS=24; ECALIB_CROP="0.6"; USE_GPU=false
+NOISE_PREWHITENING=false
 RECON_PROFILE="wavelet-only"; PROFILE_EXPLICIT=false
 PSF_COEFFICIENT_PROCESSING="sine-line"; PSF_FIT_KX_MIN=""; PSF_FIT_KX_MAX=""
 GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12="0.015"
@@ -23,6 +24,8 @@ select_profile() { [[ "$PROFILE_EXPLICIT" == false ]] || { echo "Error: reconstr
 while (($#)); do
     case "$1" in
         --virtual-coils) VIRTUAL_COILS="$2"; shift 2 ;;
+        --noise-prewhitening) NOISE_PREWHITENING=true; shift ;;
+        -no-noise-prewhitening|--no-noise-prewhitening) NOISE_PREWHITENING=false; shift ;;
         --ecalib-crop) ECALIB_CROP="$2"; shift 2 ;;
         --reg-full) select_profile reg-full; shift ;;
         --wavelet-only) select_profile wavelet-only; shift ;;
@@ -45,9 +48,11 @@ command -v python >/dev/null || { echo "Error: python is not on PATH." >&2; exit
 command -v bart >/dev/null || { echo "Error: bart is not on PATH; follow SETUP.md." >&2; exit 2; }
 
 PREP_ARGS=("$TWIX_FILE" "$OUTPUT_ROOT" "$SEQUENCE_FILE" --virtual-coils "$VIRTUAL_COILS" --psf-coefficient-processing "$PSF_COEFFICIENT_PROCESSING")
+if [[ "$NOISE_PREWHITENING" == true ]]; then PREP_ARGS+=(--noise-prewhitening); else PREP_ARGS+=(--no-noise-prewhitening); fi
 if [[ -n "$PSF_FIT_KX_MIN" && -n "$PSF_FIT_KX_MAX" ]]; then PREP_ARGS+=(--psf-fit-kx-min "$PSF_FIT_KX_MIN" --psf-fit-kx-max "$PSF_FIT_KX_MAX"); elif [[ -n "$PSF_FIT_KX_MIN" || -n "$PSF_FIT_KX_MAX" ]]; then echo "Error: both kx bounds are required." >&2; exit 2; fi
 if [[ "$PSF_COEFFICIENT_PROCESSING" == smooth && -n "$PSF_FIT_KX_MIN" ]]; then echo "Error: kx bounds require sine-line." >&2; exit 2; fi
 python "$SCRIPT_DIR/prepare_gre_normal.py" "${PREP_ARGS[@]}"
+PREWHITENING_APPLIED="$(python -c 'import json,sys; print(str(bool(json.load(open(sys.argv[1], encoding="utf-8")).get("noise_prewhitening", {}).get("applied", False))).lower())' "$BART_INPUTS/manifest.json")"
 
 mkdir -p "$BART_OUTPUT_ROOT"
 printf -v EXPECTED_ECALIB_COMMAND '%q ' bart ecalib -m 1 -c "$ECALIB_CROP" "$BART_INPUTS/kspace_calib" "$BART_OUTPUT_ROOT/coil_sens"
@@ -89,6 +94,10 @@ if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == fista-only ]]; then ru
 if [[ "$RECON_PROFILE" == reg-full || "$RECON_PROFILE" == wavelet-only ]]; then
     if [[ "$GRE_WAVELET_LAMBDA_EXPLICIT" == true ]]; then
         run_branch wavelet_candidate wavelet "$GRE_SHARED_WAVELET_LAMBDA" BARTWaveGRENormalWaveletCandidate
+    elif [[ "$PREWHITENING_APPLIED" == true ]]; then
+        PREWHITENING_REFERENCE_LAMBDA="$GRE_SHARED_WAVELET_LAMBDA_TRANSFERRED_VCC12"
+        [[ "$VIRTUAL_COILS" == 24 ]] && PREWHITENING_REFERENCE_LAMBDA="$GRE_SHARED_WAVELET_LAMBDA_SELECTED_VCC24"
+        run_branch wavelet_prewhitening_unvalidated wavelet "$PREWHITENING_REFERENCE_LAMBDA" BARTWaveGRENormalWaveletPrewhiteningUnvalidated
     elif [[ "$VIRTUAL_COILS" == 24 ]]; then
         run_branch wavelet_selected_vcc24 wavelet "$GRE_SHARED_WAVELET_LAMBDA_SELECTED_VCC24" BARTWaveGRENormalWaveletSelectedVCC24
     else

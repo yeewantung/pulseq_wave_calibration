@@ -647,7 +647,7 @@ class RovirFeasibilityTests(unittest.TestCase):
                 ),
             ):
                 anchor = prepare_mprage_rovir_source_anchor(
-                    twix, sequence, root
+                    twix, sequence, root, noise_prewhitening=False
                 )
             manifest = json.loads((anchor / "manifest.json").read_text())
             self.assertEqual(manifest["status"], "mprage_rovir_source_anchor_ready")

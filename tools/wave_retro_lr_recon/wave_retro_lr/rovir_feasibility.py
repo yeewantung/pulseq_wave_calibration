@@ -23,6 +23,13 @@ import numpy as np
 
 from .bart_io import cfl_record, create_cfl, open_cfl, read_shape, sha256_file
 from .mprage import COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL
+from .noise_prewhitening import (
+    apply_noise_prewhitening_coillast,
+    load_recorded_whitening_matrix,
+    persist_noise_prewhitening,
+    prepare_noise_prewhitening,
+    prewhitening_request_matches,
+)
 from .rovir import (
     region_correlation_diagnostics,
     region_energy_curve,
@@ -213,6 +220,18 @@ def export_mprage_physical_calibration(
                 f"Packed physical ACS shape {tuple(packed_acs.shape)} is not "
                 f"the required {expected_packed_shape}."
             )
+        source_manifest_path = Path(source["normal_manifest"]["path"])
+        source_manifest = _read_json(source_manifest_path)
+        whitening_matrix = (
+            None
+            if source["noise_prewhitening"].get("version") == 0
+            else load_recorded_whitening_matrix(
+                source_manifest_path.parent, source_manifest
+            )
+        )
+        packed_acs = apply_noise_prewhitening_coillast(
+            packed_acs, whitening_matrix
+        )
         if not torch.isfinite(packed_acs).all():
             raise ValueError("Physical set-4 calibration contains nonfinite samples.")
         acquired_nonzero = int(torch.count_nonzero(packed_acs).item())
@@ -273,6 +292,7 @@ def export_mprage_physical_calibration(
             "physical_set4_kspace": _relocate_cfl_record(
                 installed_record, staging, destination
             ),
+            "noise_prewhitening": source["noise_prewhitening"],
             "bart_launched": False,
             "psf_recalibrated": False,
             "ecalib_launched": False,
@@ -290,6 +310,8 @@ def prepare_mprage_rovir_source_anchor(
     twix: str | Path,
     sequence: str | Path,
     output_root: str | Path,
+    *,
+    noise_prewhitening: bool = False,
 ) -> Path:
     """Prepare minimal source, PSF, and physical-ACS inputs for ROVir.
 
@@ -297,6 +319,8 @@ def prepare_mprage_rovir_source_anchor(
         twix: Measured Wave-MPRAGE TWIX file.
         sequence: Matching Pulseq sequence file.
         output_root: User-selected top-level reconstruction root.
+        noise_prewhitening: Automatically use a compatible TWIX noise-adjust
+            scan. Missing noise data are recorded as a safe no-op.
 
     Returns:
         Installed ``normal/rovir/source_inputs`` directory.
@@ -343,6 +367,7 @@ def prepare_mprage_rovir_source_anchor(
             root,
             include_twix_hash=False,
             source_inputs=destination,
+            noise_prewhitening=noise_prewhitening,
         )
         return destination
     if destination.exists() and any(destination.iterdir()):
@@ -365,8 +390,11 @@ def prepare_mprage_rovir_source_anchor(
         nacs,
         slice_orientation="SAG",
     )
+    twix_measurements: list[Any] = []
     sampling, _ = inspect_twix_sampling(
-        twix_path, matrix_lin_par=(nlin, npar)
+        twix_path,
+        matrix_lin_par=(nlin, npar),
+        measurement_sink=twix_measurements,
     )
     psf_settings = _normalize_psf_coefficient_settings("sine-line", None, None)
     psf_settings.update(_normalize_psf_spatial_settings(None, None, None, None))
@@ -425,6 +453,12 @@ def prepare_mprage_rovir_source_anchor(
     physical_coils = int(reference.shape[-1])
     if reference.shape[0] != ro_oversampled or physical_coils < 1:
         raise ValueError("ROVir source-anchor refscan geometry is incompatible.")
+    prewhitening_plan = prepare_noise_prewhitening(
+        twix_path,
+        physical_coils,
+        enabled=noise_prewhitening,
+        measurements=twix_measurements,
+    )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(
@@ -448,6 +482,9 @@ def prepare_mprage_rovir_source_anchor(
         )
         (staging / "sampling_class.txt").write_text(
             sampling.name + "\n", encoding="utf-8"
+        )
+        prewhitening_record, prewhitening_files = persist_noise_prewhitening(
+            staging, prewhitening_plan
         )
         diagnostic = _ensure_r3x1_psf_coefficient_plot(
             staging,
@@ -519,6 +556,7 @@ def prepare_mprage_rovir_source_anchor(
                 "virtual_coils": None,
                 "method": "not_applied_in_rovir_source_anchor",
             },
+            "noise_prewhitening": prewhitening_record,
             "psf_calibration": {
                 "method": "sequence trajectory plus processed integrated projection a,b,c",
                 **effective_psf_settings,
@@ -560,6 +598,14 @@ def prepare_mprage_rovir_source_anchor(
                     "path": str(destination / "sampling_class.txt"),
                     "size_bytes": (staging / "sampling_class.txt").stat().st_size,
                     "sha256": sha256_file(staging / "sampling_class.txt"),
+                },
+                **{
+                    name: {
+                        "path": str(destination / name),
+                        "size_bytes": (staging / name).stat().st_size,
+                        "sha256": sha256_file(staging / name),
+                    }
+                    for name in prewhitening_files
                 },
             },
             "scientific_actions": {
@@ -2123,6 +2169,7 @@ def _validated_source_contract(
     *,
     include_twix_hash: bool,
     source_inputs: str | Path | None = None,
+    noise_prewhitening: bool | None = None,
 ) -> dict[str, Any]:
     """Bind supplied sources to the accepted normal-input manifest.
 
@@ -2134,6 +2181,8 @@ def _validated_source_contract(
             immutable production export record.
         source_inputs: Optional explicit candidate input directory used while
             selecting among multiple discovered ``vccN`` variants.
+        noise_prewhitening: Optional requested automatic-prewhitening mode.
+            When supplied, legacy or oppositely configured sources are rejected.
 
     Returns:
         Source and acquisition fields required by feasibility preparation.
@@ -2152,6 +2201,12 @@ def _validated_source_contract(
     )
     manifest_path = inputs / "manifest.json"
     manifest = _read_json(manifest_path)
+    if noise_prewhitening is not None and not prewhitening_request_matches(
+        manifest, enabled=noise_prewhitening
+    ):
+        raise ValueError(
+            "Normal source noise-prewhitening state differs from the requested mode."
+        )
     for path in (twix_path, sequence_path):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -2166,8 +2221,20 @@ def _validated_source_contract(
     geometry = manifest.get("geometry")
     compression = manifest.get("coil_compression")
     psf = manifest.get("psf_calibration")
+    prewhitening = manifest.get("noise_prewhitening")
     if not all(isinstance(value, Mapping) for value in (geometry, compression, psf)):
         raise ValueError("Normal manifest lacks geometry, compression, or PSF provenance.")
+    if not isinstance(prewhitening, Mapping):
+        if "noise_prewhitening" in manifest:
+            raise ValueError("Normal manifest has malformed noise-prewhitening provenance.")
+        prewhitening = {
+            "version": 0,
+            "status": "legacy_unwhitened_source",
+            "applied": False,
+            "request": {"enabled": False},
+        }
+    else:
+        load_recorded_whitening_matrix(inputs, manifest)
     matrix = [int(value) for value in geometry["logical_matrix_ro_lin_par"]]
     oversampling = int(geometry["readout_oversampling_factor"])
     if len(matrix) != 3 or min(matrix) < 1 or oversampling < 1:
@@ -2181,6 +2248,7 @@ def _validated_source_contract(
             "readout_oversampled": matrix[0] * oversampling,
         },
         "coil_compression": dict(compression),
+        "noise_prewhitening": dict(prewhitening),
         "psf_calibration": {
             "ncalib": int(psf["ncalib"]),
             "nacs": int(psf["nacs"]),
