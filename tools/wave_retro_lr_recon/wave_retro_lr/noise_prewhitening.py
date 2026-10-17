@@ -186,7 +186,9 @@ def prepare_noise_prewhitening(
     samples -= samples.mean(axis=0, keepdims=True)
     covariance = samples.conj().T @ samples / float(samples.shape[0] - 1)
     covariance = 0.5 * (covariance + covariance.conj().T)
-    diagonal = np.asarray(np.real(np.diag(covariance)), dtype=np.float64)
+    # Copy before in-place covariance normalization so the raw variance
+    # dispersion remains expressed relative to the matching raw mean.
+    diagonal = np.array(np.real(np.diag(covariance)), dtype=np.float64, copy=True)
     mean_variance = float(diagonal.mean())
     if not np.isfinite(mean_variance) or mean_variance <= 0 or np.any(diagonal <= 0):
         raise ValueError("Noise covariance has invalid channel variances.")

@@ -229,6 +229,41 @@ class NoisePrewhiteningTests(unittest.TestCase):
             self.assertTrue(prewhitening_request_matches(manifest, enabled=True))
             self.assertFalse(prewhitening_request_matches(manifest, enabled=False))
 
+    def test_variance_cv_is_invariant_to_global_noise_scale(self) -> None:
+        """Report the same channel-variance CV after global noise rescaling."""
+
+        rng = np.random.default_rng(19)
+        rows = (
+            rng.standard_normal((1600, 3))
+            + 1j * rng.standard_normal((1600, 3))
+        ).astype(np.complex64)
+        rows *= np.asarray([0.8, 1.0, 1.2], dtype=np.float32)
+
+        records = []
+        for scale in (1.0, 1.0e-5):
+            scaled = rows * scale
+            values = np.transpose(scaled.reshape(40, 40, 3), (0, 2, 1))
+            measurement = {
+                "image": _Stream(3, 12),
+                "noise": _Stream(3, 40, values),
+            }
+            plan = self._prepare_with_measurements([measurement], coils=3)
+            records.append(plan.record["noise_scan"])
+
+        expected_variances = np.mean(np.abs(rows - rows.mean(axis=0)) ** 2, axis=0)
+        expected_cv = float(expected_variances.std() / expected_variances.mean())
+        for record in records:
+            self.assertAlmostEqual(
+                record["channel_variance_coefficient_of_variation"],
+                expected_cv,
+                places=6,
+            )
+        self.assertAlmostEqual(
+            records[0]["channel_variance_coefficient_of_variation"],
+            records[1]["channel_variance_coefficient_of_variation"],
+            places=6,
+        )
+
     def test_noise_coil_mismatch_is_not_a_fallback(self) -> None:
         """Reject a populated noise scan whose physical channel count differs."""
 
