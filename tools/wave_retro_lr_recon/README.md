@@ -10,9 +10,9 @@ same three stages:
 3. a separate NIfTI collection step.
 
 The user-facing inputs are a Wave-encoded Siemens TWIX file and its matching
-Pulseq sequence. Python validates and prepares BART inputs. The sample Bash
-scripts show every `bart ecalib` and `bart wave` command explicitly; the Python
-preparation and conversion modules never launch BART.
+Pulseq sequence. Python validates and prepares BART inputs. In the standard
+workflows, sample Bash scripts show every `bart ecalib` and `bart wave` command
+explicitly; the Python preparation and conversion modules never launch BART.
 
 The sections below describe the fully validated MPRAGE workflow first. The GRE
 section then summarizes the corresponding three stages and highlights only the
@@ -41,6 +41,10 @@ Operational failure and recovery guidance for PCA controls, prewhitening, N4,
 and ROVir is in [TROUBLESHOOTING.md](TROUBLESHOOTING.md); the public ROVir
 workflow is documented separately in
 [mprage_rovir_reconstruction.md](docs/mprage_rovir_reconstruction.md).
+
+For reviewed metal-artifact cases only, an independent, default-off CPU
+[MPRAGE CSM support extrapolation workflow](docs/mprage_metal_csm.md) is available.
+It does not change the basic workflow or automatically replace collection images.
 
 ## MPRAGE workflow
 

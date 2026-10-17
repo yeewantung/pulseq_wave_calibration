@@ -1,0 +1,12 @@
+{
+  "roi_voxels": null,
+  "envelope_axis": 2,
+  "base_distance_mm": null,
+  "max_distance_mm": null,
+  "near_sigma_mm": null,
+  "far_sigma_mm": null,
+  "edge_ramp_mm": null,
+  "global_base_extension": false,
+  "minimum_weight": 0.01,
+  "minimum_coherence": 0.2
+}

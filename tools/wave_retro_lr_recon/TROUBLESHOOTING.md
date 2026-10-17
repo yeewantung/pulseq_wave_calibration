@@ -544,3 +544,14 @@ never changes `a/b` to smooth and records any accepted smooth `c` fallback.
 When reporting a problem, retain the coefficient PNG, the normal-input
 `manifest.json`, and the BART command text files. Do not add TWIX paths,
 subject identifiers, or other private machine data to tracked documentation.
+
+## Metal-adjacent hard-cropped sensitivity support
+
+For a reviewed MPRAGE metal case, compare the native CSM support with the dark
+region before changing calibration. Darkness already inside valid support is
+not repaired simply by extending that support. The independent
+[experimental metal CSM workflow](docs/mprage_metal_csm.md) is default-off,
+CPU-only, and requires explicit spatial parameters and a separate output.
+It preserves native vectors, validates all reuse by hashes, and never replaces
+normal/retro/ROVir or collection products. It is not general bias correction,
+automatic metal detection, or ESPIRiT soft-SENSE.
