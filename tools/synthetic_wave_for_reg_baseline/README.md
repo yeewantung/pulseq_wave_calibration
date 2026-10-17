@@ -4,6 +4,10 @@ This directory contains the R3 presentation-optimization, R1 parameter-
 refinement, and cross-dataset transfer workflow for synthetic Wave-MPRAGE
 reconstruction.
 
+All explicit final regularization choices, including project-specific and
+historical selections that must not be conflated, are indexed in
+[`regularization_selection_registry.md`](docs/regularization_selection_registry.md).
+
 ## One-command Ncc=24 Wavelet reassessment
 
 Two one-command launchers run native-R3x1 preparation, GPU reconstruction,

@@ -1,6 +1,6 @@
 # Synthetic-Wave regularization handover
 
-Updated: 2026-10-05, America/New_York
+Updated: 2026-10-12, America/New_York
 
 For measured MPRAGE/GRE implementation, native-R3x3 support, the optional
 MPRAGE ROVir workflow, and the additive standard-plus-ROVir NIfTI collection,
@@ -16,12 +16,169 @@ For the complete reusable workflow from synthetic MPRAGE preparation through
 coarse/fine regularization selection, presentation export, and transfer into
 the measured-data tool, read
 `docs/synthetic_mprage_regularization_pipeline.md`.
+The concise authority for all explicit final lambda decisions is
+`docs/regularization_selection_registry.md`. Consult it before archiving or
+deleting any sweep output.
 
-## Immediate next action
+## Current next action: validate prewhitening, then reassess lambda
+
+Continue this work in a fresh session. Begin read-only and do not run a
+production reconstruction or create an output root until the user confirms
+the exact directory and name. The ordered objectives are:
+
+1. exercise the existing opt-in noise-prewhitening path on one user-confirmed
+   real dataset, debug it if necessary, and preserve both unit-test and
+   real-data evidence;
+2. add a strict, resumable prewhitening contract to the 2026-08-21 synthetic
+   MPRAGE and two-echo GRE VCC24 sweep pipelines;
+3. run source and command-contract tests and present exact commands for user
+   execution; and
+4. only after source review, let the user run fresh prewhitened sweeps and
+   manually review their curves. Do not select a winner automatically.
+
+This user-authorized task supersedes the repository/output cleanup listed as
+the immediate work in Sections 12-13 of `EXPERIMENT_PLAN.md`. Cleanup remains
+deferred; the earlier completed experiments and their decisions remain frozen.
+
+Noise prewhitening remains disabled by default in the standard launchers.
+The experiment must request `--noise-prewhitening` explicitly. Absence of a
+real `MDH_NOISEADJSCAN` is a recorded no-op fallback; an empirically already
+white scan is also a recorded no-op. A populated but malformed, non-finite,
+undersampled, singular, ambiguous, or coil-count-mismatched noise scan is a
+hard error. Do not infer scanner-side whitening from the Siemens raw-data-
+correction bit alone and do not bypass the empirical covariance assessment.
+
+The 2026-08-21 one-shot sweep runners currently perform their own PCA and do
+not consume `wave_retro_lr.noise_prewhitening`. This is an implementation gap:
+do not add a cosmetic flag or reuse an unwhitened PCA basis. The physical-coil
+noise transform must be estimated once, applied before PCA to every image and
+calibration/ACS stream, and bound to the new PCA basis, CSM, references,
+candidate manifests, covariance/transform hashes, geometry, and source
+identity. MPRAGE and GRE must use separate modality-specific transforms. GRE
+must retain one candidate lambda shared across all echoes and preserve
+magnitude, wrapped phase, inter-echo scaling, and delta-B0 evaluation.
+
+### Fresh-session code and execution rules
+
+- Read the workspace `AGENTS.md`, this directory's `AGENTS.md`, this file,
+  `EXPERIMENT_PLAN.md`, and
+  `../wave_retro_lr_recon/TROUBLESHOOTING.md` before editing.
+- Work from `main`, inspect status before editing, and preserve ignored
+  `.local.sh` and `.local.json` files. Keep all real paths exclusively in
+  those ignored files and verify them with `git check-ignore`.
+- On `macha`, activate `cuda133py312-macha` and select the host-compatible
+  BART build exactly as specified by the workspace instructions. Synthetic
+  reconstruction uses GPU BART `-g`; do not silently fall back to CPU.
+- Treat `external/wave-mprage` and `external/wave-gre-flow-comp` as read-only
+  submodules. Do not modify their worktrees or histories.
+- Use fresh, explicitly confirmed output roots for prewhitened preparation and
+  sweeps. Never reuse, overwrite, or relabel the completed unwhitened sweep
+  trees.
+- Make preparation and sweep stages resumable only after exact request,
+  source, transform, PCA, CSM, geometry, command, and artifact-hash matches.
+  Reject mixed whitened/unwhitened reuse.
+- Test software first. Do not launch the real-data reconstruction or sweep on
+  the user's behalf unless that fresh-session request explicitly authorizes
+  it.
+- No metric or composite score may automatically choose the prewhitened
+  lambda. Record the user's later manual choice as a new row in
+  `docs/regularization_selection_registry.md` without replacing the
+  unwhitened decisions.
+
+### Prewhitening and sweep file index
+
+Core implementation and existing integration:
+
+- `../wave_retro_lr_recon/wave_retro_lr/noise_prewhitening.py`: covariance,
+  empirical already-white assessment, transform, application, persistence,
+  hashes, and strict reuse helpers;
+- `../wave_retro_lr_recon/wave_retro_lr/mprage.py` and `gre.py`: apply the
+  physical-coil transform to image data and ACS before standard PCA;
+- `../wave_retro_lr_recon/wave_retro_lr/pca_control.py`: reconstructs the
+  combined physical-to-virtual transform for PCA-control variants;
+- `../wave_retro_lr_recon/wave_retro_lr/rovir_feasibility.py`: ROVir source
+  preparation and whitening provenance;
+- `../wave_retro_lr_recon/scripts/prepare_mprage_normal.py` and
+  `prepare_gre_normal.py`: preparation CLIs; and
+- `../wave_retro_lr_recon/scripts/sample_mprage_normal_recon.sh` and
+  `sample_gre_normal_recon.sh`: explicit opt-in user launchers.
+
+Focused standard-path tests:
+
+- `../wave_retro_lr_recon/tests/test_noise_prewhitening.py`;
+- `../wave_retro_lr_recon/tests/test_mprage_core.py` and
+  `test_mprage_commands.py`;
+- `../wave_retro_lr_recon/tests/test_gre.py`;
+- `../wave_retro_lr_recon/tests/test_rovir_feasibility.py`; and
+- `../wave_retro_lr_recon/tests/test_standard_redesign.py`.
+
+MPRAGE 2026-08-21 sweep integration points:
+
+- `scripts/estimate_coil_compression.py`: estimate PCA from prewhitened
+  calibration samples and persist distinct whitening, PCA, and combined-
+  transform identities;
+- `scripts/assemble_fully_sampled_no_wave_kspace.py` and
+  `scripts/export_bart_calibration_acs.py`: ensure image and ACS use the same
+  physical-coil transform before the matched PCA basis;
+- `scripts/dataset_manifest.py`, `scripts/inspect_product_dataset.py`, and
+  `scripts/validate_dataset_manifest.py`: add and validate the experimental
+  request/provenance contract;
+- `scripts/run_mprage_vcc24_wavelet_sweep.sh` and
+  `scripts/evaluate_mprage_vcc24_wavelet_sweep.py`: one-shot execution and
+  evaluation; and
+- ignored `configs/mprage_vcc24_wavelet_sweep.local.json` and
+  `scripts/run_mprage_vcc24_wavelet_sweep.local.sh`: private inputs and future
+  fresh output root.
+
+GRE 2026-08-21 sweep integration points:
+
+- `scripts/gre_synthetic_wave.py`: configuration validation;
+- `scripts/gre_synthetic_wave_sweep.py`: TWIX inspection, shared two-echo
+  source preparation, PCA, references, reconstruction, and evaluation;
+- `scripts/run_gre_vcc24_wavelet_sweep.sh`: one-shot runner;
+- `tests/test_one_shot_vcc24_sweeps.py`: both one-shot contracts; and
+- ignored `configs/gre_vcc24_wavelet_sweep.local.json` and
+  `scripts/run_gre_vcc24_wavelet_sweep.local.sh`: private inputs and future
+  fresh output root.
+
+### Real-data validation gates
+
+Start with the smallest useful operation. Run the focused unit suites, inspect
+one confirmed TWIX for image/noise stream counts, and prepare one fresh VCC24
+normal input tree with explicit prewhitening before attempting BART ecalib or
+Wave reconstruction. Review the manifest status and verify:
+
+- physical coil counts and noise sample counts match expectations;
+- covariance, condition number, empirical-correlation diagnostics, and all
+  arrays are finite;
+- when applied, `W^H C W` meets the recorded identity-residual tolerance;
+- image data and ACS share the same transform, and PCA was estimated only
+  after whitening;
+- saved covariance, whitening matrix, PCA/combined basis, prepared arrays, and
+  manifest hashes validate on resume; and
+- a changed whitening request or transform cannot reuse the prepared basis,
+  CSM, reference, or reconstruction branch.
+
+Only after these gates pass should a user-run compact prewhitened sweep be
+prepared. Retain the existing MPRAGE `0.01` through `0.05` and GRE `0.005`
+through `0.03` ranges initially so the new curves remain directly comparable
+with the unwhitened reassessments.
+
+### Sweep archival and deletion gate
+
+The completed unwhitened MPRAGE and GRE VCC24 output roots are named only in
+the ignored `configs/vcc24_sweep_output_roots.local.json`. Their final reviewed
+choices and evaluation hashes are now preserved in
+`docs/regularization_selection_registry.md`. Before local deletion, verify the
+cloud copy by hash and retain the generated configurations, manifests, metric
+CSVs, review figures, logs, and selected candidate products. Update the
+private output index with backup identity and verification status. Do not
+delete either local tree merely because the lambda values are tracked in Git.
+
+### Existing unwhitened baseline
 
 The standard-PCA virtual-coil and reconstruction-profile redesign is now
-implemented in `wave_retro_lr_recon` and awaits source review before any
-production run. Read
+implemented in `wave_retro_lr_recon`. Read
 `../wave_retro_lr_recon/docs/virtual_coil_reconstruction_redesign_plan.md`
 for the contract. The standard default is Ncc=24 with an explicit
 `--virtual-coils N` override; every new count is an isolated `vccN` product.
