@@ -44,7 +44,8 @@ If no legacy or `vccN` layout exists, the public `inspect` entry point prepares
 `normal/rovir/source_inputs` directly from the supplied TWIX and sequence. This
 ROVir-only anchor contains geometry, sampling, physical-coil provenance, the
 calibrated PSF and its diagnostics, but no standard PCA basis or standard image
-k-space. The same refscan read is passed directly into physical-ACS export. A
+k-space. REFSCAN metadata are passed directly into physical-ACS export, which
+reads only the SET-4 ACS region instead of all five dense SETs. A
 partial legacy or `vccN` layout is rejected rather than bypassed by bootstrap.
 
 A standard normal CSM, ecalib command, FISTA output, and NIfTI are optional.

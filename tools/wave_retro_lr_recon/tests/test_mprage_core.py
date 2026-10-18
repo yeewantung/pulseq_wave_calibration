@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
+from twix_fakes import FakeImageStream, FakeRefscanStream
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
@@ -1981,7 +1982,10 @@ class PreparationIntegrationTests(unittest.TestCase):
                 ),
                 patch(
                     "wave_retro_lr.mprage.inspect_twix_sampling",
-                    return_value=(pattern, object()),
+                    return_value=(pattern, {
+                        "image": FakeImageStream(Helpers.load_img(None).numpy()),
+                        "refscan": FakeRefscanStream(Helpers.load_ref(None).numpy()),
+                    }),
                 ),
                 patch(
                     "wave_retro_lr.mprage._calibrated_psf_inputs",

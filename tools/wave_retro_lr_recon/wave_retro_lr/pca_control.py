@@ -14,7 +14,8 @@ from typing import Any, Mapping
 import numpy as np
 
 from .bart_io import cfl_record, create_cfl, open_cfl, sha256_file
-from .mprage import _embed_image_stream, load_wave_mprage_helpers
+from .mprage import load_wave_mprage_helpers
+from .twix_streaming import image_reading_identity, load_compressed_image
 from .noise_prewhitening import (
     combined_prewhitening_and_compression_basis,
     load_recorded_whitening_matrix,
@@ -184,19 +185,16 @@ def prepare_mprage_pca_control(
     if tuple(compressed_acs.shape) != (nro, nacs, nacs, ncc):
         raise ValueError("Compressed ACS has unexpected geometry.")
 
-    sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
+    sampling, image_measurement = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
     accepted_manifest = _read_json(accepted_inputs / "manifest.json")
     if sampling.to_json() != accepted_manifest.get("sampling"):
         raise ValueError("Current TWIX sampling differs from the accepted normal manifest.")
 
     print(
-        "Loading the measured image stream and applying the shared PCA basis.",
+        "Reading measured IMAGE partitions and applying the shared PCA basis.",
         file=sys.stderr,
         flush=True,
     )
-    image = native.load_img(os.fspath(twix_path))
-    if image.ndim != 4 or image.shape[-1] != physical_coils:
-        raise ValueError("TWIX image stream has incompatible physical-coil geometry.")
     source_prewhitening = source.get(
         "noise_prewhitening", {"version": 0, "applied": False}
     )
@@ -208,17 +206,10 @@ def prepare_mprage_pca_control(
     image_basis = combined_prewhitening_and_compression_basis(
         whitening_matrix, basis
     )
-    compressed_loaded = native.apply_cc_coillast_torch(
-        image, image_basis, x_chunk=8
+    compressed = load_compressed_image(
+        image_measurement["image"], image_basis,
+        output_shape=(ro_oversampled, nlin, npar), sampling_mask=sampling.mask(),
     )
-    del image
-    compressed = _embed_image_stream(
-        compressed_loaded,
-        _sampling_from_json(accepted_manifest["sampling"]),
-        readout_oversampled=ro_oversampled,
-        physical_coils=ncc,
-    )
-    del compressed_loaded
     for start in range(0, ro_oversampled, 8):
         if not torch.isfinite(compressed[start : start + 8]).all():
             raise ValueError("Compressed image k-space contains nonfinite values.")
@@ -301,6 +292,7 @@ def prepare_mprage_pca_control(
                 "readout_oversampling_factor": readout_oversampling,
             },
             "sampling": sampling.to_json(),
+            "image_reading": image_reading_identity(),
             "sampling_validation": {
                 "acquired_pe_coordinate_count": int(np.count_nonzero(sampling.mask())),
                 "same_mdh_sampling_before_and_after_compression": True,

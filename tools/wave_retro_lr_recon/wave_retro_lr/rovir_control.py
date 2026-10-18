@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sys
 import tempfile
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .bart_io import cfl_record, create_cfl, open_cfl, sha256_file
-from .mprage import _embed_image_stream, load_wave_mprage_helpers
+from .twix_streaming import image_reading_identity, iter_compressed_partitions
 from .noise_prewhitening import (
     combined_prewhitening_and_compression_basis,
     load_recorded_whitening_matrix,
@@ -221,7 +221,7 @@ def prepare_mprage_rovir_comparison(
     if not np.isfinite(projected_acs).all():
         raise ValueError("ROVir-projected ACS contains nonfinite values.")
 
-    sampling, _ = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
+    sampling, image_measurement = inspect_twix_sampling(twix_path, matrix_lin_par=(nlin, npar))
     if sampling.to_json() != accepted_manifest.get("sampling"):
         raise ValueError("Current TWIX sampling differs from the accepted normal manifest.")
     sampling_value = _sampling_from_json(accepted_manifest["sampling"])
@@ -273,56 +273,44 @@ def prepare_mprage_rovir_comparison(
             _copy_cfl_exact(source_psf, staging / "psf")
 
         print(
-            f"Loading measured image k-space once and projecting to ROVir-{counts[-1]}.",
+            f"Reading measured IMAGE partitions and projecting to ROVir-{counts[-1]}.",
             file=sys.stderr,
             flush=True,
         )
-        native = load_wave_mprage_helpers()
-        image = native.load_img(os.fspath(twix_path))
-        if image.ndim != 4 or image.shape[0] != ro_oversampled or image.shape[-1] != physical_coils:
-            raise ValueError("TWIX image stream has incompatible physical-coil geometry.")
-        image = _embed_image_stream(
-            image,
-            sampling_value,
-            readout_oversampled=ro_oversampled,
-            physical_coils=physical_coils,
-        )
-        basis_tensor = torch.as_tensor(
-            image_projection_basis, dtype=torch.complex64
-        )
         acquired_lin = np.asarray(sampling_value.acquired_lin, dtype=np.int64)
         acquired_par = tuple(int(value) for value in sampling_value.acquired_par)
-        for position, par in enumerate(acquired_par, start=1):
-            # Project only acquired PE coordinates and leave the new CFL's
-            # POSIX-zero-filled exterior sparse. Each write retains complete,
-            # contiguous RO vectors instead of small strided RO fragments.
-            physical_block = image[:, acquired_lin, par, :]
-            projected = (
-                physical_block.reshape(-1, physical_coils) @ basis_tensor
-            ).reshape(ro_oversampled, acquired_lin.size, counts[-1])
-            if not torch.isfinite(projected).all():
-                raise ValueError("ROVir-projected image k-space contains nonfinite values.")
-            projected_numpy = projected.numpy()
-            for count in missing:
-                values = projected_numpy[..., :count]
-                # NumPy moves the advanced LIN index ahead of the basic RO
-                # axis, so present values as [acquired LIN, RO, coil].
-                wave_outputs[count][:, acquired_lin, par, :, 0] = np.transpose(
-                    values, (1, 0, 2)
-                )
-                norms_squared[count] += float(np.sum(np.abs(values) ** 2, dtype=np.float64))
-            if (
-                position == 1
-                or position == len(acquired_par)
-                or position % partition_progress_interval == 0
-            ):
-                print(
-                    f"Projected acquired PAR plane {position}/{len(acquired_par)}.",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            del physical_block, projected, projected_numpy
-        del image
+        blocks = iter_compressed_partitions(
+            image_measurement["image"], image_projection_basis,
+            output_shape=(ro_oversampled, nlin, npar), sampling_mask=mask_numpy,
+        )
+        with closing(blocks):
+            for position, (_, lines, par, block) in enumerate(blocks, start=1):
+                # Project only acquired PE coordinates and leave the new CFL's
+                # POSIX-zero-filled exterior sparse. Each write retains complete,
+                # contiguous RO vectors instead of small strided RO fragments.
+                projected = block[:, acquired_lin - lines.start, :]
+                if not torch.isfinite(projected).all():
+                    raise ValueError("ROVir-projected image k-space contains nonfinite values.")
+                projected_numpy = projected.numpy()
+                for count in missing:
+                    values = projected_numpy[..., :count]
+                    # NumPy moves the advanced LIN index ahead of the basic RO
+                    # axis, so present values as [acquired LIN, RO, coil].
+                    wave_outputs[count][:, acquired_lin, par, :, 0] = np.transpose(
+                        values, (1, 0, 2)
+                    )
+                    norms_squared[count] += float(np.sum(np.abs(values) ** 2, dtype=np.float64))
+                if (
+                    position == 1
+                    or position == len(acquired_par)
+                    or position % partition_progress_interval == 0
+                ):
+                    print(
+                        f"Projected acquired PAR plane {position}/{len(acquired_par)}.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                del block, projected, projected_numpy
 
         branches = dict(existing)
         for count in missing:
@@ -380,6 +368,7 @@ def prepare_mprage_rovir_comparison(
                     "readout_oversampling_factor": oversampling,
                 },
                 "sampling": sampling.to_json(),
+                "image_reading": image_reading_identity(),
                 "sampling_validation": {
                     "acquired_pe_coordinate_count": int(np.count_nonzero(mask_numpy)),
                     "same_mdh_sampling_before_and_after_projection": True,

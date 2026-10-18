@@ -9,6 +9,36 @@ same three stages:
 2. retrospective R3x2, low-resolution, and native R3x3 reconstruction; and
 3. a separate NIfTI collection step.
 
+New MPRAGE and GRE preparations read TWIX IMAGE data one PAR partition and
+one echo at a time, applying the existing coil basis immediately. Enabled
+noise prewhitening is included in that same transform. Standard preparation
+retains the virtual-coil grid instead of a complete physical-coil image;
+MPRAGE PCA controls use the same reader, and ROVir controls write projected
+partitions directly to their BART arrays. No new command-line switch is
+needed. Physical samples are checked for finite values and off-mask data
+before projection, and the validated measurement, compact-grid offsets,
+readout oversampling, and echo order are preserved. New manifests record
+the reader policy and source hash under `image_reading`.
+
+REFSCAN also uses explicit selection before payload reads. PSF calibration
+reads only SETs 0/1 on the sin projection plane and SETs 2/3 on the cos plane;
+coil calibration reads only the requested ACS region (the last SET for native
+MPRAGE, the sequence's ACS SET for GRE, and SET 4 for ROVir). Each read selects
+one PAR, preserving singleton axes and the original Fourier-encoded LIN/PAR
+coordinates. This applies the named-label selection approach used by raw-SLI
+2D imports without treating Wave's 3D PAR dimension as a spatial slice index.
+The complete metadata layout and selected samples remain validated. Manifests
+record `refscan_reading`; no dense all-SET reference tensor is constructed.
+
+These changes reduce TWIX read-stage memory, not all reconstruction memory:
+selected ACS/projection arrays, PSF calculations, the virtual-coil grid, and
+later BART work still need RAM. Existing prepared data are not rewritten to
+adopt streaming. MPRAGE's
+whole-file PSF implementation binding also changes with this adapter update;
+strict exact resume can therefore reject older prepared inputs. See the
+[reuse guidance](TROUBLESHOOTING.md#a-legacy-normal-manifest-does-not-match-the-current-psf-implementation)
+before rerunning an existing output tree.
+
 The user-facing inputs are a Wave-encoded Siemens TWIX file and its matching
 Pulseq sequence. Python validates and prepares BART inputs. In the standard
 workflows, sample Bash scripts show every `bart ecalib` and `bart wave` command
@@ -74,6 +104,15 @@ signal into the head. The Wave image k-space and PSF remain on the oversampled
 readout grid required by the forward model. Normal manifests record this
 versioned calibration contract; older stride-derived normal inputs are not
 eligible for exact or compatibility reuse.
+
+Normal, retro LR, and native R3x3 commands can reuse hash-validated materialized
+normal inputs after software updates when the complete recorded PSF request
+matches. Keep the same custom `--psf-fit-kx-*`, `--psf-fit-y-*`, and
+`--psf-fit-z-*` arguments on reruns. The existing PSF and manifest remain
+unchanged; `normal/NORMAL_INPUT_REUSE_ATTESTATION.json` records the historical
+and current implementation identities without relabeling the old fit.
+Different bounds or incomplete custom-fit provenance still fail closed.
+See [PSF reuse troubleshooting](TROUBLESHOOTING.md#reuse-an-accepted-mprage-psf-after-a-software-update).
 
 ### 1. Normal reconstruction
 

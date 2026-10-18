@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+from twix_fakes import FakeRefscanStream
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
@@ -573,12 +574,12 @@ class RovirFeasibilityTests(unittest.TestCase):
                     _: Unused TWIX path.
 
                 Returns:
-                    Physical-coil refscan tensor.
+                    Selective REFSCAN fixture retaining the original labels.
                 """
 
                 nonlocal load_ref_calls
                 load_ref_calls += 1
-                return reference
+                return FakeRefscanStream(reference.numpy())
 
             helper = SimpleNamespace(
                 _resolve_mprage_wave_mode=lambda *args, **kwargs: None,
@@ -605,6 +606,7 @@ class RovirFeasibilityTests(unittest.TestCase):
                 {},
             )
             with (
+                patch("wave_retro_lr.rovir_feasibility.open_refscan", side_effect=load_ref),
                 patch(
                     "wave_retro_lr.mprage.load_wave_mprage_helpers",
                     return_value=helper,
@@ -751,9 +753,10 @@ class RovirFeasibilityTests(unittest.TestCase):
                     remove_readout_oversampling_kspace
                 ),
             )
-            with patch(
-                "wave_retro_lr.mprage.load_wave_mprage_helpers",
-                return_value=helper,
+            with (
+                patch("wave_retro_lr.rovir_feasibility.open_refscan",
+                      return_value=FakeRefscanStream(reference.numpy())),
+                patch("wave_retro_lr.mprage.load_wave_mprage_helpers", return_value=helper),
             ):
                 manifest = export_mprage_physical_calibration(
                     twix, sequence, normal, output

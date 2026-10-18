@@ -8,12 +8,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import nibabel as nib
 import numpy as np
-import torch
+from twix_fakes import FakeImageStream
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
@@ -134,9 +133,6 @@ class RovirControlTests(unittest.TestCase):
                 np.arange(8 * 6 * 4 * 3, dtype=np.float32).reshape(8, 6, 4, 3)
                 + 2j
             ).astype(np.complex64)
-            helper = SimpleNamespace(
-                load_img=lambda _: torch.from_numpy(image_values.copy()),
-            )
             source = {
                 "normal_manifest": file_record(source_inputs / "manifest.json"),
                 "geometry": {
@@ -158,11 +154,7 @@ class RovirControlTests(unittest.TestCase):
                 ),
                 patch(
                     "wave_retro_lr.rovir_control.inspect_twix_sampling",
-                    return_value=(sampling, {}),
-                ),
-                patch(
-                    "wave_retro_lr.rovir_control.load_wave_mprage_helpers",
-                    return_value=helper,
+                    return_value=(sampling, {"image": FakeImageStream(image_values)}),
                 ),
             ):
                 shared = prepare_mprage_rovir_comparison(

@@ -15,6 +15,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .bart_io import create_cfl, open_cfl, read_shape, sha256_file
+from .twix_streaming import image_reading_identity, load_compressed_image
+from .refscan import open_refscan, read_refscan_set, refscan_reading_identity, refscan_shape
 from .core import CaseSpec, Geometry, resolve_case
 from .psf import (
     PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
@@ -342,6 +344,7 @@ def _psf_processing_implementation_identity() -> dict[str, Any]:
         Path("tools/wave_retro_lr_recon/wave_retro_lr/mprage.py"),
         Path("tools/wave_retro_lr_recon/wave_retro_lr/projection_psf.py"),
         Path("tools/wave_retro_lr_recon/wave_retro_lr/psf.py"),
+        Path("tools/wave_retro_lr_recon/wave_retro_lr/refscan.py"),
     )
     files = {}
     for relative_path in relative_paths:
@@ -355,7 +358,8 @@ def _psf_processing_implementation_identity() -> dict[str, Any]:
 def load_wave_mprage_helpers() -> Any:
     """Import focused helpers from the pinned Wave-MPRAGE implementation.
 
-    TWIX I/O and coil compression come directly from upstream ``utils``.
+    Coil compression and legacy TWIX callables come from upstream ``utils``;
+    current preparation uses the local selective IMAGE/REFSCAN readers.
     Calibration, sagittal geometry, and the accepted NIfTI wrapper currently
     live only in the upstream reconstruction module, which is imported as a
     library; its ``main()`` and Python CG-SENSE reconstruction are never called.
@@ -976,9 +980,9 @@ def _fit_projection_coefficients_with_spatial_selection(
     import pypulseq as pp
     import torch
 
-    reference = native.load_ref(str(twix_path))
-    native._check_integrated_refscan_shape(reference, Nacs=nacs, Ncalib=ncalib)
-    readout_oversampled = int(reference.shape[0])
+    reference = open_refscan(twix_path)
+    reference_shape = refscan_shape(reference, nacs=nacs, ncalib=ncalib)
+    readout_oversampled = reference_shape[0]
     sequence = pp.Sequence()
     sequence.read(str(sequence_path), remove_duplicates=False)
     definitions = sequence.definitions
@@ -998,8 +1002,8 @@ def _fit_projection_coefficients_with_spatial_selection(
     y_core_retry_component: dict[str, Any] | None = None
     for wave_mode in ("sin", "cos"):
         if wave_mode == "sin":
-            nowave_kspace = reference[:, :ncalib, :1, 0, :]
-            wave_kspace = reference[:, :ncalib, :1, 1, :]
+            nowave_kspace = read_refscan_set(reference, 0, lin_count=ncalib, par_count=1)
+            wave_kspace = read_refscan_set(reference, 1, lin_count=ncalib, par_count=1)
             delta = trajectory[1, ncalib : 2 * ncalib][ncalib // 2] * fov_y
             y_coordinates = (np.arange(ncalib) - ncalib / 2.0) / ncalib
             z_coordinates = np.array([0.0])
@@ -1009,8 +1013,8 @@ def _fit_projection_coefficients_with_spatial_selection(
             axis_name = "y"
             manual_bounds = fit_y_bounds
         else:
-            nowave_kspace = reference[:, :1, :ncalib, 2, :]
-            wave_kspace = reference[:, :1, :ncalib, 3, :]
+            nowave_kspace = read_refscan_set(reference, 2, lin_count=1, par_count=ncalib)
+            wave_kspace = read_refscan_set(reference, 3, lin_count=1, par_count=ncalib)
             delta = trajectory[0, 3 * ncalib : 4 * ncalib][ncalib // 2] * fov_z
             y_coordinates = np.array([0.0])
             z_coordinates = (np.arange(ncalib) - ncalib / 2.0) / ncalib
@@ -1958,13 +1962,16 @@ def _native_manifest_matches_reusable_artifact(
     psf_settings: Mapping[str, Any],
     virtual_coils: int | None = None,
     noise_prewhitening: bool = False,
+    *,
+    require_matching_settings: bool = False,
 ) -> bool:
-    """Check whether legacy normal artifacts are safe for retrospective reuse.
+    """Check source and request compatibility for materialized normal inputs.
 
     This compatibility path deliberately ignores the current implementation
     digest and lets the already materialized PSF contract take precedence
-    because no coefficient fit or PSF is recomputed. It is available only
-    when the retrospective caller supplies no manual fitting override. The
+    because no coefficient fit or PSF is recomputed. Normal callers require
+    the complete recorded request to match. Retrospective callers can also
+    inherit historical settings when no manual bounds are supplied. The
     attestation preserves an explicitly recorded historical mode, or records
     it as unknown, rather than relabeling the existing artifact.
 
@@ -1975,10 +1982,13 @@ def _native_manifest_matches_reusable_artifact(
         psf_settings: Normalized current request.
         virtual_coils: Optional requested standard-PCA channel count.
         noise_prewhitening: Requested automatic-prewhitening mode.
+        require_matching_settings: Require the complete recorded PSF request,
+            including absent bounds, to match even without manual bounds.
 
     Returns:
         ``True`` only when sources and every recorded scientific setting are
-        compatible with artifact-preserving retrospective reuse.
+        compatible with artifact-preserving reuse. The caller must still
+        validate artifact hashes, geometry, and finite values before reuse.
     """
     if (
         manifest.get("status") != "measured_wave_mprage_bart_inputs_ready"
@@ -2010,12 +2020,31 @@ def _native_manifest_matches_reusable_artifact(
     recorded_mode = recorded_psf.get("coefficient_processing")
     if recorded_mode not in {None, "smooth", "sine-line"}:
         return False
-    if (
+    manual_request = (
         psf_settings.get("requested_fit_kx_range") is not None
         or psf_settings.get("requested_fit_y_range") is not None
         or psf_settings.get("requested_fit_z_range") is not None
-    ):
-        return False
+    )
+    if require_matching_settings or manual_request:
+        # Compare the full request, not just the supplied nonempty bounds.
+        # A selected automatic range is not evidence of a manual request.
+        request_keys = (
+            "coefficient_processing",
+            "fit_range_selection",
+            "requested_fit_kx_range",
+            "fit_kx_range_convention",
+            "spatial_region_selection",
+            "spatial_region_selection_version",
+            "requested_fit_y_range",
+            "requested_fit_z_range",
+            "fit_spatial_range_convention",
+        )
+        return all(
+            key in recorded_psf
+            and key in psf_settings
+            and recorded_psf[key] == psf_settings[key]
+            for key in request_keys
+        )
     return True
 
 
@@ -2131,7 +2160,7 @@ def _write_normal_reuse_attestation(
     artifact_records: Mapping[str, Mapping[str, Any]],
     missing_auxiliary_artifacts: list[str],
 ) -> Path:
-    """Write a non-destructive legacy normal-input reuse attestation.
+    """Record reuse of materialized inputs without changing their provenance.
 
     Args:
         destination: Existing ``normal/bart_inputs`` directory.
@@ -2149,21 +2178,32 @@ def _write_normal_reuse_attestation(
     _write_json(
         path,
         {
-            "format_version": 1,
-            "status": "legacy_normal_inputs_accepted_for_retrospective_reuse",
+            "format_version": 2,
+            "status": "materialized_normal_inputs_accepted_for_reuse",
             "created_at_utc": _utc_now(),
             "source_manifest": {
                 "path": str(manifest_path),
                 "sha256": sha256_file(manifest_path),
                 "modified": False,
             },
-            "reuse_scope": "retrospective preparation only; no PSF refit or recalibration",
+            "reuse_scope": "materialized normal inputs only; no PSF refit or recalibration",
+            "recorded_processing_implementation": recorded_psf.get(
+                "processing_implementation"
+            ),
+            "current_processing_implementation_not_applied": psf_settings.get(
+                "processing_implementation"
+            ),
+            "recorded_psf_request": {
+                key: recorded_psf.get(key)
+                for key in psf_settings
+                if key != "processing_implementation"
+            },
             "recorded_psf_coefficient_processing": (
                 recorded_psf.get("coefficient_processing")
                 if isinstance(recorded_psf, Mapping)
                 else None
             ),
-            "current_default_request_not_applied_to_existing_psf": {
+            "current_request_not_applied_to_existing_psf": {
                 key: psf_settings.get(key)
                 for key in (
                     "coefficient_processing",
@@ -2256,6 +2296,8 @@ def prepare_normal_mprage(
             scan before standard PCA. Missing noise data safely fall back to
             an explicitly recorded no-op; malformed populated noise data fail.
         reuse: Reuse compatible inputs already present under ``output_root``.
+            Identical fully recorded PSF requests may reuse hash-validated
+            materialized inputs across software changes without recalibration.
         allow_legacy_artifact_reuse: Permit retrospective callers to reuse
             source-matched legacy core artifacts without rewriting their
             manifest or recomputing the PSF.
@@ -2302,20 +2344,21 @@ def prepare_normal_mprage(
             virtual_coils,
             noise_prewhitening,
         )
-        artifact_match = allow_legacy_artifact_reuse and (
-            _native_manifest_matches_reusable_artifact(
-                existing,
-                twix_path,
-                sequence_path,
-                psf_settings,
-                virtual_coils,
-                noise_prewhitening,
-            )
+        artifact_match = _native_manifest_matches_reusable_artifact(
+            existing,
+            twix_path,
+            sequence_path,
+            psf_settings,
+            virtual_coils,
+            noise_prewhitening,
+            require_matching_settings=not allow_legacy_artifact_reuse,
         )
         if not exact_match and not artifact_match:
             raise ValueError(
                 "Existing normal BART inputs use different sources, coil-calibration "
-                "processing, or PSF coefficient-processing settings."
+                "processing, or PSF coefficient-processing settings. "
+                "Materialized-input reuse requires matching recorded fit settings; "
+                "changed or unrecorded custom bounds require a new output root."
             )
         validate_standard_pca_manifest(
             existing, virtual_coils, variant_name=variant_name
@@ -2413,7 +2456,7 @@ def prepare_normal_mprage(
             print(
                 "Accepted existing normal artifacts without recalibration; "
                 f"recorded PSF mode: {recorded_mode or 'unknown'}; "
-                f"current defaults were not applied; reuse attestation: {attestation}"
+                f"current calibration code was not applied; reuse attestation: {attestation}"
             )
         print(f"Reusing compatible normal BART inputs: {destination}")
         return existing
@@ -2449,24 +2492,24 @@ def prepare_normal_mprage(
     # Validate the measured Wave image stream independently of the set-4
     # no-Wave reference scan used for sensitivity-map calibration.
     twix_measurements: list[Any] = []
-    sampling, _ = inspect_twix_sampling(
+    sampling, image_measurement = inspect_twix_sampling(
         twix_path,
         matrix_lin_par=(nlin, npar),
         measurement_sink=twix_measurements,
     )
-    # Load and consume the large dense reference before the image stream so
-    # the two physical-coil payloads are never resident together unnecessarily.
-    reference = native.load_ref(str(twix_path))
-    native._check_integrated_refscan_shape(reference, Nacs=nacs, Ncalib=ncalib)
-    physical_coils = int(reference.shape[-1])
-    if reference.shape[0] != ro_os:
+    # Select only ACS from the validated measurement; projection SETs are read
+    # separately during PSF calibration without a dense five-SET allocation.
+    reference = image_measurement["refscan"]
+    reference_shape = refscan_shape(reference, nacs=nacs, ncalib=ncalib)
+    physical_coils = reference_shape[-1]
+    if reference_shape[0] != ro_os:
         raise ValueError(
-            f"Integrated refscan readout {reference.shape[0]} does not match expected {ro_os}."
+            f"Integrated refscan readout {reference_shape[0]} does not match expected {ro_os}."
         )
     validate_virtual_coils(virtual_coils, physical_coils)
     # Compute one shared coil-compression basis from the integrated reference
     # scan, then apply it consistently to image and calibration data.
-    integrated_acs_oversampled = reference[:, :nacs, :nacs, -1, :]
+    integrated_acs_oversampled = read_refscan_set(reference, -1, lin_count=nacs, par_count=nacs)
     if nacs > nlin or nacs > npar:
         raise ValueError(f"Integrated ACS size {nacs} does not fit the PE grid {(nlin, npar)}.")
     integrated_acs = native.remove_readout_oversampling_kspace(
@@ -2505,17 +2548,10 @@ def prepare_normal_mprage(
     )
     del integrated_acs, whitened_acs, integrated_acs_oversampled, reference
 
-    image = native.load_img(str(twix_path))
-    full_image = _embed_image_stream(
-        image,
-        sampling,
-        readout_oversampled=ro_os,
-        physical_coils=physical_coils,
+    compressed = load_compressed_image(
+        image_measurement["image"], image_basis,
+        output_shape=(ro_os, nlin, npar), sampling_mask=sampling.mask(),
     )
-    compressed = native.apply_cc_coillast_torch(
-        full_image, image_basis, x_chunk=8
-    )
-    del full_image, image
     if tuple(compressed_acs.shape) != (nro, nacs, nacs, virtual_coils):
         raise ValueError(f"Unexpected compressed ACS shape: {tuple(compressed_acs.shape)}.")
     if not torch.isfinite(compressed).all() or not torch.isfinite(compressed_acs).all():
@@ -2696,7 +2732,8 @@ def prepare_normal_mprage(
             "twix": _file_identity(twix_path),
             "sequence": _file_identity(sequence_path, include_hash=True),
             "wave_mprage_helpers": (
-                "external/wave-mprage/recon/utils direct TWIX/coil helpers plus focused "
+                "local selective TWIX readers; external/wave-mprage/recon/utils "
+                "coil helpers plus focused "
                 "calibration/orientation callables imported from the reconstruction module; "
                 "Python reconstruction main() not called"
             ),
@@ -2707,6 +2744,8 @@ def prepare_normal_mprage(
             "readout_oversampling_factor": os_factor,
         },
         "sampling": sampling.to_json(),
+        "image_reading": image_reading_identity(),
+        "refscan_reading": refscan_reading_identity(),
         "noise_prewhitening": prewhitening_record,
         "coil_compression": {
             "physical_coils": physical_coils,

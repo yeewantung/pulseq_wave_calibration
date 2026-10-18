@@ -436,8 +436,8 @@ class GreGeometryAndEchoTests(unittest.TestCase):
         self.assertFalse(np.array_equal(psfs[1], psfs[2]))
         self.assertLess(max(float(np.max(np.abs(np.abs(value) - 1))) for value in psfs), 2e-6)
 
-        source = (TOOL_ROOT / "wave_retro_lr" / "gre.py").read_text(encoding="utf-8")
-        self.assertEqual(source.count("native.fit_wave_psf_deviation_from_projection("), 1)
+        source = inspect.getsource(prepare_normal_gre)
+        self.assertEqual(source.count("_fit_gre_projection_coefficients("), 1)
         self.assertIn('"coefficient_fit_count": 1', source)
 
     def test_shared_psf_archive_retains_raw_samples_for_scatter_plot(self) -> None:

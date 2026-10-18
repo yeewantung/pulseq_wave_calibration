@@ -339,31 +339,49 @@ workflow accepts a provenance-only refresh only after the source, solver-input,
 ROI, transform, PSF, geometry, and prepared-array hashes all still match. A
 scientific mismatch remains a hard failure.
 
-## A legacy normal manifest does not match the current PSF implementation
+## Reuse an accepted MPRAGE PSF after a software update
 
-Do not edit an old `normal/bart_inputs/manifest.json` or invent missing
-diagnostic CFL files. Normal preparation remains strict because changing PSF
-processing settings requires a genuinely new preparation. The retrospective
-MPRAGE entry points use a narrower artifact-compatibility path: they require
-the recorded TWIX and sequence identities to match, validate the core BART
-input geometry, require finite PSF/trajectory/coefficient arrays, and retain
-the existing calibrated PSF without recomputation.
+Normal, retrospective LR, and native R3x3 MPRAGE preparation can reuse already
+materialized normal inputs across software-hash changes when the complete
+recorded PSF request matches. This includes the processing mode, automatic or
+manual kx selection, all requested kx/y/z bounds (including absent bounds),
+spatial-selection version, and range conventions. A repeated custom request
+such as `--psf-fit-z-min 18 --psf-fit-z-max 54` can stay in the original normal
+and retro commands. No per-case recovery script or new flag is needed.
+
+This is artifact reuse, not a claim that the current software reproduces the
+historical fit. The original TWIX and sequence identities, corrected
+coil-calibration contract, VCC, and prewhitening request must still match.
+Recorded artifact hashes, core geometry, and finite PSF/trajectory/coefficient
+values are validated before reuse. A changed custom bound, an unrecorded
+request field, or a different range convention is rejected. Matching an old
+automatically selected range does not establish a matching manual request.
 
 When that path is used, the historical manifest and scientific artifacts stay
 unchanged. The tool writes
 `normal/NORMAL_INPUT_REUSE_ATTESTATION.json`, which records the source-manifest
-hash, the historical processing mode (or `unknown`), the validated core
-artifact identities, and any missing nonessential diagnostic CFLs. The command
-also states that the current default was not applied to the existing PSF.
-Source mismatch, incomplete core CFL pairs, incompatible geometry, non-finite
-values, and any newly requested manual fit bounds remain hard failures.
+hash, historical request and implementation hashes, current implementation
+hashes that were not applied, validated core artifact identities, and any
+missing nonessential retrospective diagnostic CFLs. The original manifest,
+PSF, coefficients, and measured k-space remain unchanged, preserving existing
+retro and reconstruction completion bindings. Do not edit historical hashes
+or invent missing diagnostic CFL files. A new calibration requires a new
+user-confirmed output root.
 
 Both retrospective MPRAGE sample scripts already default to automatic
 `sine-line`, so adding `--psf-coefficient-processing sine-line` is normally
-redundant. On a legacy root, that default is a request only: compatibility
-reuse retains the PSF and processing mode recorded by the old preparation.
-Create a new output root if a new sine-line calibration is scientifically
-required.
+redundant. The older retrospective-only compatibility path remains available
+when no manual bounds are supplied: it inherits the historical PSF settings,
+including legacy modes or custom spatial bounds, without applying current
+defaults. Normal preparation requires the matching complete recorded request;
+it does not use this implicit inheritance path.
+
+If `--require-retro` collection then reports missing cases, inspect the first
+preparation or reconstruction error. For example, an interrupted native R3x3
+preparation leaves `native_r3x3` missing even when both R3x2 branches completed.
+Resume the missing work before collection and make the outer batch launcher
+stop on failures. Keep the source checkout unchanged while a multi-stage run
+is active: successive Python processes otherwise see different software hashes.
 
 PSF compatibility does not cover ecalib provenance. The requested
 `--ecalib-crop` must match the command stored in
@@ -381,12 +399,32 @@ commands and does not move TWIX preparation to the GPU.
 
 Integrated refscan arrays can be deceptively large because mapVBVD represents
 the sparse projection and ACS records on a dense five-set grid. For example,
-complex64 shape `(1024, 72, 72, 5, 52)` occupies about 10.3 GiB. The current
-preparation implementation consumes that reference before loading the image,
-checks unmeasured image samples in bounded readout blocks, reuses full-grid
-image storage for masking, and releases the 52-coil image immediately after
-compression. Do not restore whole-volume boolean selections or retain image
-and reference payloads together.
+complex64 shape `(1024, 72, 72, 5, 52)` would occupy about 10.3 GiB. The local
+REFSCAN reader now avoids that allocation: PSF calibration selects SETs 0/1
+on their LIN projection plane and SETs 2/3 on their PAR projection plane;
+coil calibration selects only its ACS SET and leading square ACS region.
+Selection happens before payload reads, one PAR at a time. MPRAGE, GRE, and
+ROVir physical calibration all use this path, without changing the original
+SET labels, coil order, readout oversampling, or Fourier coordinates.
+The local IMAGE reader now requests one PAR and one echo per read, checks
+physical-coil values and sampling support before projection, and immediately
+applies the PCA/ROVir basis with the source whitening transform when enabled.
+Standard MPRAGE/GRE and PCA controls retain only the virtual-coil image grid;
+ROVir writes projected partitions directly to its output arrays. Progress
+messages identify the partitions being read and compressed. No streaming
+switch is required. Do not restore full `image['']` reads or whole-volume
+physical-coil copies.
+
+Selected reference arrays, PSF calculations, and virtual-coil grids still need
+RAM; bounded input reads do not guarantee that every dataset fits. This change
+neither enables prewhitening nor reduces the selected virtual-coil count.
+New preparation manifests record `image_reading` and `refscan_reading`, including
+the local reader hashes. Because `mprage.py` participates in the existing PSF
+software hash binding, this update can invalidate exact reuse of older normal
+inputs even though the fitting algorithm is unchanged. The REFSCAN reader is
+also included in the new MPRAGE PSF implementation identity. The existing strict
+artifact-reuse rules above still apply; do not edit historical hashes or
+overwrite existing variants to bypass them.
 
 After a failure, record available host memory and check the kernel log when
 permitted:

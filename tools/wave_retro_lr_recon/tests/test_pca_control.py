@@ -14,6 +14,7 @@ from unittest.mock import patch
 import nibabel as nib
 import numpy as np
 import torch
+from twix_fakes import FakeImageStream
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(TOOL_ROOT))
@@ -110,7 +111,6 @@ class PcaControlTests(unittest.TestCase):
                     np.array([0.6, 0.9, 1.0]),
                 ),
                 apply_cc_coillast_torch=apply_cc,
-                load_img=lambda _: torch.from_numpy(image_values.copy()),
             )
             source = {
                 "geometry": {
@@ -135,7 +135,7 @@ class PcaControlTests(unittest.TestCase):
                 ),
                 patch(
                     "wave_retro_lr.pca_control.inspect_twix_sampling",
-                    return_value=(sampling, {}),
+                    return_value=(sampling, {"image": FakeImageStream(image_values)}),
                 ),
                 patch(
                     "wave_retro_lr.pca_control.load_wave_mprage_helpers",

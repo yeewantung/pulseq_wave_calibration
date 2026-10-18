@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import numpy as np
+from .refscan import open_refscan, read_refscan_set, refscan_reading_identity, refscan_shape
 
 from .bart_io import cfl_record, create_cfl, open_cfl, read_shape, sha256_file
 from .mprage import COIL_CALIBRATION_READOUT_OVERSAMPLING_REMOVAL
@@ -111,7 +112,7 @@ def export_mprage_physical_calibration(
     feasibility_output_root: str | Path,
     *,
     acs_set_index: int = 4,
-    preloaded_reference: Any | None = None,
+    preloaded_refscan: Any | None = None,
 ) -> dict[str, Any]:
     """Export the physical-coil set-4 refscan on its calibration grid.
 
@@ -123,8 +124,8 @@ def export_mprage_physical_calibration(
         feasibility_output_root: User-approved independent diagnostic root.
         acs_set_index: Zero-based integrated-refscan set index; set 4 is the
             required Wave-MPRAGE sensitivity-calibration stream.
-        preloaded_reference: Optional already loaded physical refscan used by
-            the ROVir-only source bootstrap to avoid a second TWIX read.
+        preloaded_refscan: Optional already opened mapVBVD REFSCAN metadata
+            used by the ROVir-only source bootstrap to avoid reparsing TWIX.
 
     Returns:
         Manifest describing the source and exported BART CFL pair.
@@ -162,9 +163,9 @@ def export_mprage_physical_calibration(
 
         native = load_wave_mprage_helpers()
         reference = (
-            native.load_ref(os.fspath(Path(twix).expanduser().resolve()))
-            if preloaded_reference is None
-            else preloaded_reference
+            open_refscan(Path(twix).expanduser().resolve())
+            if preloaded_refscan is None
+            else preloaded_refscan
         )
         geometry = source["geometry"]
         ro_oversampled = int(geometry["readout_oversampled"])
@@ -173,27 +174,23 @@ def export_mprage_physical_calibration(
         ncalib = int(source["psf_calibration"]["ncalib"])
         nacs = int(source["psf_calibration"]["nacs"])
         physical_coils = int(source["coil_compression"]["physical_coils"])
-        if reference.ndim != 5:
-            raise ValueError(
-                "Integrated refscan must expose an explicit set dimension; "
-                f"found shape {tuple(reference.shape)}."
-            )
+        reference_shape = refscan_shape(reference, nacs=nacs, ncalib=ncalib)
         expected_prefix = (ro_oversampled, ncalib, ncalib)
-        if tuple(reference.shape[:3]) != expected_prefix:
+        if reference_shape[:3] != expected_prefix:
             raise ValueError(
-                f"Integrated refscan shape {tuple(reference.shape)} disagrees with "
+                f"Integrated refscan shape {reference_shape} disagrees with "
                 f"the accepted calibration grid {expected_prefix}."
             )
-        if reference.shape[-1] != physical_coils:
+        if reference_shape[-1] != physical_coils:
             raise ValueError("Refscan physical-coil count disagrees with normal provenance.")
-        if reference.shape[3] <= acs_set_index or acs_set_index != 4:
+        if reference_shape[3] <= acs_set_index or acs_set_index != 4:
             raise ValueError(
                 "ROVir feasibility requires zero-based integrated refscan set 4; "
-                f"found {reference.shape[3]} sets and requested {acs_set_index}."
+                f"found {reference_shape[3]} sets and requested {acs_set_index}."
             )
-        packed_acs_oversampled = reference[
-            :, :nacs, :nacs, acs_set_index, :
-        ].contiguous()
+        packed_acs_oversampled = read_refscan_set(
+            reference, acs_set_index, lin_count=nacs, par_count=nacs
+        )
         del reference
         expected_shape = (logical_readout, ncalib, ncalib, physical_coils)
         expected_oversampled_shape = (
@@ -264,6 +261,7 @@ def export_mprage_physical_calibration(
         manifest = {
             "format_version": 2,
             "status": "mprage_rovir_physical_calibration_ready",
+            "refscan_reading": refscan_reading_identity(),
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "source": source,
             "refscan_contract": {
@@ -446,12 +444,11 @@ def prepare_mprage_rovir_source_anchor(
     if not np.isfinite(calibrated_psf).all():
         raise ValueError("ROVir source-anchor PSF contains nonfinite values.")
 
-    # Determine physical receive-coil count once and retain this refscan for
-    # the immediately following physical-ACS export.
-    reference = native.load_ref(os.fspath(twix_path))
-    native._check_integrated_refscan_shape(reference, Nacs=nacs, Ncalib=ncalib)
-    physical_coils = int(reference.shape[-1])
-    if reference.shape[0] != ro_oversampled or physical_coils < 1:
+    # Reuse REFSCAN metadata for the subsequent selective physical-ACS export.
+    reference = open_refscan(twix_path)
+    reference_shape = refscan_shape(reference, nacs=nacs, ncalib=ncalib)
+    physical_coils = reference_shape[-1]
+    if reference_shape[0] != ro_oversampled or physical_coils < 1:
         raise ValueError("ROVir source-anchor refscan geometry is incompatible.")
     prewhitening_plan = prepare_noise_prewhitening(
         twix_path,
@@ -612,7 +609,8 @@ def prepare_mprage_rovir_source_anchor(
                 "standard_pca_estimated": False,
                 "standard_wave_kspace_loaded_or_written": False,
                 "rovir_psf_calibrated": True,
-                "physical_refscan_loaded_once": True,
+                "physical_acs_read_once": True,
+                "refscan_reading": refscan_reading_identity(),
                 "bart_launched": False,
             },
             "prepared_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -633,7 +631,7 @@ def prepare_mprage_rovir_source_anchor(
         sequence_path,
         root,
         feasibility_root,
-        preloaded_reference=reference,
+        preloaded_refscan=reference,
     )
     del reference
     return destination

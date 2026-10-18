@@ -15,6 +15,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .bart_io import create_cfl, logical_array_sha256, open_cfl, read_shape, sha256_file
+from .twix_streaming import image_reading_identity, load_compressed_image
+from .refscan import read_refscan_set, refscan_reading_identity, refscan_shape
 from .core import PE_MATRIX_MULTIPLE, center_crop_bounds
 from .psf import (
     PSF_COEFFICIENT_FULL_RANGE_PLOT_NAME,
@@ -1709,6 +1711,167 @@ def _write_gre_psf_coefficient_plots(
     return fixed_range_path, full_range_path
 
 
+def _fit_gre_projection_coefficients(
+    *,
+    native: Any,
+    reference: Any,
+    calib_lines: np.ndarray,
+    cfg: Mapping[str, Any],
+    out_folder: Path,
+    file_tag: str,
+    return_diagnostics: bool = False,
+) -> tuple[np.ndarray, ...]:
+    """Fit shared GRE coefficients from selectively read projection SETs.
+
+    The phase convention, Fourier transforms, fitter settings, component sum,
+    quality summaries, and cache names match the pinned upstream function.
+
+    Args:
+        native: Pinned GRE helpers for Fourier transforms and wrapped fitting.
+        reference: Metadata-validated mapVBVD REFSCAN stream.
+        calib_lines: Calibration ADC trajectory with shape
+            ``(3, calibration_lines, Nx_os)``.
+        cfg: Validated GRE sequence and acquisition configuration.
+        out_folder: Destination for raw coefficient arrays.
+        file_tag: Optional filename suffix token.
+        return_diagnostics: Append projection-quality evidence for automatic
+            coefficient processing.
+
+    Returns:
+        Raw ``a``, ``b``, and ``c`` vectors. If ``return_diagnostics`` is true,
+        a fourth evidence mapping is appended. This fit is independent of GRE
+        echo number and is shared by all echo-specific PSFs.
+
+    Raises:
+        ValueError: If reference metadata, samples, or trajectory dimensions
+            violate the calibration contract.
+
+    Side Effects:
+        Reads only the selected projection SETs and writes the same raw
+        coefficient cache arrays as the pinned upstream fitter.
+    """
+    import torch
+
+    nx_os = int(cfg["Nx_os"])
+    ncalib1 = int(cfg["Ncalib1"])
+    ncalib2 = int(cfg["Ncalib2"])
+    shape = refscan_shape(reference, ncalib=ncalib1, nacs=int(cfg["Nacs"]), nsets=int(cfg["Nsets"]))
+    if shape[0] != nx_os:
+        raise ValueError("GRE REFSCAN readout does not match the calibration trajectory.")
+    nproj = ncalib1 * ncalib2
+    if calib_lines.shape != (3, native._calibration_readout_count(cfg), nx_os):
+        raise ValueError(
+            f"Unexpected calibration trajectory shape {calib_lines.shape}; expected "
+            f"{(3, native._calibration_readout_count(cfg), nx_os)}."
+        )
+
+    fov_y = float(cfg["FOVxyz_m"][1])
+    fov_z = float(cfg["FOVxyz_m"][2])
+    yflip = int(cfg["yflip"])
+    zflip = int(cfg["zflip"])
+
+    a_fit_all: list[np.ndarray] = []
+    b_fit_all: list[np.ndarray] = []
+    c_fit_all: list[np.ndarray] = []
+    projection_quality: dict[str, dict[str, np.ndarray]] = {}
+
+    for wave_mode in ("sin", "cos"):
+        print(f"Calibrating {wave_mode} projection")
+        if wave_mode == "sin":
+            kspace_nowave = read_refscan_set(reference, 0, lin_count=ncalib1, par_count=1)
+            kspace_wave = read_refscan_set(reference, 1, lin_count=ncalib1, par_count=1)
+            set_lines = calib_lines[:, nproj : 2 * nproj, :]
+            delta_ky = set_lines[1, ncalib1 // 2]
+            delta_ky_idx = delta_ky * fov_y
+            y_norm_lr = (np.arange(ncalib1) - ncalib1 / 2.0) / ncalib1
+            z_norm_lr = np.array([0.0], dtype=float)
+            psf_np = np.exp(
+                -1j * yflip * 2.0 * np.pi * delta_ky_idx[:, None] * y_norm_lr[None, :]
+            ).astype(np.complex64)[..., None]
+            tag = "projy"
+        else:
+            kspace_nowave = read_refscan_set(reference, 2, lin_count=1, par_count=ncalib1)
+            kspace_wave = read_refscan_set(reference, 3, lin_count=1, par_count=ncalib1)
+            set_lines = calib_lines[:, 3 * nproj : 4 * nproj, :]
+            delta_kz = set_lines[2, ncalib1 // 2]
+            delta_kz_idx = delta_kz * fov_z
+            y_norm_lr = np.array([0.0], dtype=float)
+            z_norm_lr = (np.arange(ncalib1) - ncalib1 / 2.0) / ncalib1
+            psf_np = np.exp(
+                -1j
+                * zflip
+                * 2.0
+                * np.pi
+                * delta_kz_idx[:, None, None]
+                * z_norm_lr[None, None, :]
+            ).astype(np.complex64)
+            tag = "projz"
+
+        psf_theory = torch.from_numpy(psf_np)
+        img_nowave = native.ifft3call(kspace_nowave)
+        img_wave = native.ifft3call(kspace_wave)
+        hyb_nowave = native.fftc_dim(img_nowave, dim=0)
+        hyb_wave = native.fftc_dim(img_wave, dim=0)
+        cross = hyb_wave * torch.conj(hyb_nowave) / (
+            1e-8 + hyb_nowave * torch.conj(hyb_nowave)
+        )
+        psf_real = torch.exp(1j * torch.angle(cross.mean(dim=-1)))
+        psf_diff_lr = torch.angle(torch.conj(psf_theory) * psf_real)
+
+        result = native.fit_wrapped_phase_planes(
+            psf_diff=psf_diff_lr,
+            hyb_nowave=hyb_nowave.clone(),
+            y_norm=y_norm_lr,
+            z_norm=z_norm_lr,
+            mask_mode="combined",
+            mag_abs_floor=0.0,
+            local_window_size=5,
+            coherence_threshold=0.75,
+            use_phase_coherence_weight=True,
+            phase_weight_power=2.0,
+            use_residual_coherence_refinement=True,
+            residual_window_size=5,
+            residual_coherence_threshold=0.75,
+            use_residual_coherence_weight=True,
+            residual_weight_power=2.0,
+            n_irls=10,
+            huber_delta=0.7,
+            return_quality_maps=True,
+            verbose=False,
+        )
+        a_result = torch.as_tensor(result["a_fit_all"]).detach().cpu()
+        b_result = torch.as_tensor(result["b_fit_all"]).detach().cpu()
+        c_result = torch.as_tensor(result["c_fit_all"]).detach().cpu()
+
+        a_fit_all.append(a_result)
+        b_fit_all.append(b_result)
+        c_fit_all.append(c_result)
+        projection_quality[wave_mode] = native._projection_fit_quality_summary(result)
+
+        suffix = native._cache_suffix(file_tag)
+        np.save(out_folder / f"a_fit_all_{tag}{suffix}.npy", a_result.numpy())
+        np.save(out_folder / f"b_fit_all_{tag}{suffix}.npy", b_result.numpy())
+        np.save(out_folder / f"c_fit_all_{tag}{suffix}.npy", c_result.numpy())
+
+    a_fit = a_fit_all[0]
+    b_fit = b_fit_all[1]
+    c_fit = c_fit_all[0] + c_fit_all[1]
+    if return_diagnostics:
+        evidence = {
+            "readout_index": np.arange(nx_os, dtype=np.int64),
+            "projection_quality": projection_quality,
+            "component_projection_sources": {
+                "a": ["sin"],
+                "b": ["cos"],
+                "c": ["sin", "cos"],
+            },
+            "shared_across_echoes": True,
+            "source": "integrated_refscan_projection_calibration",
+        }
+        return a_fit, b_fit, c_fit, evidence
+    return a_fit, b_fit, c_fit
+
+
 def prepare_normal_gre(
     twix: str | Path,
     output_root: str | Path,
@@ -1916,14 +2079,16 @@ def prepare_normal_gre(
         expected_fov_mm_ro_lin_par=native_fov_mm,
         measurement_sink=twix_measurements,
     )
-    reference = native._check_integrated_refscan_shape(
-        native.load_ref(str(twix_path)),
-        ncalib1=int(cfg["Ncalib1"]),
+    image_measurement = twix_measurements[int(twix_metadata["measurement_index"])]
+    reference = image_measurement.refscan
+    reference_shape = refscan_shape(
+        reference,
+        ncalib=int(cfg["Ncalib1"]),
         nacs=int(cfg["Nacs"]),
         nsets=int(cfg["Nsets"]),
     )
-    physical_coils = int(reference.shape[-1])
-    if reference.shape[0] != EXTENDED_READOUT:
+    physical_coils = reference_shape[-1]
+    if reference_shape[0] != EXTENDED_READOUT:
         raise ValueError("GRE refscan readout is incompatible.")
     validate_virtual_coils(virtual_coils, physical_coils)
     # The set-4 integrated ACS determines one coil basis and one native map input.
@@ -1931,9 +2096,9 @@ def prepare_normal_gre(
     os_factor = int(cfg["os_factor"])
     if nacs <= 0 or nacs > min(native_matrix[1:]):
         raise ValueError("GRE ACS matrix does not fit within the native LIN/PAR grid.")
-    integrated_acs_oversampled = reference[
-        :, :nacs, :nacs, int(cfg["ACSSetID"]), :
-    ]
+    integrated_acs_oversampled = read_refscan_set(
+        reference, int(cfg["ACSSetID"]), lin_count=nacs, par_count=nacs
+    )
     integrated_acs = native.remove_readout_oversampling_kspace(
         integrated_acs_oversampled,
         os_factor,
@@ -1967,29 +2132,16 @@ def prepare_normal_gre(
     image_basis = combined_prewhitening_and_compression_basis(
         prewhitening_plan.matrix, basis
     )
-    image = native._normalize_gre_image_data(native.load_img(str(twix_path)), cfg)
-    if int(image.shape[-1]) != physical_coils:
-        raise ValueError("GRE image and integrated refscan coil counts disagree.")
-    compressed_compact = torch.empty(
-        (*image.shape[:-1], virtual_coils), dtype=torch.complex64
-    )
-    for echo_index in range(echo_count):
-        compressed_compact[:, :, :, echo_index, :] = native.apply_cc_coillast_torch(
-            image[:, :, :, echo_index, :], image_basis, x_chunk=8
-        )
-    del image
-    compressed = _embed_measured_echoes(
-        compressed_compact,
-        source_mask,
-        echo_count=echo_count,
-        coil_count=virtual_coils,
-        matrix_ro_lin_par=native_matrix,
-    )
-    del compressed_compact
     compressed_acs = native.apply_cc_coillast_torch(
         whitened_acs, basis, x_chunk=8
     ).contiguous()
-    del integrated_acs, whitened_acs, integrated_acs_oversampled, reference
+    # Release physical ACS arrays before allocating the virtual-coil image grid.
+    del integrated_acs, whitened_acs, integrated_acs_oversampled
+    compressed = load_compressed_image(
+        image_measurement.image, image_basis,
+        output_shape=(EXTENDED_READOUT, *native_matrix[1:], echo_count),
+        sampling_mask=source_mask,
+    )
     if tuple(compressed_acs.shape) != (
         native_matrix[0],
         nacs,
@@ -2007,8 +2159,9 @@ def prepare_normal_gre(
     calibration[:, lin_start : lin_start + nacs, par_start : par_start + nacs, :] = compressed_acs
 
     # Fit a/b/c once, then combine that identity with every echo trajectory.
-    a_raw, b_raw, c_raw, evidence = native.fit_wave_psf_deviation_from_projection(
-        twix_file=twix_path,
+    a_raw, b_raw, c_raw, evidence = _fit_gre_projection_coefficients(
+        native=native,
+        reference=reference,
         calib_lines=calibration_lines,
         cfg=cfg,
         out_folder=destination,
@@ -2120,6 +2273,11 @@ def prepare_normal_gre(
         },
         "geometry": native_geometry,
         "twix_validation": twix_metadata,
+        "image_reading": image_reading_identity(),
+        "refscan_reading": {
+            **refscan_reading_identity(),
+            "projection_adapter_sha256": sha256_file(Path(__file__)),
+        },
         "sampling": {**twix_metadata["sampling"], "path": str(mask_path)},
         "noise_prewhitening": prewhitening_record,
         "coil_compression": {
