@@ -1,8 +1,16 @@
-# Experimental metal CSM support extrapolation
+# Experimental metal CSM support extrapolation (MPRAGE only)
 
 This feature is **disabled by default**, intended only for explicitly reviewed
 metal-artifact cases. It does not detect metal automatically. Without the
 explicit switch, standard reconstruction behavior is unchanged.
+
+**Support scope: standard-PCA MPRAGE only.** GRE normal reconstruction,
+retrospective reconstruction and NIfTI collection do not support this feature.
+Do not pass `--metal-csm-extrapolation` to GRE launchers. Extending it to GRE is
+deferred: MPRAGE pilot results do not establish suitability for GRE, which would
+require separate validation of magnitude, phase, inter-echo scaling and delta-B0
+behavior. This feature extends CSM support; it is not a general metal-artifact
+correction method.
 
 The normal, retro LR, and independent R3x3 MPRAGE launchers accept
 `--metal-csm-extrapolation`. They support standard-PCA native R3x1, native

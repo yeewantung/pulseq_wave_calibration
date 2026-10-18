@@ -42,7 +42,9 @@ and ROVir is in [TROUBLESHOOTING.md](TROUBLESHOOTING.md); the public ROVir
 workflow is documented separately in
 [mprage_rovir_reconstruction.md](docs/mprage_rovir_reconstruction.md).
 
-For reviewed metal-artifact cases only, normal and retro MPRAGE launchers accept
+Metal CSM support extrapolation is **MPRAGE-only**; GRE reconstruction and GRE
+NIfTI collection do not support it. For reviewed metal-artifact cases only,
+normal and retro MPRAGE launchers accept
 the default-off, CPU-only `--metal-csm-extrapolation` switch with a reviewed local
 configuration. Results are isolated in `vccN_metal_csm/`; see
 [MPRAGE CSM support extrapolation](docs/mprage_metal_csm.md).
