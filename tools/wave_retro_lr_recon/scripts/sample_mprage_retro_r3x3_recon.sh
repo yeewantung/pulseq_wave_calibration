@@ -3,9 +3,20 @@ set -euo pipefail
 
 # Prepare and resumably reconstruct only native-grid R3x3 Wave-MPRAGE.
 
+# Explicit metal mode has isolated outputs and a guarded CPU runner.
+for argument in "$@"; do
+    if [[ "$argument" == --metal-csm-extrapolation || "$argument" == --metal-csm-config || "$argument" == --metal-prepare-only ]]; then
+        SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+        if command -v ionice >/dev/null; then exec ionice -c3 python "$SCRIPT_DIR/mprage_metal_pipeline.py" --mode r3x3 "$@"; fi
+        exec python "$SCRIPT_DIR/mprage_metal_pipeline.py" --mode r3x3 "$@"
+    fi
+done
+
 usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
+    echo "       [--metal-csm-extrapolation [--metal-csm-config CASE.local.json] [--metal-prepare-only] [--cpu-threads 1..8]]"
+    echo "       Metal mode: CPU-only, reviewed completed normal baseline required; see docs/mprage_metal_csm.md."
     echo "       [--psf-coefficient-processing smooth|sine-line]"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"

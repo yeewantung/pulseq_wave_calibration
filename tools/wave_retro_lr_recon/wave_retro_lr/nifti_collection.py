@@ -129,9 +129,10 @@ def build_mprage_nifti_collection(
     Side Effects:
         Replaces a prior tool-owned ``nifti_collection`` atomically after the
         complete replacement has been built in a sibling staging directory.
-        Canonical reconstruction outputs are never modified. Complete,
-        source-bound N4 magnitudes are preferred without renaming; phase stays
-        canonical and every selection is recorded in the manifest.
+        Canonical reconstruction outputs are never modified. Complete metal
+        pairs replace matched same-VCC cases without renaming. Otherwise,
+        source-bound N4 magnitudes are preferred and phase stays canonical.
+        Every selection is recorded with exact provenance in the manifest.
     """
     root = Path(output_root).expanduser().resolve()
     if not root.is_dir():
@@ -168,7 +169,9 @@ def build_mprage_nifti_collection(
         isinstance(previous_head_policy, dict)
         and previous_head_policy.get("historical_outputs_removed", False)
     ) or (previous_had_head_mask_outputs and not include_head_mask)
-    variants = _discover_collection_variants(root)
+    variants = _discover_collection_variants(root, previous_manifest=previous_manifest)
+    from .metal_collection import reject_metal_downgrade
+    reject_metal_downgrade(previous_manifest, variants)
     retro_requirement = _validate_collection_retro_requirement(
         variants, required=require_retro
     )
@@ -217,6 +220,9 @@ def build_mprage_nifti_collection(
                 normal_magnitude = _select_normal_magnitude(
                     branch_sources[mask_branch]["normal"]
                 )
+                preferred = variant.get("pair_overrides", {}).get(str(normal_magnitude))
+                if preferred is not None:
+                    normal_magnitude = preferred["nifti"]
                 normal_image, _ = _load_validated_nifti(normal_magnitude)
                 head_mask, mask_details = create_whole_head_mask(
                     normal_image, mask_parameters
@@ -232,6 +238,7 @@ def build_mprage_nifti_collection(
                 mask_details,
                 variant["sampling_class"],
                 include_head_mask=include_head_mask,
+                pair_overrides=variant.get("pair_overrides"),
             )
             subtree["collection_id"] = variant["collection_id"]
             subtree["source_contract"] = variant["source_contract"]
@@ -271,13 +278,17 @@ def build_mprage_nifti_collection(
             int(record["scientific_scope"]["n4_bias_corrected_magnitude_count"])
             for record in variant_records
         )
+        metal_selected_count = sum(
+            record["scientific_scope"]["metal_csm_selected_image_count"]
+            for record in variant_records
+        )
         owned_files = {
             str(path.relative_to(staging)): sha256_file(path)
             for path in sorted(staging.rglob("*"))
             if path.is_file()
         }
         manifest = {
-            "format_version": 7,
+            "format_version": 8,
             "builder": COLLECTION_BUILDER,
             "status": "complete",
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -301,11 +312,18 @@ def build_mprage_nifti_collection(
                     "historical_outputs_removed": historical_head_mask_outputs_removed,
                 },
                 "magnitude_selection": {
-                    "default": "prefer_complete_source_bound_n4_derivative",
+                    "default": "prefer_complete_metal_pair_else_source_bound_n4_magnitude_else_canonical",
                     "filenames_mark_n4": False,
                     "metadata_records_n4_provenance": True,
                     "n4_bias_corrected_magnitude_count": n4_selected_count,
-                    "phase_selection": "canonical_unmodified",
+                    "phase_selection": "matched_metal_phase_when_selected_else_canonical_unmodified",
+                },
+                "metal_csm_selection": {
+                    "default": "prefer_complete_same_vcc_case_method",
+                    "selected_image_count": metal_selected_count,
+                    "existing_collection_names_preserved": True,
+                    "source_reconstructions_modified": False,
+                    "ordinary_n4_not_applied_to_metal": True,
                 },
             },
             "retro_requirement": retro_requirement,
@@ -336,13 +354,14 @@ def build_mprage_nifti_collection(
             manifest["head_mask"] = legacy["head_mask"]
             manifest["scientific_scope"] = {
                 "canonical_reconstruction_outputs_modified": False,
-                "canonical_phase_niftis_copied_byte_for_byte": True,
+                "canonical_phase_niftis_copied_byte_for_byte": metal_selected_count == 0,
                 "canonical_magnitude_niftis_copied_byte_for_byte": (
-                    n4_selected_count == 0
+                    n4_selected_count == 0 and metal_selected_count == 0
                 ),
-                "original_niftis_copied_byte_for_byte": n4_selected_count == 0,
+                "original_niftis_copied_byte_for_byte": n4_selected_count == 0 and metal_selected_count == 0,
                 "n4_bias_corrected_magnitudes_preferred_when_available": True,
                 "n4_bias_corrected_magnitude_count": n4_selected_count,
+                "metal_csm_selected_image_count": metal_selected_count,
                 "head_mask_outputs_generated": include_head_mask,
                 "same_whole_head_mask_applied_to_all_branches": include_head_mask,
                 "standard_variants_and_rovir_are_additive": True,
@@ -356,11 +375,12 @@ def build_mprage_nifti_collection(
     return manifest
 
 
-def _discover_collection_variants(root: Path) -> list[dict[str, Any]]:
+def _discover_collection_variants(root: Path, previous_manifest: dict | None = None) -> list[dict[str, Any]]:
     """Discover legacy, count-specific, and canonical ROVir source trees.
 
     Args:
         root: User-selected reconstruction root.
+        previous_manifest: Validated prior collection, used to retain names after source pruning.
     Returns:
         Ordered source-tree records ready for independent materialization.
 
@@ -419,7 +439,8 @@ def _discover_collection_variants(root: Path) -> list[dict[str, Any]]:
     for count, directory in sorted(count_variants):
         normal_manifest = directory / "normal" / "bart_inputs" / "manifest.json"
         normal_nifti = directory / "normal" / "nifti"
-        if not normal_manifest.is_file() or not normal_nifti.is_dir():
+        metal_present = (root/f"vcc{count}_metal_csm").is_dir()
+        if not normal_manifest.is_file() or (not normal_nifti.is_dir() and not metal_present):
             continue
         payload = _load_json(normal_manifest)
         compression = validate_standard_pca_manifest(
@@ -435,6 +456,7 @@ def _discover_collection_variants(root: Path) -> list[dict[str, Any]]:
             require_retro=False,
             required_case_ids=STANDARD_DEFAULT_RETRO_CASES,
             include_rovir=False,
+            allow_missing_normal=metal_present,
         )
         run_manifests = _validate_standard_run_manifests(directory, sources, count)
         variants.append(
@@ -478,6 +500,11 @@ def _discover_collection_variants(root: Path) -> list[dict[str, Any]]:
                 },
             }
         )
+    from .metal_collection import merge_metal
+    merge_metal(root, variants, previous_manifest)
+    for variant in variants:
+        if not any("normal" in cases for cases in variant["sources"].values()):
+            raise FileNotFoundError(f"No complete normal branch for {variant['collection_id']}")
     if not variants:
         raise FileNotFoundError(
             f"No complete legacy, vccN, or canonical ROVir MPRAGE outputs found in {root}."
@@ -857,6 +884,7 @@ def _discover_case_sources(
     require_retro: bool,
     required_case_ids: tuple[str, ...] = REQUIRED_RETRO_CASES,
     include_rovir: bool = True,
+    allow_missing_normal: bool = False,
 ) -> dict[str, dict[str, list[tuple[Path, Path]]]]:
     """Discover complete canonical NIfTI/JSON pairs for available cases.
 
@@ -868,6 +896,8 @@ def _discover_case_sources(
         required_case_ids: Retrospective cases required independently of
             normal reconstruction branch names.
         include_rovir: Whether to discover canonical root-level ROVir siblings.
+        allow_missing_normal: Defer the normal requirement until validated metal
+            overlay. Used only for a count with a metal derivative directory.
 
     Returns:
         Mapping from every discovered reconstruction branch and case label to
@@ -896,7 +926,7 @@ def _discover_case_sources(
     standard_normal_branches = {
         branch for branch, cases in sources.items() if "normal" in cases
     }
-    if not standard_normal_branches:
+    if not standard_normal_branches and not allow_missing_normal:
         raise FileNotFoundError(
             f"No normal canonical NIfTI files found below: {normal_root}"
         )
@@ -1290,6 +1320,7 @@ def _materialize_collection(
     sampling_class: str,
     *,
     include_head_mask: bool,
+    pair_overrides: dict | None = None,
 ) -> dict[str, Any]:
     """Write one complete collection into an empty staging directory.
 
@@ -1307,6 +1338,7 @@ def _materialize_collection(
         sampling_class: Measured normal sampling class controlling available
             reconstruction branches.
         include_head_mask: Whether to write the mask and masked derivatives.
+        pair_overrides: Validated metal selections keyed by canonical NIfTI path.
 
     Returns:
         JSON-native manifest describing all copied and masked files.
@@ -1374,6 +1406,7 @@ def _materialize_collection(
                     masked_dir,
                     head_mask,
                     mask_record,
+                    override=(pair_overrides or {}).get(str(nifti)),
                 )
                 for nifti, sidecar in pairs
             ]
@@ -1392,25 +1425,31 @@ def _materialize_collection(
         for record in case["files"]
         if record["collection_source_selection"] == "n4_bias_corrected_magnitude"
     )
+    metal_selected_count = sum(
+        record["collection_source_selection"] == "metal_csm"
+        for case in case_records for record in case["files"]
+    )
 
     return {
-        "format_version": 6,
+        "format_version": 7,
         "builder": COLLECTION_BUILDER,
         "status": "complete",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "scientific_scope": {
             "canonical_reconstruction_outputs_modified": False,
             "normal_sampling_class": sampling_class,
-            "canonical_phase_niftis_copied_byte_for_byte": True,
+            "canonical_phase_niftis_copied_byte_for_byte": metal_selected_count == 0,
             "canonical_magnitude_niftis_copied_byte_for_byte": (
-                n4_selected_count == 0
+                n4_selected_count == 0 and metal_selected_count == 0
             ),
-            "original_niftis_copied_byte_for_byte": n4_selected_count == 0,
+            "original_niftis_copied_byte_for_byte": n4_selected_count == 0 and metal_selected_count == 0,
             "n4_bias_corrected_magnitudes_preferred_when_available": True,
             "n4_bias_corrected_magnitude_count": n4_selected_count,
+            "metal_csm_selected_image_count": metal_selected_count,
+            "selected_niftis_copied_byte_for_byte": True,
             "head_mask_outputs_generated": include_head_mask,
             "whole_head_mask_source": (
-                "normal canonical magnitude" if include_head_mask else None
+                "recorded normal magnitude" if include_head_mask else None
             ),
             "whole_head_mask_source_branch": mask_branch,
             "same_whole_head_mask_applied_to_all_branches": include_head_mask,
@@ -1580,6 +1619,8 @@ def _materialize_pair(
     masked_dir: Path | None,
     head_mask: nib.Nifti1Image | None,
     mask_record: dict[str, Any],
+    *,
+    override: dict | None = None,
 ) -> dict[str, Any]:
     """Copy one preferred-source pair and write its masked derivative.
 
@@ -1592,6 +1633,7 @@ def _materialize_pair(
         masked_dir: Optional destination leaf for masked derivatives.
         head_mask: Optional normal-grid binary whole-head mask.
         mask_record: Native mask provenance or omission record.
+        override: Validated matched metal pair, bypassing ordinary N4 preference.
 
     Returns:
         JSON-native provenance and hash record for the copied and masked files.
@@ -1600,19 +1642,36 @@ def _materialize_pair(
         Copies the selected NIfTI/JSON pair under the canonical names and
         optionally writes one masked pair.
     """
-    selected_nifti, selected_sidecar, selection = _select_collection_source(
-        source_nifti, source_sidecar, output_root
-    )
+    if override is None:
+        selected_nifti, selected_sidecar, selection = _select_collection_source(
+            source_nifti, source_sidecar, output_root
+        )
+    else:
+        from .metal_collection import checked_file
+        selected_nifti = checked_file(override["expected_nifti"], output_root)
+        selected_sidecar = checked_file(override["expected_sidecar"], output_root)
+        selection = override
     image, data = _load_validated_nifti(selected_nifti)
+    if override is not None and source_nifti != selected_nifti:
+        canonical, _ = _load_validated_nifti(source_nifti)
+        if canonical.shape != image.shape or not np.allclose(canonical.affine, image.affine, rtol=0, atol=1e-6):
+            raise ValueError("Metal replacement geometry differs from the canonical image")
     source_metadata = _load_json(selected_sidecar)
-    original_nifti = original_dir / source_nifti.name
-    original_sidecar = original_dir / source_sidecar.name
+    output_name = override.get("output_name", source_nifti.name) if override is not None else source_nifti.name
+    if Path(output_name).name != output_name or not output_name.endswith(".nii.gz"):
+        raise ValueError("Invalid preferred collection output filename")
+    original_nifti = original_dir / output_name
+    original_sidecar = original_dir / (output_name.removesuffix(".nii.gz")+".json")
     shutil.copy2(selected_nifti, original_nifti)
     shutil.copy2(selected_sidecar, original_sidecar)
     if sha256_file(original_nifti) != sha256_file(selected_nifti):
         raise RuntimeError(f"Selected NIfTI copy hash mismatch: {selected_nifti}")
     if sha256_file(original_sidecar) != sha256_file(selected_sidecar):
         raise RuntimeError(f"Selected JSON copy hash mismatch: {selected_sidecar}")
+    if override is not None:
+        if (sha256_file(original_nifti) != override["expected_nifti"]["sha256"]
+                or sha256_file(original_sidecar) != override["expected_sidecar"]["sha256"]):
+            raise ValueError("Metal sources changed during collection copy")
 
     record = {
         "source_nifti": str(source_nifti.relative_to(output_root)),
@@ -1625,6 +1684,7 @@ def _materialize_pair(
         "collected_source_json": str(selected_sidecar.relative_to(output_root)),
         "collected_source_json_sha256": sha256_file(selected_sidecar),
         "n4_provenance": selection.get("n4_provenance"),
+        "metal_csm_provenance": selection.get("metal_csm_provenance"),
         "original_nifti": str(original_nifti.relative_to(staging)),
         "original_nifti_sha256": sha256_file(original_nifti),
         "original_json": str(original_sidecar.relative_to(staging)),
@@ -1640,8 +1700,8 @@ def _materialize_pair(
     header = image.header.copy()
     header.set_data_dtype(image.get_data_dtype())
     masked_image = nib.Nifti1Image(masked_data.astype(image.get_data_dtype()), image.affine, header)
-    masked_nifti = masked_dir / source_nifti.name
-    masked_sidecar = masked_dir / source_sidecar.name
+    masked_nifti = masked_dir / original_nifti.name
+    masked_sidecar = masked_dir / original_sidecar.name
     nib.save(masked_image, str(masked_nifti))
     masked_metadata = dict(source_metadata)
     masked_metadata.update(

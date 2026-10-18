@@ -42,9 +42,13 @@ and ROVir is in [TROUBLESHOOTING.md](TROUBLESHOOTING.md); the public ROVir
 workflow is documented separately in
 [mprage_rovir_reconstruction.md](docs/mprage_rovir_reconstruction.md).
 
-For reviewed metal-artifact cases only, an independent, default-off CPU
-[MPRAGE CSM support extrapolation workflow](docs/mprage_metal_csm.md) is available.
-It does not change the basic workflow or automatically replace collection images.
+For reviewed metal-artifact cases only, normal and retro MPRAGE launchers accept
+the default-off, CPU-only `--metal-csm-extrapolation` switch with a reviewed local
+configuration. Results are isolated in `vccN_metal_csm/`; see
+[MPRAGE CSM support extrapolation](docs/mprage_metal_csm.md).
+The unchanged collection command prefers complete, hash-validated metal results
+over matching same-VCC cases, preserving existing collection names and recording
+the selected source. Other VCCs and ROVir remain independent.
 
 ## MPRAGE workflow
 
