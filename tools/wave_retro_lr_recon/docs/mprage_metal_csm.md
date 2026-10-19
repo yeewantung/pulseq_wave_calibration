@@ -14,7 +14,7 @@ correction method.
 
 The normal, retro LR, and independent R3x3 MPRAGE launchers accept
 `--metal-csm-extrapolation`. They support standard-PCA native R3x1, native
-R3x2/R3x3 and LR-Y R3x2, using one reviewed native CSM continuation. The original
+R3x2/R3x3 and LR-Y R3x2, using one shared native CSM continuation. The original
 standalone native-R3x1 diagnostic launcher is also retained. Both interfaces
 accept any validated physical/PCA coil count, not just VCC24. GRE, ROVir and
 multi-map/soft-cropped ESPIRiT inputs remain unsupported.
@@ -22,24 +22,10 @@ Do not substitute these candidate maps into another workflow by renaming files.
 
 ## Use the existing normal and retro launchers
 
-One-time setup: copy `configs/mprage_metal_pipeline.example.json` into
-`OUTPUT_ROOT/metal_csm.local.json`, or an explicitly ignored repository-local
-JSON file. Fill all nulls after reviewing the case. This is a **nested** config:
-
-- `source_manifest`: completed original normal branch's
-  `reconstruction_manifest.json`;
-- `reference_nifti`: its uncorrected original magnitude export, with matching
-  JSON sidecar (an exact collection copy is accepted); and
-- `parameters`: the spatial settings described below, including the reviewed
-  ROI on that exact reference grid.
-
-Relative paths resolve against the configuration file's directory. Verify
-repository-local private configs with `git check-ignore`; never put actual
-dataset paths or subject ROIs in the tracked example. A completed original
-normal baseline, its complex image, CSM, PCA basis and prepared inputs are
-required. The launcher does not silently reconstruct a missing baseline.
-
-After setup, append one switch to the existing command, **without `-g`**:
+Append the metal switch to the existing command. No previous diagnostics,
+completed baseline reconstruction, reference NIfTI or JSON configuration is
+required for automatic mode. CPU BART remains
+the default; append `-g` to either command for GPU BART:
 
 ```bash
 bash scripts/sample_mprage_normal_recon.sh \
@@ -51,15 +37,85 @@ bash scripts/sample_mprage_retro_lr_recon.sh \
   --metal-csm-extrapolation
 ```
 
-Use `--metal-csm-config /path/to/CASE.local.json` to override the default config
-location. `--metal-prepare-only` prepares and validates maps/case manifests
-without launching BART. `--cpu-threads` accepts 1--8, default 8. Source-related
+Without the explicit metal switch, none of the automatic completion runs.
+Without a local manual config, the enabled pipeline follows this order:
+
+1. Validate and reuse the requested `vccN/normal/bart_inputs` if present. Never
+   replace incompatible, partial or hash-mismatched inputs.
+2. If no matching count exists, reuse a compatible hash-bound standard/ROVir
+   source-anchor PSF and trajectory when available, preparing a new standard
+   PCA basis and ACS/image k-space from raw data. ROVir CSMs and transforms are
+   never relabeled as standard PCA. The first advertised donor must validate;
+   an incompatible/corrupt donor is not silently ignored.
+3. If no source exists, prepare from TWIX + sequence using the existing strict
+   geometry, source, physical-coil, finite-value and PSF checks.
+4. Reuse an original CSM only when a completed standard branch hash-binds it to
+   the selected inputs and crop; otherwise, when no original CSM exists, run
+   CPU ecalib in the isolated metal tree. No ordinary Wave image is reconstructed.
+5. Automatically propose/gate support additions from unmasked calibration RSS
+   and native CSM, then run the requested normal/retro branches.
+
+The normal, retro LR and independent R3x3 launchers all support this `-g` option.
+CSM continuation and LR resampling remain on CPU; only `bart wave` receives
+`-g`. The caller's `CUDA_VISIBLE_DEVICES` is preserved in GPU mode (including an
+unset or deliberately empty value); no GPU is selected automatically and no
+failed GPU run silently falls back to CPU. Use a CUDA-enabled host BART build.
+The original standalone diagnostic launcher remains CPU-only.
+
+Backend selection is recorded in each branch's request, BART command, execution
+record and NIfTI sidecars, and validated during collection. Changing CPU/GPU
+backend or the recorded CUDA visibility on an existing reconstruction rejects
+resume rather than relabeling outputs. A command rejected by the old CPU-only
+argument check created no metal output and can be retried with `-g` after this
+update. Previously prepared trees remain subject to strict software-hash checks.
+
+An existing `OUTPUT_ROOT/metal_csm.local.json` selects the optional reviewed
+manual-ROI path; `--metal-csm-config /path/to/CASE.local.json` selects it explicitly.
+An explicitly supplied missing/bad config is an error, never an automatic fallback.
+`--metal-prepare-only` prepares and validates maps/case manifests without
+launching BART; if CSMs do not yet exist it stops before ecalib and requests a
+normal invocation that permits calibration. `--cpu-threads` accepts 1--8,
+default 8. Source-related
 flags (Ncc, prewhitening, ecalib crop and PSF processing) must match the reviewed
-normal preparation. No new PCA/PSF fit is permitted by mismatch fallback.
+normal preparation when reused. No new PCA/PSF fit is permitted by mismatch fallback.
 When compatible historical PSF artifacts have a strict hash-bound accepted
 source, the existing artifact-preserving reuse policy is supported without a
 manual fitting override. Metadata records both the requested settings and the
 historical PSF contract; the latter is never relabeled as a new fit.
+
+### Moved source datasets
+
+Moving an existing dataset between disks does not authorize rewriting its
+historical manifests. For an explicitly confirmed relocation, the maintenance
+utility `scripts/register_mprage_relocation.py` audits the moved `vccN` inputs
+and writes `OUTPUT_ROOT/metadata/path_relocation.local.json` exclusively.
+Pass each exact historical **dataset** prefix with `--source-prefix` (including
+old symlink spellings used by command records); the destination dataset is the
+parent of the confirmed output root. This utility does not move data or run BART.
+
+The receipt lists original document hashes and verified array records. Readers
+apply the mapping only to listed, unchanged documents, in memory; original JSON,
+command records and all scientific hashes remain unchanged. Normal/retro input
+reuse, automatic metal source validation, conversion and collection consume this
+view. New metal requests/sources bind the receipt hash. Missing or changed data
+still fail the existing geometry, finite-value, PCA, source and hash checks.
+
+Legacy normal and retrospective manifests may both predate the
+`noise_prewhitening` field. These can be reused only with the exact normal
+manifest SHA binding and the other case/artifact checks intact; an absent case
+field never matches an explicit normal whitening record. No legacy manifest is
+edited to add this field. Receipt-bound retrospective aggregate manifests are
+also preserved; individual case manifests remain authoritative for the requested
+case selection. Reusing measured retro inputs does not reuse ordinary images:
+unfinished metal branches still reconstruct with the extended CSM.
+
+Historical TWIX identities that contain only size/mtime are explicitly recorded
+as **not historically SHA-256 verified**. The user-confirmed relocation must
+match those historical fields; a new current SHA-256 is recorded and checked on
+subsequent reads. This is not proof that raw bytes matched an unavailable old
+hash. No generic search-by-filename or automatic trust of another disk is used.
+Registration is currently for standard-PCA MPRAGE source trees; it does not
+rewrite or migrate ROVir transforms, GRE trees or prior metal experiments.
 
 Normal remains Wavelet-only by default (`0.03` for VCC24; the existing transferred
 value for other counts); `--r3-lambda` explicitly overrides the normal value.
@@ -67,7 +123,7 @@ Retro remains FISTA-r0-only for native R3x2, LR-Y R3x2 and native R3x3. Both acc
 the existing mutually exclusive `--reg-full`, `--wavelet-only`, `--fista-only`
 profiles. Positive lambdas are labeled `wavelet_metal_unvalidated`, not optimal
 for the modified forward model. The independent R3x3 launcher accepts the same
-switch and configuration. `-g`, `--rovir`, `--include-legacy-lr` and
+switch and configuration. `--rovir`, `--include-legacy-lr` and
 `--n4-bias-correction` combinations are explicitly rejected in metal mode.
 
 The user-selected flat variant layout is:
@@ -76,9 +132,10 @@ The user-selected flat variant layout is:
 OUTPUT_ROOT/
   vccN/                         # original normal/retro products, not replaced
   vccN_metal_csm/
-    metadata/                   # immutable config/source/software identity
-    source_reference/           # hash-bound original magnitude + JSON copy
-    shared_csm/                 # native candidate + added-support archive
+    metadata/                   # immutable request, automatic source identity
+    source_calibration/         # isolated ecalib metadata/reconstruction/logs, if needed
+    source_reference/           # manual-ROI only: original magnitude + JSON copy
+    shared_csm/                 # candidate, support/confidence NPZ, metadata and QC figure
     normal/bart_output/BRANCH/
       metadata/                 # preparation, execution, export provenance
       reconstruction/           # complex image + wave command
@@ -107,6 +164,22 @@ normalization, not the standalone diagnostic's shared-baseline intensity scale.
 
 ### Collection preference
 
+The standard converter writes paired images/sidecars below `nifti/sub-CASE/`.
+Metal export registration and collection validate these nested files (historical
+flat pairs are also supported), rejecting extra files, symlinks and bad pairs.
+An export-registration journal binds raw images and sidecars before adding metal
+provenance; a completed registration can be resumed without conversion.
+
+The early automatic implementation incorrectly treated `sub-CASE/` as a file.
+For that exact reviewed implementation hash only, the layout fix permits reuse
+of unchanged requests/preparations and completed BART execution. If four
+unregistered nested exports remain, retry independently converts the validated
+complex image to temporary files and checks exact image hashes and sidecar
+content before registration. It does **not** rerun BART, rewrite historical
+request hashes, or silently adopt unmatched partial exports. A mismatch remains
+an error with existing files preserved. Recovery provenance is recorded in
+`metadata/export_registration.json` and bound by `metadata/export.json`.
+
 Run the existing collection command without an additional switch:
 
 ```bash
@@ -132,7 +205,7 @@ native/LR CSM lineage, execution/export hashes, lambda, and the replaced ordinar
 branch's provenance. A retained filename containing an old selection label is
 **not** evidence that its lambda was re-optimized for metal CSM.
 
-Before reconstruction, the integrated pipeline preserves the original reference
+In manual-ROI mode, the pipeline preserves the original reference
 magnitude/sidecar under `source_reference/`, with exact hashes. This is essential
 when configuration initially references a collection copy: replacement must not
 destroy the reference needed for later strict resume. Existing source NIfTI
@@ -142,6 +215,44 @@ those names are retained. If a previously collected metal branch disappears or
 becomes incomplete, synchronization refuses a silent downgrade. The previous
 tool-owned collection is replaced atomically only after all validation/copying
 succeeds. Original reconstruction trees are never overwritten by collection.
+
+## Automatic region policy (experimental v1)
+
+This policy is only invoked after the user enables metal mode. It is not an
+automatic metal detector, a tissue segmentation or an established SNR estimator.
+All geometry uses logical RO/LIN/PAR coordinates and physical millimetres;
+no subject-specific voxel ROI or diagnostic result is transplanted.
+
+- Propose holes/concavities inside largest-component planar convex envelopes,
+  within 8 mm of original support. Adjacent RO planes must also have evidence.
+- Compute ACS RSS by centered IFFT, without applying the cropped CSM. Gate by
+  the larger of an outside-envelope median + 4 scaled MAD and 1% of the median
+  in native support. If outside-envelope evidence is insufficient, use no-op.
+- Phase-align donors through a strong reference coil, excluding weak reference
+  samples. Compare normalized 2-mm and 4-mm Gaussian predictions using
+  phase-insensitive inner products (minimum agreement 0.98), donor weight and
+  vector coherence; restore nearby native phase only for added vectors.
+- Keep components of 8--20000 cubic mm; if additions exceed 3% of native
+  support, reject all automatic additions. Preserve original vectors exactly.
+- Missing reliable additions or a safety-cap rejection is a recorded no-op:
+  continue reconstruction with unchanged maps, not an error or silent loosening
+  of thresholds. Invalid/nonfinite scientific inputs still fail hard.
+
+These are conservative experimental defaults, not population-optimized values.
+Weak calibration near metal can legitimately cause under-recovery. Save and
+review `shared_csm/intermediate/support.npz`, `figures/automatic_support.png`
+and `metadata/preparation.json`; masks are in logical coordinates, not NIfTI
+voxel order. They are diagnostic artifacts, not collection head masks.
+
+## Optional manual-ROI mode
+
+Copy `configs/mprage_metal_pipeline.example.json` into an ignored local JSON
+and fill `source_manifest`, `reference_nifti` and all `parameters` after review.
+This legacy diagnostic-compatible path requires a completed original normal
+baseline, its complex image and exact uncorrected magnitude/sidecar. Relative
+paths resolve against the config directory. Use `git check-ignore` for private
+repository-local configs; never commit actual source paths or subject ROIs.
+Automatic and manual policies cannot overwrite each other's existing variant.
 
 ## When this can help
 
@@ -222,18 +333,26 @@ tmux session; the launcher is foreground, not an automatic job scheduler.
   base-to-maximum increment. The manifest reports additions outside the ROI.
 - The standalone diagnostic preserves the source lambda. All interfaces use
   `wave -w -f`, 100 iterations and tolerance
-  `1e-6`. Sources using other solver settings are rejected. No lambda sweep,
-  automatic winner selection, PCA refit, PSF refit or noise-prewhitening change
-  is performed. Previously selected lambdas are not declared optimal for the
+  `1e-6`. Manual baseline sources using other solver settings are rejected.
+  No lambda sweep or automatic winner selection is performed. Existing
+  compatible inputs are not refitted or re-whitened; fresh automatic preparation
+  may compute the requested PCA/PSF/calibration when no compatible source exists.
+  Previously selected lambdas are not declared optimal for the
   modified forward model.
-- CPU only: at most 8 OpenMP threads, one BLAS thread, hidden CUDA devices,
-  Linux idle scheduling and nice 19. The shell uses idle I/O priority where
+- At most 8 OpenMP threads, one BLAS thread, Linux idle scheduling and nice 19.
+  CPU BART hides CUDA devices; explicitly requested GPU BART preserves caller
+  visibility. The standalone diagnostic shell uses idle I/O priority where
   available. These mechanisms yield CPU priority but cannot guarantee zero
   shared-cache/network-storage contention.
 - Require 112 GiB available RAM before launching; stop **only this job's BART
   child** if its RSS exceeds 64 GiB or host available RAM falls below 64 GiB.
-  Address space is capped at 96 GiB. These are conservative pilot-based limits,
-  not a claim that every geometry fits; larger datasets may be refused/stopped.
+  CPU address space is capped at 96 GiB. GPU mode does not impose that virtual
+  address-space cap because CUDA mappings can exceed physical RAM; inherited
+  system limits remain in effect. Host RAM admission and RSS monitoring still
+  apply to GPU runs. VRAM is not reserved or guaranteed by these guards; a
+  CUDA allocation failure is reported without automatic retry or CPU fallback.
+  These are conservative pilot-based limits, not a claim that every geometry
+  fits; larger datasets may be refused/stopped.
 - Before-launch resource refusal allows a later retry with the same prepared
   maps. An interrupted/failed BART attempt is retained and never silently
   restarted over its partial output. Use a newly approved output directory.
@@ -284,9 +403,16 @@ new implementation.
 
 Launcher integration tests additionally cover flat variant isolation, default
 profiles/cases, native-map identity across accelerations, LR-Y lineage and RSS,
-cross-count/config mismatch rejection, CPU-only argument guards, prepare-only
+cross-count/config mismatch rejection, explicit GPU dispatch, prepare-only
 execution, and completed normal/retro/R3x3 resume without rewriting outputs.
 Collection tests cover paired preference under unchanged names, metal-only
 retro cases, count isolation, partial fallback, corrupt-completion rejection,
 atomic synchronization, no silent downgrade, optional preferred-source masking,
-and baseline-reference survival across replacement.
+and baseline-reference survival across replacement. GPU tests mock BART and
+verify command construction, CUDA visibility, CPU/GPU resume mismatches,
+GPU-compatible address-space policy, failure handling and collection provenance;
+they do not establish real-GPU numerical equivalence or VRAM requirements.
+Automatic tests additionally cover known synthetic support holes, gauge-invariant
+coil-direction prediction, physical spacing, signal/volume no-op gates, fresh
+preparation without a baseline image, pruned baseline reuse, source/crop mismatch,
+ROVir-anchor PSF hashes and exact automatic collection provenance.

@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from .bart_io import cfl_record, open_cfl, sha256_file
+from .relocation import read_json, read_command
 from .standard import (
     normalize_reconstruction_profile,
     profile_branches,
@@ -32,7 +33,7 @@ def _load_json(path: Path) -> dict[str, Any]:
         Parsed dictionary.
     """
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = read_json(path)
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a JSON object: {path}")
     return payload
@@ -328,7 +329,7 @@ def _validate_command_records(
     for path, expected in zip(paths, expected_commands, strict=True):
         if not path.is_file():
             raise FileNotFoundError(f"Reconstruction command record is missing: {path}")
-        if path.read_text(encoding="utf-8").strip() != expected:
+        if read_command(path) != expected:
             raise ValueError(f"Reconstruction command changed: {path}")
 
 

@@ -282,7 +282,9 @@ def _load_json(path: Path) -> dict[str, Any]:
     Raises:
         ValueError: If the top-level JSON value is not an object.
     """
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    from .relocation import read_json
+
+    payload = read_json(path)
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a JSON object: {path}")
     return payload
@@ -2175,11 +2177,18 @@ def _write_normal_reuse_attestation(
     manifest_path = destination / "manifest.json"
     recorded_psf = manifest.get("psf_calibration", {})
     path = destination.parent / NORMAL_REUSE_ATTESTATION_NAME
+    from .relocation import is_relocated_document, relocation_record
+
+    relocation = relocation_record(manifest_path)
+    if is_relocated_document(manifest_path):
+        # Preserve the historical attestation as well as the source manifest.
+        path = path.with_name("NORMAL_INPUT_REUSE_ATTESTATION_RELOCATED.json")
     _write_json(
         path,
         {
             "format_version": 2,
             "status": "materialized_normal_inputs_accepted_for_reuse",
+            "path_relocation": relocation,
             "created_at_utc": _utc_now(),
             "source_manifest": {
                 "path": str(manifest_path),
@@ -2275,6 +2284,7 @@ def prepare_normal_mprage(
     noise_prewhitening: bool = False,
     reuse: bool = True,
     allow_legacy_artifact_reuse: bool = False,
+    accepted_psf_inputs: str | Path | None = None,
 ) -> dict[str, Any]:
     """Prepare native measured-Wave k-space, calibration k-space, and PSF.
 
@@ -2301,6 +2311,9 @@ def prepare_normal_mprage(
         allow_legacy_artifact_reuse: Permit retrospective callers to reuse
             source-matched legacy core artifacts without rewriting their
             manifest or recomputing the PSF.
+        accepted_psf_inputs: Optional source-matched standard/ROVir anchor for
+            hash-identical PSF reuse during fresh PCA preparation; no ROVir
+            transform or CSM is reused. Existing prepared trees remain immutable.
 
     Returns:
         The native BART-input manifest.
@@ -2440,7 +2453,10 @@ def prepare_normal_mprage(
                 calibration["full_range_plot_relative_to_output_root"] = (
                     expected_full_relative
                 )
-                _write_json(manifest_path, existing)
+                from .relocation import is_relocated_document
+
+                if not is_relocated_document(manifest_path):
+                    _write_json(manifest_path, existing)
         if not exact_match or missing_auxiliary_artifacts:
             artifact_records = _normal_core_artifact_records(destination, existing)
             attestation = _write_normal_reuse_attestation(
@@ -2488,6 +2504,19 @@ def prepare_normal_mprage(
     native._resolve_mprage_wave_mode(
         "wave", str(sequence_path), ro_os, ncalib, nacs, slice_orientation="SAG"
     )
+
+    accepted_psf_record = None
+    if accepted_psf_inputs is not None:
+        from .metal_psf_reuse import accepted_psf
+        accepted_psf_record = accepted_psf(
+            Path(accepted_psf_inputs), twix_path, sequence_path, psf_settings,
+            {"physical_fov_mm_xyz": [float(v)*1000 for v in upstream_geometry["FOVxyz"]],
+             "logical_matrix_ro_lin_par": [nro, nlin, npar],
+             "readout_oversampling_factor": os_factor},
+        )
+        historical = accepted_psf_record["historical_calibration"]
+        if historical.get("ncalib") != ncalib or historical.get("nacs") != nacs:
+            raise ValueError("Accepted PSF calibration dimensions differ from sequence")
 
     # Validate the measured Wave image stream independently of the set-4
     # no-Wave reference scan used for sensitivity-map calibration.
@@ -2565,6 +2594,13 @@ def prepare_normal_mprage(
         :, lin_start : lin_start + nacs, par_start : par_start + nacs, :
     ] = compressed_acs
 
+    def calibrate_or_reuse(*args, **kwargs):
+        """Return the accepted PSF tuple without fitting, or run the unchanged fresh calibration."""
+        if accepted_psf_record is not None:
+            from .metal_psf_reuse import psf_tuple
+            return psf_tuple(accepted_psf_record)
+        return _calibrated_psf_inputs(*args, **kwargs)
+
     # Evaluate the calibrated Wave model on the native acquisition grid.
     try:
         (
@@ -2578,7 +2614,7 @@ def prepare_normal_mprage(
             c_branch_turns,
             psf_processing_diagnostics,
             projection_planes,
-        ) = _calibrated_psf_inputs(
+        ) = calibrate_or_reuse(
             native,
             twix_path=twix_path,
             sequence_path=sequence_path,
@@ -2642,15 +2678,13 @@ def prepare_normal_mprage(
         **psf_settings,
         "fit_kx_range": selected_fit_kx_range,
     }
-    calibrated_psf = evaluate_calibrated_psf(
-        delta_lin,
-        delta_par,
-        a_fit,
-        b_fit,
-        c_fit,
-        nlin=nlin,
-        npar=npar,
-    )
+    if accepted_psf_record is not None:
+        # Preserve exact bytes of the accepted model, not a numerical re-evaluation.
+        calibrated_psf = np.asarray(open_cfl(accepted_psf_record["artifacts"]["psf"]["base"])).reshape((ro_os, nlin, npar), order="F")
+    else:
+        calibrated_psf = evaluate_calibrated_psf(
+            delta_lin, delta_par, a_fit, b_fit, c_fit, nlin=nlin, npar=npar,
+        )
 
     # Persist BART arrays and the reusable physical calibration vectors.
     wave_output = create_cfl(
@@ -2831,6 +2865,20 @@ def prepare_normal_mprage(
         "output_artifacts": output_artifacts,
         "prepared_at_utc": _utc_now(),
     }
+    if accepted_psf_record is not None:
+        from .metal_workflow import file_record
+        if file_record(accepted_psf_record["manifest"]["path"]) != accepted_psf_record["manifest"]:
+            raise ValueError("Accepted PSF source manifest changed during preparation")
+        for name, recorded in accepted_psf_record["artifacts"].items():
+            for key in ("header_sha256", "payload_sha256"):
+                if output_artifacts[name][key] != recorded[key]:
+                    raise ValueError(f"Accepted PSF artifact copy changed: {name}")
+        # Preserve historical scientific settings and implementation identity.
+        manifest["psf_calibration"] = {
+            **accepted_psf_record["historical_calibration"],
+            "reused_without_recalibration": True,
+            "accepted_source": accepted_psf_record,
+        }
     _write_json(manifest_path, manifest)
     print(f"Prepared normal measured-Wave BART inputs: {destination}")
     return manifest
@@ -2856,6 +2904,29 @@ def _sampling_from_manifest(payload: Mapping[str, Any]) -> SamplingPattern:
         measurement_index=sampling.get("measurement_index"),
         skip_lin_par=tuple(int(value) for value in sampling["skip_lin_par"]),
     )
+
+
+def _retro_prewhitening_matches(existing: Mapping[str, Any], normal: Mapping[str, Any]) -> bool:
+    """Compare case/parent whitening provenance, including hash-bound legacy inputs.
+
+    Args:
+        existing: Retrospective preparation manifest; its parent SHA must also
+            be checked by the caller before reuse.
+        normal: Selected, validated normal preparation manifest.
+
+    Returns:
+        True for identical explicit records, or absent legacy records on both
+        sides. A newly prepared case may explicitly record a legacy parent.
+        Missing case metadata never matches an explicit normal whitening record,
+        even when that record describes disabled whitening or a no-op.
+    """
+    if "noise_prewhitening" not in existing:
+        return "noise_prewhitening" not in normal
+    expected = normal.get("noise_prewhitening", {
+        "version": 0, "status": "legacy_unwhitened_source",
+        "applied": False, "request": {"enabled": False},
+    })
+    return isinstance(expected, Mapping) and existing["noise_prewhitening"] == expected
 
 
 def prepare_retro_mprage(
@@ -2995,8 +3066,7 @@ def prepare_retro_mprage(
                 or existing.get("case") != case.to_json()
                 or existing.get("standard_pca_variant") != variant_name
                 or int(existing.get("virtual_coils", 0)) != virtual_coils
-                or existing.get("noise_prewhitening")
-                != normal_prewhitening
+                or not _retro_prewhitening_matches(existing, normal)
                 or existing.get("source_normal_manifest_identity", {}).get("sha256")
                 != sha256_file(normal_inputs / "manifest.json")
             ):
@@ -3073,20 +3143,30 @@ def prepare_retro_mprage(
             f"achieved={case.achieved_resolution_mm_xyz} mm"
         )
         results.append(manifest)
-    _write_json(
-        retro_root / "manifest.json",
-        {
-            "format_version": 2,
-            "status": "mprage_retro_cases_ready",
-            "standard_pca_variant": variant_name,
-            "virtual_coils": virtual_coils,
-            "noise_prewhitening": normal_prewhitening,
-            "source": source_identity,
-            "normal_inputs": str(normal_inputs),
-            "cases": [payload["case_directory"] for payload in results],
-            "prepared_at_utc": _utc_now(),
-        },
-    )
+    # Keep the original aggregate immutable on reuse, especially when a
+    # relocation receipt binds its historical bytes. Case manifests remain
+    # the authoritative records for the requested selection.
+    from .relocation import is_relocated_document
+    summary_path = retro_root / "manifest.json"
+    summary = {
+        "format_version": 2,
+        "status": "mprage_retro_cases_ready",
+        "standard_pca_variant": variant_name,
+        "virtual_coils": virtual_coils,
+        "noise_prewhitening": normal_prewhitening,
+        "source": source_identity,
+        "normal_inputs": str(normal_inputs),
+        "cases": [payload["case_directory"] for payload in results],
+        "prepared_at_utc": _utc_now(),
+    }
+    if not summary_path.exists():
+        _write_json(summary_path, summary)
+    elif not is_relocated_document(summary_path):
+        previous = _load_json(summary_path)
+        changed = any(previous.get(key) != value for key, value in summary.items()
+                      if key not in ("prepared_at_utc", "noise_prewhitening"))
+        if changed or not _retro_prewhitening_matches(previous, normal):
+            _write_json(summary_path, summary)
     return results
 
 
@@ -3256,8 +3336,7 @@ def prepare_retro_mprage_r3x3(
             or existing.get("selected_regularization") != selection
             or existing.get("standard_pca_variant") != variant_name
             or int(existing.get("virtual_coils", 0)) != virtual_coils
-            or existing.get("noise_prewhitening")
-            != normal_prewhitening
+            or not _retro_prewhitening_matches(existing, normal)
             or not isinstance(source_normal_identity, Mapping)
             or source_normal_identity.get("sha256")
             != sha256_file(normal_inputs / "manifest.json")

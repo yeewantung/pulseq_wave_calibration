@@ -18,14 +18,7 @@ from scipy import ndimage as ndi
 from .bart_io import cfl_record, open_cfl, sha256_file
 from .metal_csm import METHOD_VERSION, MetalCSMParameters, orient, write_candidate
 from .standard import array_sha256, validate_prepared_artifact_records, validate_standard_pca_manifest
-
-
-def read_json(path: str | Path) -> dict:
-    """Read a JSON object from path; reject non-object documents."""
-    value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"Expected JSON object: {path}")
-    return value
+from .relocation import read_json, read_command
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -178,7 +171,7 @@ def source_contract(manifest_path: str | Path, reference_path: str | Path) -> di
     if [Path(p).resolve() for p in tokens[10:]] != [Path(records[k]["base"]).resolve() for k in ("maps", "psf", "kspace", "image")]:
         raise ValueError("Baseline command/source array paths mismatch")
     command_records = request.get("command_records", [])
-    if len(command_records) != 1 or Path(command_records[0]).read_text().strip() != commands[0]:
+    if len(command_records) != 1 or read_command(command_records[0]) != commands[0]:
         raise ValueError("Baseline command record changed or is missing")
     return {"manifest": file_record(manifest_path), "normal_manifest": file_record(normal_path),
             "basis": file_record(basis_path), "command_record": file_record(command_records[0]),

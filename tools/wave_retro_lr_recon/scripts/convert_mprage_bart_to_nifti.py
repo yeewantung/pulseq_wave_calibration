@@ -64,7 +64,9 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     Returns:
         Parsed manifest mapping.
     """
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    from wave_retro_lr.relocation import read_json
+
+    payload = read_json(path)
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a JSON object: {path}")
     return payload
@@ -94,19 +96,21 @@ def _case_geometry(
     return logical, physical
 
 
-def _recorded_commands(inputs: Path, image: Path, manifest: dict[str, Any]) -> dict[str, str]:
+def _recorded_commands(inputs: Path, image: Path, manifest: dict[str, Any],
+                       ecalib_override: Path | None = None) -> dict[str, str]:
     """Read the exact ecalib and Wave commands associated with an image.
 
     Args:
         inputs: Prepared BART-input directory for the current case.
         image: BART reconstructed-image basename.
         manifest: Native or retrospective prepared-input manifest.
+        ecalib_override: Hash-validated isolated calibration command from the metal pipeline.
 
     Returns:
         NIfTI metadata fields containing both shell-escaped commands.
     """
     wave_record = image.parent / "wave_command.txt"
-    explicit_ecalib = manifest.get("ecalib_command_record")
+    explicit_ecalib = str(ecalib_override) if ecalib_override is not None else manifest.get("ecalib_command_record")
     layout = manifest.get("reconstruction_layout")
     if isinstance(explicit_ecalib, str):
         ecalib_record = Path(explicit_ecalib).expanduser().resolve()
@@ -123,9 +127,11 @@ def _recorded_commands(inputs: Path, image: Path, manifest: dict[str, Any]) -> d
     for label, path in (("wave", wave_record), ("ecalib", ecalib_record)):
         if not path.is_file():
             raise FileNotFoundError(f"Missing recorded {label} command: {path}")
+    from wave_retro_lr.relocation import read_command
+
     return {
-        "BARTWaveCommand": wave_record.read_text(encoding="utf-8").strip(),
-        "BARTEcalibCommand": ecalib_record.read_text(encoding="utf-8").strip(),
+        "BARTWaveCommand": read_command(wave_record),
+        "BARTEcalibCommand": read_command(ecalib_record),
     }
 
 
@@ -136,6 +142,7 @@ def convert(
     sequence: Path,
     output: Path,
     suffix: str,
+    *, ecalib_command_record: Path | None = None,
 ) -> None:
     """Restore BART normalization and write magnitude plus phase NIfTI files.
 
@@ -146,6 +153,7 @@ def convert(
         sequence: Matching sequence path retained for provenance validation.
         output: Destination directory for NIfTI files and JSON sidecars.
         suffix: Dataset-independent suffix used in output filenames.
+        ecalib_command_record: Optional isolated calibration record for metal derivatives.
 
     Returns:
         None. The function writes magnitude and phase NIfTI/JSON pairs.
@@ -179,7 +187,7 @@ def convert(
             "reversed after real-data DICOM comparison"
         ),
         "PreparedInputManifest": str(inputs / "manifest.json"),
-        **_recorded_commands(inputs, image_path, manifest),
+        **_recorded_commands(inputs, image_path, manifest, ecalib_command_record),
     }
     coil_processing = manifest.get("coil_processing")
     contract = manifest.get("source_normal_rovir_contract")

@@ -62,24 +62,26 @@ def arguments(root: Path, mode="normal", *flags):
                                 "--virtual-coils", "2", "--metal-csm-extrapolation", *flags])
 
 
-def fake_cpu(output: Path, preparation: dict, threads: int) -> dict:
-    """Stand in for CPU BART with deterministic tiny finite images and an execution record."""
+def fake_cpu(output: Path, preparation: dict, threads: int, *, gpu: bool = False) -> dict:
+    """Stand in for either BART backend with tiny finite images and a bound execution record."""
     state = output/"metadata/reconstruction.json"
     if state.exists():
         return read_json(state)
     dims = preparation["candidate"]["shape"][:3]
     write_array(output/"reconstruction/image_wave", np.ones(dims, np.complex64))
-    from wave_retro_lr.metal_runner import cpu_command
+    from wave_retro_lr.metal_runner import wave_command
     bart = file_record("/bin/true")
     result = {"status": "complete", "output": cfl_record(output/"reconstruction/image_wave"),
-              "identity": {"gpu": False, "bart": bart, "command": cpu_command(preparation, output, bart["path"]),
+              "identity": {"gpu": gpu, "bart": bart, "command": wave_command(preparation, output, bart["path"], gpu=gpu),
                            "preparation_sha256": sha256_file(output/"metadata/preparation.json")}, "logs": []}
     write_json(state, result)
     return result
 
 
-def fake_convert(inputs, image, twix, sequence, output, suffix):
-    """Write tiny standard magnitude/phase export fixtures without reading patient data."""
+def fake_convert(inputs, image, twix, sequence, output, suffix, **kwargs):
+    """Model the real converter's nested subject directory without reading patient data."""
+    output = output/"sub-fixture"
+    output.mkdir(parents=True, exist_ok=True)
     values = np.asarray(open_cfl(image)).squeeze().transpose(2, 1, 0)
     manifest = read_json(inputs/"manifest.json")
     spacing = manifest.get("case", {}).get("achieved_resolution_mm_xyz", [1., 1., 1.])
@@ -103,10 +105,11 @@ class MetalPipelineTests(unittest.TestCase):
         self.assertEqual(branch_settings("normal", None, 16, .02)[0][3], .02)
 
     def test_invalid_flags_fail_without_outputs(self):
-        """Reject GPU, ROVir, N4, invalid bounds and conflicting profiles before any output."""
+        """Accept explicit GPU but reject ROVir, N4, invalid bounds and conflicting profiles."""
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for flag in ("-g", "--rovir", "--include-legacy-lr", "--n4-bias-correction"):
+            validate_options(arguments(root, "normal", "-g"))
+            for flag in ("--rovir", "--include-legacy-lr", "--n4-bias-correction"):
                 with self.subTest(flag=flag), self.assertRaises(ValueError):
                     validate_options(arguments(root, "normal", flag))
             args = arguments(root)
@@ -146,7 +149,7 @@ class MetalPipelineTests(unittest.TestCase):
                  patch("wave_retro_lr.mprage.prepare_normal_mprage"), \
                  patch("wave_retro_lr.mprage.prepare_retro_mprage"), \
                  patch("wave_retro_lr.mprage.prepare_retro_mprage_r3x3"), \
-                 patch("wave_retro_lr.metal_pipeline.run_cpu_reconstruction", side_effect=fake_cpu), \
+                 patch("wave_retro_lr.metal_pipeline.run_reconstruction", side_effect=fake_cpu), \
                  patch("scripts.convert_mprage_bart_to_nifti.convert", side_effect=fake_convert) as converter:
                 destination = run_pipeline(arguments(root))
                 run_pipeline(arguments(root, "retro"))
@@ -222,7 +225,7 @@ class MetalPipelineTests(unittest.TestCase):
             with patch("wave_retro_lr.metal_runner.memory_guard"), patch("wave_retro_lr.metal_pipeline.memory_guard"), \
                  patch("wave_retro_lr.metal_pipeline.validate_invocation", return_value={}), \
                  patch("wave_retro_lr.mprage.prepare_normal_mprage"), \
-                 patch("wave_retro_lr.metal_pipeline.run_cpu_reconstruction") as runner:
+                 patch("wave_retro_lr.metal_pipeline.run_reconstruction") as runner:
                 destination = run_pipeline(args)
                 runner.assert_not_called()
                 payload = read_json(config)
@@ -246,9 +249,9 @@ class MetalPipelineTests(unittest.TestCase):
                 self.assertEqual(help_result.returncode, 0)
                 self.assertIn("--metal-csm-extrapolation", help_result.stdout)
                 result = subprocess.run(["bash", str(script), "missing.dat", "missing-output", "missing.seq",
-                                         "--metal-csm-extrapolation", "-g"], capture_output=True, text=True)
+                                         "--metal-csm-extrapolation", "-g", "--rovir"], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 2)
-                self.assertIn("CPU-only", result.stderr)
+                self.assertIn("standard PCA only", result.stderr)
 
 
 if __name__ == "__main__":

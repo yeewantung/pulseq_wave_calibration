@@ -1,8 +1,8 @@
 """Opt-in normal and retrospective MPRAGE integration with isolated metal CSMs.
 
 Canonical inputs are validated/reused through the existing preparation APIs.
-Only metal derivatives are reconstructed; a reviewed normal baseline is required
-to bind the reference ROI to the exact logical grid, orientation and PCA basis.
+Only metal derivatives are reconstructed. Without a local manual config, the
+automatic path prepares directly from raw/sequence or compatible native inputs.
 """
 
 from __future__ import annotations
@@ -20,18 +20,17 @@ import numpy as np
 
 from .bart_io import cfl_record, sha256_file
 from .metal_csm import MetalCSMParameters
-from .metal_runner import memory_guard, run_cpu_reconstruction, run_metal_workflow
+from .metal_runner import memory_guard, run_reconstruction, run_metal_workflow
 from .metal_workflow import file_record, read_json, source_contract, validate_cfl, write_json
 from .reconstruction_state import _request_contract
 from .retrospective import resample_sensitivity_maps
+from .metal_export import LEGACY_PIPELINE_SHA256, finish_export, legacy_export_request
 
 
 def validate_options(args) -> None:
     """Reject incompatible launcher options before reading data or creating outputs."""
     if not args.metal_csm_extrapolation:
         raise ValueError("Supply --metal-csm-extrapolation; metal mode is disabled by default")
-    if args.g:
-        raise ValueError("Metal CSM mode is CPU-only; remove -g")
     if args.rovir or args.include_legacy_lr:
         raise ValueError("Metal CSM mode supports standard PCA only, not --rovir/legacy LR")
     if args.n4_bias_correction:
@@ -134,15 +133,17 @@ def locked_directory(path: Path, request: dict, folders=("metadata", "intermedia
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         record = path/"metadata/request.json"
         if record.exists():
-            if read_json(record) != request:
+            saved = read_json(record)
+            if saved != request and not legacy_export_request(saved, request):
                 raise ValueError("Metal pipeline request mismatch; preserve existing outputs")
+            request = saved
         else:
             if set(p.name for p in path.iterdir()) != {".metal.lock"}:
                 raise ValueError("Partial metal output initialization")
             for folder in folders:
                 (path/folder).mkdir()
             write_json(record, request)
-        yield
+        yield request
     finally:
         os.close(descriptor)
 
@@ -239,10 +240,11 @@ def validate_invocation(source: dict, args) -> dict:
 
 def run_branch(root: Path, case: str, branch: str, method: str, value: float, profile: str,
                prepared: Path, native: dict, maps: dict, settings: dict, args) -> None:
-    """Reconstruct or resume one hash-bound CPU branch and export via the standard MPRAGE converter.
+    """Reconstruct or resume one hash-bound CPU/GPU branch and export via the standard converter.
 
     All outputs are isolated. A completed execution may be exported on retry;
-    incomplete executions or partial exports are preserved and rejected.
+    incomplete executions are preserved and rejected. The known nested-layout
+    export failure can be revalidated without rerunning BART.
     """
     from scripts.convert_mprage_bart_to_nifti import convert
 
@@ -251,7 +253,7 @@ def run_branch(root: Path, case: str, branch: str, method: str, value: float, pr
     image = directory/"reconstruction/image_wave"
     record = image.parent/"wave_command.txt"
     inputs = prepared.parent
-    command = ["bart", "wave", "-w", "-f", "-r", format(value, ".17g"), "-i", "100", "-t", "1e-6",
+    command = ["bart", "wave", *(["-g"] if args.g else []), "-w", "-f", "-r", format(value, ".17g"), "-i", "100", "-t", "1e-6",
                maps["base"], str(inputs/"psf"), str(inputs/"wave_kspace"), str(image)]
     standard_request = _request_contract(
         prepared_manifest=prepared, normal_manifest=normal, profile=profile, case=case,
@@ -259,11 +261,11 @@ def run_branch(root: Path, case: str, branch: str, method: str, value: float, pr
         psfs=[inputs/"psf"], kspaces=[inputs/"wave_kspace"], images=[image],
         command_records=[record], expected_commands=[shlex.join(command)], nifti_directory=directory/"nifti")
     request = {"standard_request": standard_request, "native_preparation": native,
-               "config": settings["config"], "cpu_threads": args.cpu_threads,
+               "config": settings["config"], "cpu_threads": args.cpu_threads, "gpu": args.g,
                "software_sha256": {name: sha256_file(Path(__file__).with_name(name))
-                                   for name in ("metal_pipeline.py", "metal_runner.py")},
+                                   for name in ("metal_pipeline.py", "metal_runner.py", "metal_export.py")},
                "converter_sha256": sha256_file(Path(__file__).parents[1]/"scripts/convert_mprage_bart_to_nifti.py")}
-    with locked_directory(directory, request):
+    with locked_directory(directory, request) as request:
         preparation_path = directory/"metadata/preparation.json"
         preparation = {"request": {"source": {"regularization": value,
                        "records": {"psf": standard_request["inputs"]["psf_by_echo"][0],
@@ -276,7 +278,7 @@ def run_branch(root: Path, case: str, branch: str, method: str, value: float, pr
             write_json(preparation_path, preparation)
         if args.metal_prepare_only:
             return
-        execution = run_cpu_reconstruction(directory, preparation, args.cpu_threads)
+        execution = run_reconstruction(directory, preparation, args.cpu_threads, gpu=args.g)
         geometry = read_json(prepared)
         target = tuple(geometry.get("case", {}).get("target_logical_matrix_ro_lin_par",
                        native["request"]["source"]["geometry"]["logical_matrix_ro_lin_par"]))
@@ -288,50 +290,41 @@ def run_branch(root: Path, case: str, branch: str, method: str, value: float, pr
         else:
             with record.open("x") as stream:
                 stream.write(shlex.join(command)+"\n")
-        manifest = directory/"metadata/export.json"
-        if manifest.exists():
-            exported = read_json(manifest)
-            if exported["execution"] != file_record(directory/"metadata/reconstruction.json"):
-                raise ValueError("Metal export execution identity changed")
-            for item in exported["outputs"]:
-                if file_record(item["path"]) != item:
-                    raise ValueError("Metal NIfTI output changed")
-            return
-        if any((directory/"nifti").iterdir()):
-            raise ValueError("Partial metal NIfTI export; refusing overwrite")
-        convert(inputs, Path(execution["output"]["base"]), args.twix, args.seq,
-                directory/"nifti", f"BARTWaveMPRAGE{case}MetalCSM{method}")
-        # Augment new derivatives only; original exports and their sidecars remain untouched.
-        import json
-        for sidecar in (directory/"nifti").glob("*.json"):
-            payload = read_json(sidecar)
-            payload["MetalCSM"] = {"Experimental": True, "DefaultEnabled": False,
+        conversion_options = {}
+        source = native["request"]["source"]
+        if source.get("kind") == "automatic_native_inputs":
+            conversion_options["ecalib_command_record"] = Path(source["ecalib_record"]["path"])
+
+        def convert_export(output):
+            """Export the validated complex reconstruction to the requested isolated NIfTI directory."""
+            convert(inputs, Path(execution["output"]["base"]), args.twix, args.seq,
+                    output, f"BARTWaveMPRAGE{case}MetalCSM{method}", **conversion_options)
+
+        metadata = {"Experimental": True, "DefaultEnabled": False,
                                   "Preparation": file_record(preparation_path),
                                   "NativeCandidate": native["candidate"], "CaseCandidate": maps,
                                   "RegularizationOptimizedForMetalCSM": False,
-                                  "RegularizationLambda": value, "GPU": False}
-            sidecar.write_text(json.dumps(payload, indent=2, allow_nan=False)+"\n")
-        outputs = [file_record(path) for path in sorted((directory/"nifti").iterdir())]
-        if len(outputs) != 4:
-            raise ValueError("Expected magnitude/phase NIfTI plus two JSON sidecars")
-        for path in (directory/"nifti").glob("*.nii.gz"):
-            image_nifti = nib.load(path)
-            if image_nifti.shape != target[::-1] or not np.isfinite(image_nifti.affine).all() or not np.isfinite(np.asarray(image_nifti.dataobj)).all():
-                raise ValueError("Metal NIfTI geometry/finite-value validation failed")
-        write_json(manifest, {"status": "complete", "outputs": outputs,
-                             "execution": file_record(directory/"metadata/reconstruction.json")})
+                                  "RegularizationLambda": value, "GPU": args.g,
+                                  "SupportSelection": "automatic" if source.get("kind") == "automatic_native_inputs" else "manual_roi",
+                                  "SupportStatistics": native.get("statistics", {})}
+        finish_export(directory, target, metadata, convert_export,
+                      legacy=request["software_sha256"]["metal_pipeline.py"] == LEGACY_PIPELINE_SHA256)
 
 
 def run_pipeline(args) -> Path:
     """Run the explicit standard-launcher metal mode; return its independent VCC root.
 
-    Requires a completed reviewed normal baseline. Preparation uses existing
-    source/PSF/geometry validation; no baseline BART job is implicitly launched.
+    A manual config requires a reviewed baseline. With no config, automatically
+    prepare native inputs and CSM without a baseline Wave image. All paths retain
+    source/PSF/geometry validation; the metal switch is always required.
     """
     validate_options(args)
     memory_guard()
     root = args.output.expanduser().resolve()
     config = args.metal_csm_config or root/"metal_csm.local.json"
+    if args.metal_csm_config is None and not config.exists():
+        from .metal_auto_pipeline import run_automatic_pipeline
+        return run_automatic_pipeline(args)
     settings, source, destination = load_configuration(root, config, args.virtual_coils)
     invocation = validate_invocation(source, args)
     normal = Path(source["normal_manifest"]["path"])

@@ -20,7 +20,7 @@ def parser():
     result.add_argument("--mode", choices=("normal", "retro", "r3x3"), required=True)
     result.add_argument("--metal-csm-extrapolation", action="store_true")
     result.add_argument("--metal-csm-config", type=Path,
-                        help="Defaults to OUTPUT_ROOT/metal_csm.local.json")
+                        help="Optional reviewed manual ROI; absent default OUTPUT_ROOT/metal_csm.local.json selects automatic mode")
     profiles = result.add_mutually_exclusive_group()
     for name in ("reg-full", "wavelet-only", "fista-only"):
         profiles.add_argument("--"+name, dest="profile", action="store_const", const=name)
@@ -28,7 +28,7 @@ def parser():
     result.add_argument("--r3-lambda", type=float)
     result.add_argument("--cpu-threads", type=int, choices=range(1, 9), default=8)
     result.add_argument("--metal-prepare-only", action="store_true")
-    result.add_argument("-g", action="store_true")
+    result.add_argument("-g", action="store_true", help="Use GPU for BART Wave; CSM preparation remains on CPU")
     result.add_argument("--rovir", action="store_true")
     result.add_argument("--include-legacy-lr", action="store_true")
     result.add_argument("--n4-bias-correction", action="store_true")
@@ -36,9 +36,9 @@ def parser():
 
 
 def main(argv=None) -> int:
-    """Validate an explicit request, then run only CPU metal preparation/reconstruction."""
-    # Set CPU policy before importing numerical libraries through the shared parser.
-    os.environ.update(CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1",
+    """Validate a metal request, prepare on CPU, then use the selected BART backend."""
+    # Cap preparation threads without hiding the caller's CUDA selection for GPU BART.
+    os.environ.update(OMP_NUM_THREADS="1",
                       OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1")
     args = parser().parse_args(argv)
     from wave_retro_lr.metal_pipeline import run_pipeline, validate_options
@@ -46,7 +46,9 @@ def main(argv=None) -> int:
     from scripts.mprage_metal_recon import interrupted
 
     validate_options(args)
-    configure_idle_process()
+    if not args.g:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    configure_idle_process(gpu=args.g)
     signal.signal(signal.SIGTERM, interrupted)
     result = run_pipeline(args)
     print(f"Metal MPRAGE {args.mode} complete: {result}")

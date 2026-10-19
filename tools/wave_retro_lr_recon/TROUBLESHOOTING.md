@@ -1,5 +1,41 @@
 # Wave reconstruction troubleshooting
 
+## Metal export reports "Is a directory" for `nifti/sub-normal`
+
+An early metal exporter assumed flat files, while the standard converter creates
+`nifti/sub-CASE/` directories. This is an export-registration error, not evidence
+of a BART failure. Check `metadata/reconstruction.json` for `status: complete`.
+The corrected pipeline/collection handle nested pairs. For the exact affected
+implementation, retry preserves original request/preparation hashes and reuses
+the completed complex reconstruction, revalidating unregistered exports by a
+temporary conversion before completing metadata. Do not delete the variant,
+edit its hashes, or overwrite the BART image to resolve this error.
+Unknown partial outputs and changed inputs/settings still reject reuse.
+
+## Metal mode reports a missing local config or no support addition
+
+Current MPRAGE normal/retro metal mode supports raw + sequence bootstrap with
+`--metal-csm-extrapolation`; no default `metal_csm.local.json` is required.
+A present default config (or explicit `--metal-csm-config`) selects the reviewed
+manual-ROI path. An explicit missing config remains an error. Do not create a
+placeholder JSON containing null fields to enable automatic mode.
+
+`-g` is supported for integrated BART Wave reconstruction; CSM preparation and
+ecalib remain CPU operations. The old standalone diagnostic remains CPU-only.
+Automatic `no_op` means insufficient reliable support additions or a safety cap;
+reconstruction continues with unchanged maps. This is not proof that all metal
+signal is unrecoverable. Review the saved support archive/QC and statistics
+before considering a separate reviewed manual-ROI experiment. Do not overwrite
+an existing automatic variant or edit its hashes to bypass resume validation.
+See [MPRAGE metal support](docs/mprage_metal_csm.md) for exact policy and layout.
+
+If prepared files have moved between disks but their manifests still name the
+old disk, do not edit the manifests or bypass source checks. Register the
+explicitly confirmed move with the hash-bound relocation utility described in
+[Moved source datasets](docs/mprage_metal_csm.md#moved-source-datasets).
+It preserves original records and distinguishes a newly computed raw hash from
+an unavailable historical raw hash.
+
 ## A standard run is using the wrong virtual-coil tree
 
 Every new standard-PCA run belongs below `OUTPUT_ROOT/vccN`, with Ncc=24 as
@@ -587,9 +623,12 @@ subject identifiers, or other private machine data to tracked documentation.
 
 For a reviewed MPRAGE metal case, compare the native CSM support with the dark
 region before changing calibration. Darkness already inside valid support is
-not repaired simply by extending that support. The independent
+not repaired simply by extending that support. The
 [experimental metal CSM workflow](docs/mprage_metal_csm.md) is default-off,
-CPU-only, and requires explicit spatial parameters and a separate output.
-It preserves native vectors, validates all reuse by hashes, and never replaces
-normal/retro/ROVir or collection products. It is not general bias correction,
+MPRAGE-only, and writes a separate `vccN_metal_csm` variant. The integrated
+normal/retro launchers support optional GPU BART (`-g`), with CPU support
+completion; the standalone manual-ROI diagnostic remains CPU-only.
+It preserves native vectors, validates reuse by hashes, and never overwrites
+canonical normal/retro/ROVir source products. Collection prefers complete metal
+branches over same-VCC ordinary copies with explicit provenance. It is not general bias correction,
 automatic metal detection, or ESPIRiT soft-SENSE.

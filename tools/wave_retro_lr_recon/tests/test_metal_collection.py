@@ -61,7 +61,7 @@ def mocked_science():
          patch("wave_retro_lr.metal_pipeline.validate_invocation", return_value={}), \
          patch("wave_retro_lr.mprage.prepare_retro_mprage"), \
          patch("wave_retro_lr.mprage.prepare_retro_mprage_r3x3"), \
-         patch("wave_retro_lr.metal_pipeline.run_cpu_reconstruction", side_effect=fake_cpu), \
+         patch("wave_retro_lr.metal_pipeline.run_reconstruction", side_effect=fake_cpu), \
          patch("scripts.convert_mprage_bart_to_nifti.convert", side_effect=fake_convert):
         yield
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Reconstruct the reduced standard MPRAGE retro set or canonical legacy ROVir.
 
-# Explicit metal mode has isolated outputs and a guarded CPU runner.
+# Explicit metal mode has isolated outputs and guarded CPU/GPU BART execution.
 for argument in "$@"; do
     if [[ "$argument" == --metal-csm-extrapolation || "$argument" == --metal-csm-config || "$argument" == --metal-prepare-only ]]; then
         SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +16,7 @@ usage() {
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --fista-only)"
     echo "       [--metal-csm-extrapolation [--metal-csm-config CASE.local.json] [--metal-prepare-only] [--cpu-threads 1..8]]"
-    echo "       Metal mode: CPU-only, reviewed completed normal baseline required; see docs/mprage_metal_csm.md."
+    echo "       Metal mode: automatic raw/input preparation, optional manual ROI config, -g for BART; see docs/mprage_metal_csm.md."
     echo "       [--psf-coefficient-processing smooth|sine-line] (default: automatic sine-line)"
     echo "       [--psf-fit-kx-min INDEX --psf-fit-kx-max INDEX]"
     echo "       [--psf-fit-y-min INDEX --psf-fit-y-max INDEX] [--psf-fit-z-min INDEX --psf-fit-z-max INDEX]"

@@ -43,6 +43,8 @@ The user-facing inputs are a Wave-encoded Siemens TWIX file and its matching
 Pulseq sequence. Python validates and prepares BART inputs. In the standard
 workflows, sample Bash scripts show every `bart ecalib` and `bart wave` command
 explicitly; the Python preparation and conversion modules never launch BART.
+The explicit metal mode additionally uses a guarded Python orchestration layer
+to launch and record isolated ecalib/Wave commands; it is not enabled by default.
 
 The sections below describe the fully validated MPRAGE workflow first. The GRE
 section then summarizes the corresponding three stages and highlights only the
@@ -75,9 +77,13 @@ workflow is documented separately in
 Metal CSM support extrapolation is **MPRAGE-only**; GRE reconstruction and GRE
 NIfTI collection do not support it. For reviewed metal-artifact cases only,
 normal and retro MPRAGE launchers accept
-the default-off, CPU-only `--metal-csm-extrapolation` switch with a reviewed local
-configuration. Results are isolated in `vccN_metal_csm/`; see
+the default-off `--metal-csm-extrapolation` switch. Without a manual config it
+uses calibration-guided automatic support selection, reusing compatible inputs
+or preparing from raw + sequence; no prior diagnostic/baseline image is required.
+Results are isolated in `vccN_metal_csm/`; see
 [MPRAGE CSM support extrapolation](docs/mprage_metal_csm.md).
+CSM preparation remains on CPU; add `-g` to use GPU for BART Wave reconstruction
+in the normal, retro LR and independent R3x3 launchers.
 The unchanged collection command prefers complete, hash-validated metal results
 over matching same-VCC cases, preserving existing collection names and recording
 the selected source. Other VCCs and ROVir remain independent.

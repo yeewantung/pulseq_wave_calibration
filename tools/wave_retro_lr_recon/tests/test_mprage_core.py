@@ -2007,6 +2007,17 @@ class PreparationIntegrationTests(unittest.TestCase):
                     noise_prewhitening=False,
                 )
                 diagnostic = output / "vcc24" / "normal" / PSF_COEFFICIENT_PLOT_NAME
+                # A new PCA preparation can reuse exact accepted coil-independent
+                # PSF artifacts without invoking the projection fit again.
+                with patch("wave_retro_lr.mprage._calibrated_psf_inputs", side_effect=AssertionError("PSF refit forbidden")):
+                    reused_psf = prepare_normal_mprage(
+                        twix, root / "accepted_psf_copy", sequence, virtual_coils=24,
+                        accepted_psf_inputs=output / "vcc24/normal/bart_inputs",
+                    )
+                self.assertTrue(reused_psf["psf_calibration"]["reused_without_recalibration"])
+                for name in ("psf", "wave_trajectory", "psf_coefficients"):
+                    self.assertEqual(reused_psf["output_artifacts"][name]["payload_sha256"],
+                                     manifest["output_artifacts"][name]["payload_sha256"])
                 self.assertTrue(diagnostic.is_file())
                 self.assertTrue(
                     (

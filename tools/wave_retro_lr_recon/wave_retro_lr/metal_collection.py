@@ -12,9 +12,10 @@ import nibabel as nib
 import numpy as np
 
 from .bart_io import sha256_file
-from .metal_runner import cpu_command
+from .metal_runner import wave_command
 from .metal_workflow import file_record, read_json, source_contract, validate_cfl
 from .reconstruction_state import _request_contract
+from .metal_export import export_files
 
 
 def checked_file(record: dict, within: Path | None = None) -> Path:
@@ -87,13 +88,16 @@ def validate_branch(directory: Path, variant: Path, count: int, case: str,
     execution_path = directory/"metadata/reconstruction.json"
     execution = read_json(execution_path)
     identity = execution["identity"]
-    command = cpu_command(preparation, directory, identity["bart"]["path"])
-    if (execution["status"] != "complete" or identity["gpu"] is not False
+    gpu = request.get("gpu", False)  # Historical integrated branches were CPU-only.
+    if type(gpu) is not bool:
+        raise ValueError("Invalid metal GPU selection")
+    command = wave_command(preparation, directory, identity["bart"]["path"], gpu=gpu)
+    if (execution["status"] != "complete" or identity["gpu"] is not gpu
             or identity["preparation_sha256"] != sha256_file(preparation_path)
             or identity["command"] != command
             or len(standard["expected_commands"]) != 1
             or shlex.split(standard["expected_commands"][0])[1:] != command[1:]):
-        raise ValueError("Metal execution is not a complete matched CPU reconstruction")
+        raise ValueError("Metal execution is not a complete matched reconstruction (including CPU/GPU selection)")
     output = validate_cfl(execution["output"])
     if output["base"] != str(directory/"reconstruction/image_wave") or standard["images"] != [output["base"]]:
         raise ValueError("Metal output image path mismatch")
@@ -116,8 +120,12 @@ def validate_branch(directory: Path, variant: Path, count: int, case: str,
     if export["status"] != "complete" or export["execution"] != file_record(execution_path):
         raise ValueError("Metal export is not bound to its completed execution")
     paths = [checked_file(record, directory/"nifti") for record in export["outputs"]]
-    if len(paths) != 4 or set(paths) != {p.resolve() for p in (directory/"nifti").iterdir()}:
+    if len(paths) != 4 or set(paths) != {p.resolve() for p in export_files(directory/"nifti")}:
         raise ValueError("Metal export must contain exactly two NIfTI/JSON pairs")
+    if "export_registration" in export:
+        registration = checked_file(export["export_registration"], directory/"metadata")
+        if read_json(registration)["execution"] != export["execution"]:
+            raise ValueError("Metal export registration execution mismatch")
     pairs = {}
     affine = None
     for part in ("mag", "phase"):
@@ -140,8 +148,13 @@ def validate_branch(directory: Path, variant: Path, count: int, case: str,
                 or metadata.get("CaseCandidate") != candidate
                 or metadata.get("NativeCandidate") != native["candidate"]
                 or metadata.get("RegularizationLambda") != standard["regularization"]
-                or metadata.get("RegularizationOptimizedForMetalCSM") is not False):
+                or metadata.get("RegularizationOptimizedForMetalCSM") is not False
+                or metadata.get("GPU") is not gpu):
             raise ValueError("Metal NIfTI sidecar provenance mismatch")
+        if root_request["source"].get("kind") == "automatic_native_inputs" and (
+                metadata.get("SupportSelection") != "automatic"
+                or metadata.get("SupportStatistics") != native["statistics"]):
+            raise ValueError("Automatic support/no-op sidecar provenance mismatch")
         pairs[part] = (image, side)
     return {"case": case, "branch": directory.name, "method": standard["method"],
             "lambda": standard["regularization"], "pairs": pairs,
@@ -178,14 +191,27 @@ def discover_metal(root: Path) -> list[dict]:
             count = int(match[1])
             request_path = variant/"metadata/request.json"
             request = read_json(request_path)
-            source = request["source"]
-            checked_file(request["config"])
+            automatic = request.get("mode") == "automatic"
+            source = read_json(variant/"metadata/source.json") if automatic else request["source"]
+            if (source["virtual_coils"] != count
+                    or Path(source["normal_manifest"]["path"]).resolve() != root/f"vcc{count}/normal/bart_inputs/manifest.json"):
+                raise ValueError("Metal variant has mismatched normal source, count or reference")
+            if automatic:
+                from .metal_auto_pipeline import automatic_source
+                fresh_source = automatic_source(Path(source["normal_manifest"]["path"]), source["records"]["maps"],
+                    source["ecalib_record"], source["ecalib_origin"], source["ecalib_crop"])
+                if request["config"] != request["parameters"]:
+                    raise ValueError("Automatic metal policy provenance mismatch")
+                request = dict(request, source=source)
+            else:
+                checked_file(request["config"])
+                fresh_source = source_contract(source["manifest"]["path"], source["reference"]["path"])
             if (source["virtual_coils"] != count
                     or Path(source["normal_manifest"]["path"]).resolve() != root/f"vcc{count}/normal/bart_inputs/manifest.json"
-                    or source_contract(source["manifest"]["path"], source["reference"]["path"]) != source):
+                    or fresh_source != source):
                 raise ValueError("Metal variant has mismatched normal source, count or reference")
             # A collection reference must survive replacement of the collection itself.
-            if root/"nifti_collection" in Path(source["reference"]["path"]).parents:
+            if not automatic and root/"nifti_collection" in Path(source["reference"]["path"]).parents:
                 raise ValueError("Metal reference still resides in the collection; preserve a derivative-owned reference first")
             native_path = variant/"shared_csm/metadata/preparation.json"
             native = read_json(native_path)
@@ -195,6 +221,8 @@ def discover_metal(root: Path) -> list[dict]:
                 raise ValueError("Metal native preparation source/configuration mismatch")
             validate_cfl(native["candidate"])
             checked_file(native["support"], variant)
+            if automatic:
+                checked_file(native["figure"], variant)
             completed = []
             identities = set()
             for export in sorted(branches):

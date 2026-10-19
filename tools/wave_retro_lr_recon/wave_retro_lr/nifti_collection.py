@@ -1742,7 +1742,9 @@ def _load_json(path: Path) -> dict[str, Any]:
     Raises:
         ValueError: If the top-level JSON value is not an object.
     """
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    from .relocation import read_json
+
+    payload = read_json(path)
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a JSON object: {path}")
     return payload

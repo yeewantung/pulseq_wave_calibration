@@ -1,4 +1,4 @@
-"""Explicit CPU execution for isolated metal CSM experiments, never a default pipeline stage."""
+"""Guarded CPU or explicitly requested GPU BART execution for isolated metal CSM runs."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def available_gib() -> float:
     for line in Path("/proc/meminfo").read_text().splitlines():
         if line.startswith("MemAvailable:"):
             return int(line.split()[1])/1024**2
-    raise RuntimeError("Linux MemAvailable is required for this CPU-only experimental runner")
+    raise RuntimeError("Linux MemAvailable is required for the guarded metal runner")
 
 
 def memory_guard() -> None:
@@ -41,22 +41,30 @@ def memory_guard() -> None:
         raise MemoryError("Yielding to other workloads: host MemAvailable <64 GiB")
 
 
-def configure_idle_process() -> None:
-    """Apply nice 19, Linux SCHED_IDLE, a 96-GiB address-space cap and disabled core dumps.
+def configure_idle_process(*, gpu: bool = False) -> None:
+    """Apply idle CPU priority and disabled core dumps, with a CPU-only address-space cap.
 
     Affects only the caller (or our BART child through preexec_fn), never another
     user's task. Unsupported scheduling APIs or permission failures propagate.
+    GPU mode omits our address-space cap because CUDA reserves virtual mappings
+    beyond physical RAM; inherited system limits are not raised or removed.
     """
     current = os.getpriority(os.PRIO_PROCESS, 0)
     if current < 19:
         os.nice(19-current)
     os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))
-    _, hard = resource.getrlimit(resource.RLIMIT_AS)
-    limit = ADDRESS_SPACE_GIB*1024**3
-    if hard != resource.RLIM_INFINITY:
-        limit = min(limit, hard)
-    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    if not gpu:
+        _, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit = ADDRESS_SPACE_GIB*1024**3
+        if hard != resource.RLIM_INFINITY:
+            limit = min(limit, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def configure_gpu_process() -> None:
+    """Configure our GPU BART child without imposing the CPU virtual-address-space cap."""
+    configure_idle_process(gpu=True)
 
 
 def update_state(path: Path, value: dict) -> None:
@@ -71,20 +79,33 @@ def update_state(path: Path, value: dict) -> None:
 
 def cpu_command(preparation: dict, output: Path, bart: str) -> list[str]:
     """Return an explicit native CPU wave command retaining the baseline lambda and fixed solver settings."""
+    return wave_command(preparation, output, bart)
+
+
+def wave_command(preparation: dict, output: Path, bart: str, *, gpu: bool = False) -> list[str]:
+    """Return the bound BART wave command, adding -g only for an explicit GPU request."""
     source = preparation["request"]["source"]
-    return [bart, "wave", "-w", "-f", "-r", format(source["regularization"], ".17g"),
+    return [bart, "wave", *(["-g"] if gpu else []), "-w", "-f", "-r", format(source["regularization"], ".17g"),
             "-i", "100", "-t", "1e-6", preparation["candidate"]["base"],
             source["records"]["psf"]["base"], source["records"]["kspace"]["base"],
             str(output/"reconstruction/image_wave")]
 
 
 def run_cpu_reconstruction(output: Path, preparation: dict, threads: int = 8) -> dict:
-    """Run or strictly reuse one CPU BART reconstruction; stop only our child on memory pressure.
+    """Run the standalone diagnostic's CPU-only path with unchanged admission/resume guards."""
+    return run_reconstruction(output, preparation, threads)
+
+
+def run_reconstruction(output: Path, preparation: dict, threads: int = 8, *, gpu: bool = False,
+                       operation: str = "wave") -> dict:
+    """Run or strictly reuse one CPU/GPU BART reconstruction; stop only our child on RAM pressure.
 
     Args:
         output: Explicit, initialized and locked derivative directory.
         preparation: Validated candidate and immutable source request.
         threads: Positive OpenMP thread cap, at most eight; BLAS remains single-threaded.
+        gpu: Explicit BART -g request; preserve caller CUDA visibility and never fall back to CPU.
+        operation: Wave reconstruction or CPU-only ecalib for automatic-mode preparation.
     Returns:
         Completed execution record with input/output/tool hashes and resource usage.
     Raises:
@@ -98,12 +119,30 @@ def run_cpu_reconstruction(output: Path, preparation: dict, threads: int = 8) ->
     if bart is None:
         raise RuntimeError("Source the compatible host BART startup before reconstruction")
     bart = str(Path(bart).resolve())
-    command = cpu_command(preparation, output, bart)
-    identity = {"command": command, "bart": file_record(bart), "gpu": False,
+    if type(gpu) is not bool:
+        raise ValueError("GPU selection must be boolean")
+    if operation not in ("wave", "ecalib") or (operation == "ecalib" and gpu):
+        raise ValueError("Only wave supports explicit GPU execution")
+    source = preparation["request"]["source"]
+    inputs = list(source["records"].values())
+    if operation == "wave":
+        inputs.insert(0, preparation["candidate"])
+        command = wave_command(preparation, output, bart, gpu=gpu)
+        output_base = output/"reconstruction/image_wave"
+    else:
+        crop = float(preparation["request"]["ecalib_crop"])
+        if not 0 < crop <= 1:
+            raise ValueError("Invalid hard ecalib crop")
+        output_base = output/"reconstruction/coil_sens"
+        command = [bart, "ecalib", "-m", "1", "-c", str(crop),
+                   source["records"]["calibration"]["base"], str(output_base)]
+    identity = {"command": command, "bart": file_record(bart), "gpu": gpu,
                 "omp_threads": threads, "blas_threads": 1, "scheduler": "SCHED_IDLE",
                 "preparation_sha256": sha256_file(output/"metadata/preparation.json"),
                 "start_available_gib": START_AVAILABLE_GIB, "stop_available_gib": STOP_AVAILABLE_GIB,
-                "stop_rss_gib": STOP_RSS_GIB, "address_space_gib": ADDRESS_SPACE_GIB}
+                "stop_rss_gib": STOP_RSS_GIB, "address_space_gib": None if gpu else ADDRESS_SPACE_GIB}
+    if gpu:
+        identity["cuda_visible_devices"] = os.environ.get("CUDA_VISIBLE_DEVICES")
     state_path = output/"metadata/reconstruction.json"
     if state_path.exists():
         state = read_json(state_path)
@@ -118,15 +157,17 @@ def run_cpu_reconstruction(output: Path, preparation: dict, threads: int = 8) ->
         raise ValueError("Unbound/partial reconstruction outputs exist; refusing overwrite")
     if available_gib() < START_AVAILABLE_GIB:
         raise MemoryError("Need at least 112 GiB available RAM; no BART job launched. Retry later.")
-    for record in (preparation["candidate"], *preparation["request"]["source"]["records"].values()):
+    for record in inputs:
         validate_cfl(record)
     # Recheck admission after network reads; other workloads may have allocated RAM meanwhile.
     if available_gib() < START_AVAILABLE_GIB:
         raise MemoryError("RAM headroom decreased during validation; no BART job launched")
     if shutil.disk_usage(output).free < 2*1024**3:
         raise RuntimeError("Need at least 2 GiB free disk space before BART execution")
-    environment = dict(os.environ, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS=str(threads),
+    environment = dict(os.environ, OMP_NUM_THREADS=str(threads),
                        OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1", BART_DEBUG_LEVEL="3")
+    if not gpu:
+        environment["CUDA_VISIBLE_DEVICES"] = ""
     state = {"status": "starting", "identity": identity, "started_unix": time.time(),
              "peak_rss_gib": 0., "minimum_available_gib": available_gib()}
     log_path, memory_path = output/"logs/bart.log", output/"logs/memory.tsv"
@@ -135,7 +176,7 @@ def run_cpu_reconstruction(output: Path, preparation: dict, threads: int = 8) ->
     try:
         with log_path.open("x") as log, memory_path.open("x") as memory:
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=environment,
-                                       preexec_fn=configure_idle_process)
+                                       preexec_fn=configure_gpu_process if gpu else configure_idle_process)
             state.update(status="running", pid=process.pid)
             update_state(state_path, state)
             memory.write("elapsed_seconds\trss_gib\tavailable_gib\n")
@@ -157,9 +198,9 @@ def run_cpu_reconstruction(output: Path, preparation: dict, threads: int = 8) ->
                 time.sleep(5)
             if process.wait() != 0:
                 raise RuntimeError(f"BART returned {process.returncode}; partial outputs preserved")
-        state["output"] = cfl_record(output/"reconstruction/image_wave")
+        state["output"] = cfl_record(output_base)
         validate_cfl(state["output"])
-        for record in (preparation["candidate"], *preparation["request"]["source"]["records"].values()):
+        for record in inputs:
             validate_cfl(record)
         state["logs"] = [file_record(log_path), file_record(memory_path)]
         state["status"] = "complete"
