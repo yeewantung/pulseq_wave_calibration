@@ -146,9 +146,14 @@ OUTPUT_ROOT/
       bart_output/BRANCH/       # same per-branch layout as normal
 ```
 
-Native R3x1, R3x2 and R3x3 use the exact same candidate CFL pair. LR-Y applies
-the existing same-FOV centered Fourier PE resampling and RSS renormalization
-to that **candidate**, never to the original hard-cropped CSM. LR geometry is
+Native R3x1, R3x2 and R3x3 use the exact same candidate CFL pair. New LR-Y maps
+apply the shared [native support/gain preserving resampler](csm_calibration_cache.md#retrospective-csm-support-and-gain-transfer)
+to that **candidate**, never to the original hard-cropped CSM. The candidate's
+extended support is mapped separately from the Fourier-resampled coil direction;
+its scalar RSS is restored after direction normalization. This prevents a
+second unintended extension from normalized Fourier tails. Older LR map requests
+bound to the prior resampler are rejected intact, not silently regenerated.
+LR geometry is
 prepared from the measured source with existing PSF validation. Canonical
 retro k-space inputs may be prepared when absent, but canonical CSMs, completed
 reconstructions and NIfTIs are not overwritten.

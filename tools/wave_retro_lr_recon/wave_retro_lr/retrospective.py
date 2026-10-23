@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import fcntl
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy import __version__ as scipy_version
 
-from .bart_io import create_cfl, open_cfl, read_shape
+from .bart_io import bart_base, cfl_record, create_cfl, open_cfl, read_shape, sha256_file
 from .core import ResolvedCase, apply_wave_forward, centered_fftn
 
 
@@ -238,38 +241,159 @@ def write_measured_wave_crop(
     }
 
 
-def resample_sensitivity_maps(
-    source_base: str | Path, output_base: str | Path, *, target_lin_par: tuple[int, int]
-) -> None:
-    """Fourier-resample CSM fields to a same-FOV target PE grid.
+CSM_RESAMPLING_POLICY = "same_fov_native_support_and_rss_v1"
+
+
+def native_pe_coordinates(source: int, target: int) -> np.ndarray:
+    """Return native voxel-center coordinates of a centered same-FOV target PE axis.
+
+    The origin is index floor(N/2), matching the centered FFT convention for
+    even and odd sizes. Coordinates may reach a native half-voxel boundary;
+    scalar interpolation clamps to the nearest native edge, never wraps.
+    """
+    return (np.arange(target, dtype=np.float64) - target//2)*(source/target) + source//2
+
+
+def map_native_rss(rss: np.ndarray, target_lin_par: tuple[int, int]) -> tuple[np.ndarray, tuple]:
+    """Map native support and scalar RSS independently of Fourier ringing.
 
     Args:
-        source_base: Native BART ESPIRiT-map CFL basename.
-        output_base: Destination target-grid CSM basename.
-        target_lin_par: Target logical LIN/PAR dimensions.
+        rss: Finite nonnegative native RO/LIN/PAR coil RSS volume.
+        target_lin_par: Positive same-FOV target PE dimensions.
+    Returns:
+        Target RSS and nearest native LIN/PAR indices. Support uses nearest
+        native voxel centers (half ties towards the higher index). Within that
+        support, RSS is bilinearly interpolated using only supported native
+        neighbors. Thus unit hard support stays unit and soft gain is retained.
+        There is no interpolation along RO, dilation, or tissue inference.
+    """
+    from scipy.ndimage import map_coordinates
+
+    lin = native_pe_coordinates(rss.shape[1], target_lin_par[0])
+    par = native_pe_coordinates(rss.shape[2], target_lin_par[1])
+    nearest = (np.clip(np.floor(lin+.5).astype(int), 0, rss.shape[1]-1),
+               np.clip(np.floor(par+.5).astype(int), 0, rss.shape[2]-1))
+    coordinates = np.asarray(np.meshgrid(lin, par, indexing="ij"))
+    result = np.zeros((rss.shape[0], *target_lin_par), dtype=np.float32)
+    for ro in range(rss.shape[0]):
+        plane = rss[ro]
+        support = plane > 0
+        target_support = support[np.ix_(*nearest)]
+        numerator = map_coordinates(plane, coordinates, order=1, mode="nearest", prefilter=False)
+        denominator = map_coordinates(support.astype(np.float32), coordinates,
+                                      order=1, mode="nearest", prefilter=False)
+        np.divide(numerator, denominator, out=result[ro], where=target_support & (denominator > 0))
+    return result, nearest
+
+
+def resample_sensitivity_maps(
+    source_base: str | Path, output_base: str | Path, *, target_lin_par: tuple[int, int]
+) -> dict[str, Any]:
+    """Resample coil directions while preserving mapped native support and RSS gain.
+
+    Args:
+        source_base: Finite native single-map BART CSM; zeros define its support.
+        output_base: New target CSM basename, or a completed hash-bound derivative.
+        target_lin_par: Positive integer target PE sizes, no larger than native.
 
     Returns:
-        None. A coil-RSS-normalized BART CFL pair is written to ``output_base``.
-    """
+        Exact source/output records and versioned support/weight transfer policy.
+        Writes CFL/HDR plus an exclusive ``*_resampling.json`` completion record.
 
-    source = open_cfl(source_base)
+    Raises:
+        ValueError: Invalid input, partial output, legacy unbound maps, or reuse
+            mismatch. Existing maps and reconstructions are never overwritten.
+        BlockingIOError: Another writer holds this derivative's lock.
+    """
+    source_base, output_base = bart_base(source_base).resolve(), bart_base(output_base).absolute()
+    if source_base == output_base.resolve():
+        raise ValueError("Native CSM must not be overwritten by retrospective resampling")
     source_shape = read_shape(source_base)
+    if len(source_shape) < 4:
+        raise ValueError("Native CSM requires spatial and coil dimensions")
     shape = source_shape + (1,) * max(0, 5 - len(source_shape))
     ro, source_lin, source_par, coils, maps = shape[:5]
+    if len(target_lin_par) != 2 or any(isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer))
+                                      or v < 1 for v in target_lin_par):
+        raise ValueError("Target PE grid must contain two positive integers")
     target_lin, target_par = (int(value) for value in target_lin_par)
     if maps != 1 or any(value != 1 for value in shape[5:]):
         raise ValueError("Measured Wave reconstruction accepts exactly one ESPIRiT map set.")
     if target_lin > source_lin or target_par > source_par:
         raise ValueError("Retrospective CSM grids cannot exceed the native PE grid.")
+    metadata = output_base.with_name(output_base.name+"_resampling.json")
+    lock_path = output_base.with_name(output_base.name+"_resampling.lock")
+    if any(path.is_symlink() for path in (metadata, lock_path, output_base.with_suffix(".hdr"),
+                                         output_base.with_suffix(".cfl"))):
+        raise ValueError("Derived LR CSM files must not be symlinks")
+    output_base.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not metadata.exists() and any(output_base.with_suffix(s).exists() for s in (".hdr", ".cfl")):
+            raise ValueError("Existing LR CSM is legacy/unbound or partial; it is not support-preserving. "
+                             "Preserve it and use a fresh reconstruction output root: " + str(output_base))
+        source = open_cfl(source_base).reshape((ro, source_lin, source_par, coils), order="F")
+        native_squared = np.zeros((ro, source_lin, source_par), dtype=np.float64)
+        for coil in range(coils):
+            field = source[..., coil]
+            if not np.isfinite(field).all():
+                raise ValueError("Native CSM contains non-finite values")
+            native_squared += np.square(field.real, dtype=np.float64) + np.square(field.imag, dtype=np.float64)
+        native_rss = np.sqrt(native_squared).astype(np.float32)
+        if not np.isfinite(native_rss).all():
+            raise ValueError("Native CSM RSS overflows float32")
+        del native_squared
+        request = {"policy": CSM_RESAMPLING_POLICY, "source": cfl_record(source_base),
+                   "target_shape": [ro, target_lin, target_par, coils, 1],
+                   "implementation_sha256": sha256_file(Path(__file__)),
+                   "fft_implementation_sha256": sha256_file(Path(__file__).with_name("core.py")),
+                   "numpy_version": np.__version__, "scipy_version": scipy_version,
+                   "coordinate_rule": "(target_index-floor(target_N/2))*native_N/target_N+floor(native_N/2)",
+                   "support": "nearest native nonzero RSS; half ties up; no periodic wrap",
+                   "gain": "support-normalized bilinear native RSS; unchanged RO",
+                   "direction": "centered Fourier PE crop of native unit coil vectors",
+                   "degenerate_direction": "nearest supported native unit coil vector at RSS <= 1e-8"}
+        if metadata.exists():
+            saved = json.loads(metadata.read_text())
+            if saved.get("request") != request or saved.get("output") != cfl_record(output_base):
+                raise ValueError("LR CSM support policy, source or output hash mismatch: " + str(output_base))
+            return saved
+        result = _write_supported_maps(source, native_rss, output_base, (target_lin, target_par))
+        if cfl_record(source_base) != request["source"]:
+            raise ValueError("Native CSM changed during LR preparation")
+        saved = {"request": request, "output": cfl_record(output_base), **result}
+        with metadata.open("x") as stream:
+            json.dump(saved, stream, indent=2, sort_keys=True, allow_nan=False)
+            stream.write("\n")
+        return saved
+
+
+def _write_supported_maps(source: np.ndarray, native_rss: np.ndarray, output_base: Path,
+                          target_lin_par: tuple[int, int]) -> dict[str, Any]:
+    """Write one new LR map and return support/fallback counts; caller owns validation and lock.
+
+    Fourier ringing is restricted by separately mapped native support. Normalize
+    only the coil direction, then restore target RSS, including soft weights.
+    A vanishing Fourier vector inside support falls back to the nearest native
+    unit vector; no arbitrary phase or new support is invented. Same-grid input
+    is copied exactly without normalization or interpolation.
+    """
+    ro, source_lin, source_par, coils = source.shape
+    target_lin, target_par = target_lin_par
     output = create_cfl(output_base, (ro, target_lin, target_par, coils, 1))
+    if target_lin_par == (source_lin, source_par):
+        for coil in range(coils):
+            output[..., coil, 0] = source[..., coil]
+        output.flush()
+        return {"operation": "exact_same_grid_copy", "fallback_voxels": 0,
+                "support_voxels": int(np.count_nonzero(native_rss))}
+    target_rss, nearest = map_native_rss(native_rss, target_lin_par)
     rss_squared = np.zeros((ro, target_lin, target_par), dtype=np.float32)
     lin_start = source_lin // 2 - target_lin // 2
     par_start = source_par // 2 - target_par // 2
     for coil in range(coils):
-        field = np.asarray(source[:, :, :, coil, ...]).squeeze()
-        if field.shape != (ro, source_lin, source_par):
-            raise ValueError("Sensitivity map did not reduce to one 3D coil field.")
-        field = np.asarray(field, dtype=np.complex64)
+        field = np.zeros(native_rss.shape, dtype=np.complex64)
+        np.divide(source[..., coil], native_rss, out=field, where=native_rss > 0)
         spectrum = centered_fftn(field, axes=(1, 2))
         cropped = spectrum[
             :, lin_start : lin_start + target_lin, par_start : par_start + target_par
@@ -278,14 +402,25 @@ def resample_sensitivity_maps(
         output[:, :, :, coil, 0] = resized
         rss_squared += np.abs(resized) ** 2
     rss = np.sqrt(rss_squared)
-    support = rss > 1e-8
+    support = target_rss > 0
+    regular = support & (rss > 1e-8)
+    fallback = support & ~regular
+    nearest_rss = native_rss[:, nearest[0], :][:, :, nearest[1]]
     for coil in range(coils):
         current = np.asarray(output[:, :, :, coil, 0])
-        current[support] /= rss[support]
+        current[regular] *= target_rss[regular]/rss[regular]
+        if np.any(fallback):
+            native_values = source[..., coil][:, nearest[0], :][:, :, nearest[1]]
+            current[fallback] = native_values[fallback]/nearest_rss[fallback]*target_rss[fallback]
         current[~support] = 0
+        if not np.isfinite(current).all():
+            raise ValueError("Non-finite LR CSM after direction/support transfer")
         output[:, :, :, coil, 0] = current
     output.flush()
     del output
+    return {"operation": CSM_RESAMPLING_POLICY, "fallback_voxels": int(np.count_nonzero(fallback)),
+            "support_voxels": int(np.count_nonzero(support)),
+            "source_support_voxels": int(np.count_nonzero(native_rss))}
 
 
 def synthesize_wave_from_no_wave_crop(

@@ -621,6 +621,21 @@ subject identifiers, or other private machine data to tracked documentation.
 
 ## Metal-adjacent hard-cropped sensitivity support
 
+New LR maps preserve the normal CSM's mapped support and scalar gain. They no
+longer normalize Fourier ringing outside native support into signal-bearing
+voxels. This is shared by standard MPRAGE/GRE, ROVir and metal LR. An error
+about legacy/unbound LR CSMs means the existing derivative predates that policy;
+it is left intact, not automatically overwritten. Use a separately confirmed
+fresh root for comparison, and do not delete provenance to bypass validation.
+See [LR support transfer](docs/csm_calibration_cache.md#retrospective-csm-support-and-gain-transfer).
+
+To compare crop thresholds without repeatedly calibrating, use the isolated
+[uncropped CSM cache diagnostic](docs/csm_calibration_cache.md). It retains
+`ecalib -c 0` maps and eigenvalues and derives hard or explicitly versioned
+single-map soft weights. This also accepts canonical MPRAGE ROVir inputs, but
+does not integrate alternate maps into production reconstruction or collection.
+Single-map soft cropping must not be confused with multi-map Soft-SENSE.
+
 For a reviewed MPRAGE metal case, compare the native CSM support with the dark
 region before changing calibration. Darkness already inside valid support is
 not repaired simply by extending that support. The

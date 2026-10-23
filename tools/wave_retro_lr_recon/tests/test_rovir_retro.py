@@ -22,10 +22,43 @@ from wave_retro_lr.rovir_retro import (  # noqa: E402
 )
 from wave_retro_lr.sampling import SamplingPattern  # noqa: E402
 from wave_retro_lr.sampling import validate_pure_cartesian_image_lattice  # noqa: E402
+from wave_retro_lr.retrospective import CSM_RESAMPLING_POLICY, map_native_rss  # noqa: E402
 
 
 class RovirRetroTests(unittest.TestCase):
     """Exercise reduced defaults, legacy cases, and immutable canonical reuse."""
+
+    def test_lr_support_and_soft_gain_follow_canonical_normal(self) -> None:
+        """ROVir LR retains native spatial support/gain and rejects unversioned legacy reuse."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)/"reconstruction"
+            self._write_fixture(root)
+            source = root/"normal/rovir/bart_output/coil_sens"
+            maps = open_cfl(source, mode="r+")
+            maps[:] = 0
+            maps[:, 3:13, 2:14, 0, 0] = .2
+            maps[:, 3:13, 2:14, 1, 0] = .2j
+            maps[:, 6:8, 6:8] = 0
+            maps.flush()
+            source_rss = np.linalg.norm(maps[..., 0], axis=3)
+            contract_path = root/"normal/rovir/manifest.json"
+            contract = json.loads(contract_path.read_text())
+            contract["ecalib"]["coil_sens"] = cfl_record(source)
+            self._write_json(contract_path, contract)
+            case = "lr_y_1p5mm_r3x2"
+            manifest = prepare_mprage_rovir_retro(root, case_ids=[case])[0]
+            inputs = root/f"retro/{case}/rovir/bart_inputs"
+            result = np.linalg.norm(open_cfl(inputs/"coil_sens")[..., 0], axis=3)
+            expected, _ = map_native_rss(source_rss, result.shape[1:])
+            np.testing.assert_allclose(result, expected, atol=1e-6)
+            self.assertEqual(manifest["coil_sens_operation"], CSM_RESAMPLING_POLICY)
+            prepare_mprage_rovir_retro(root, case_ids=[case])
+            manifest["coil_sens_operation"] = "same-FOV centered Fourier PE resampling plus RSS normalization"
+            self._write_json(inputs/"manifest.json", manifest)
+            before = sha256_file(inputs/"coil_sens.cfl")
+            with self.assertRaisesRegex(ValueError, "legacy resampling"):
+                prepare_mprage_rovir_retro(root, case_ids=[case])
+            self.assertEqual(before, sha256_file(inputs/"coil_sens.cfl"))
 
     def test_prepares_defaults_and_explicit_legacy_cases(self) -> None:
         """Bind default and opt-in sibling cases to one contract and transform.

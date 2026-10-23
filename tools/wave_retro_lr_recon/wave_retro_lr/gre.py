@@ -25,6 +25,7 @@ from .psf import (
     write_psf_coefficient_plot,
 )
 from .retrospective import (
+    CSM_RESAMPLING_POLICY,
     link_bart_pair,
     resample_sensitivity_maps,
     validate_same_grid_masked_wave,
@@ -2923,32 +2924,40 @@ def prepare_retro_gre_sensitivity_maps(
         virtual_coils: Positive standard-PCA channel count selecting ``vccN``.
 
     Returns:
-        None. Native maps are not duplicated; LR maps are Fourier-resampled and
-        coil-RSS normalized.
+        None. Native maps are not duplicated. LR coil directions are Fourier
+        resampled with independently transferred native support and RSS gain,
+        shared across all echoes. Legacy or mismatched maps are rejected intact.
     """
 
     virtual_coils = validate_virtual_coils(virtual_coils)
     root = standard_variant_root(output_root, virtual_coils)
     source = root / NORMAL_OUTPUT_RELATIVE / "coil_sens"
-    read_shape(source)
+    source_shape = read_shape(source)
+    if len(source_shape) < 4 or source_shape[3] != virtual_coils:
+        raise ValueError("Native GRE CSM coil count differs from the selected standard variant")
     inputs = root / RETRO_RELATIVE / "lin_low_resolution_r3x2" / "bart_inputs"
     manifest = _load_json(inputs / "manifest.json")
+    previous = manifest.get("coil_sens_resampling")
+    if previous is not None and (not isinstance(previous, dict)
+                                  or previous.get("request", {}).get("policy") != CSM_RESAMPLING_POLICY):
+        raise ValueError("Existing GRE LR CSM manifest uses legacy resampling; preserve it and use a fresh output root")
     case = manifest.get("case", {})
     target_matrix = tuple(int(value) for value in case["matrix_ro_lin_par"])
-    if len(target_matrix) != 3:
+    if len(target_matrix) != 3 or target_matrix[0] != source_shape[0]:
         raise ValueError("LIN-low-resolution GRE manifest has an invalid matrix.")
     target = inputs / "coil_sens"
-    if target.with_suffix(".hdr").is_file() and target.with_suffix(".cfl").is_file():
-        if read_shape(target)[:3] != target_matrix:
-            raise ValueError("Existing low-resolution GRE sensitivity maps have the wrong shape.")
-        return
-    resample_sensitivity_maps(
+    record = resample_sensitivity_maps(
         source, target, target_lin_par=target_matrix[1:]
     )
+    if manifest.get("coil_sens_resampling") == record:
+        return
+    if "coil_sens_resampling" in manifest:
+        raise ValueError("GRE LR CSM manifest resampling record differs; refusing relabel")
     manifest["coil_sens"] = "coil_sens"
     manifest["coil_sens_shape"] = list(read_shape(target))
     manifest["coil_sens_source"] = str(source)
     manifest["coil_sens_shared_across_echoes"] = True
+    manifest["coil_sens_resampling"] = record
     _write_json(inputs / "manifest.json", manifest)
 
 

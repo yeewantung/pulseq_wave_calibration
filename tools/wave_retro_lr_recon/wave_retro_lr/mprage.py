@@ -39,6 +39,7 @@ from .projection_psf import (
     select_spatial_projection_region,
 )
 from .retrospective import (
+    CSM_RESAMPLING_POLICY,
     link_bart_pair,
     resample_sensitivity_maps,
     validate_same_grid_masked_wave,
@@ -3441,13 +3442,16 @@ def prepare_retro_sensitivity_maps(
         None.
 
     Raises:
-        ValueError: If an existing low-resolution map has the wrong grid.
+        ValueError: If a map has incompatible geometry, legacy resampling, or
+            mismatched native-source/output hashes. Existing files are preserved.
     """
 
     virtual_coils = validate_virtual_coils(virtual_coils)
     root = standard_variant_root(output_root, virtual_coils)
     source_maps = root / NORMAL_OUTPUT_RELATIVE / "coil_sens"
-    read_shape(source_maps)
+    source_shape = read_shape(source_maps)
+    if len(source_shape) < 4 or source_shape[3] != virtual_coils:
+        raise ValueError("Native CSM coil count does not match the selected standard variant")
     retro_root = root / RETRO_RELATIVE
     for directory_name, requested_xy in RETRO_CASES:
         if requested_xy is None:
@@ -3456,23 +3460,25 @@ def prepare_retro_sensitivity_maps(
         if not (inputs / "manifest.json").is_file():
             continue
         manifest = _load_json(inputs / "manifest.json")
+        previous = manifest.get("coil_sens_resampling")
+        if previous is not None and (not isinstance(previous, dict)
+                                      or previous.get("request", {}).get("policy") != CSM_RESAMPLING_POLICY):
+            raise ValueError("Existing LR CSM manifest uses legacy resampling; preserve it and use a fresh output root")
         target = tuple(int(value) for value in manifest["case"]["target_logical_matrix_ro_lin_par"])
         output_maps = inputs / "coil_sens"
-        if output_maps.with_suffix(".hdr").is_file() and output_maps.with_suffix(".cfl").is_file():
-            if read_shape(output_maps)[:3] != target:
-                raise ValueError(
-                    f"Existing LR sensitivity maps have the wrong shape: {output_maps}"
-                )
-            print(f"Reusing compatible LR sensitivity maps: {output_maps}")
-            continue
-        resample_sensitivity_maps(
+        if len(target) != 3 or target[0] != source_shape[0]:
+            raise ValueError("LR CSM must preserve the native readout geometry")
+        record = resample_sensitivity_maps(
             source_maps, output_maps, target_lin_par=(target[1], target[2])
         )
+        if manifest.get("coil_sens_resampling") == record:
+            print(f"Reusing hash-validated support-preserving LR sensitivity maps: {output_maps}")
+            continue
+        if "coil_sens_resampling" in manifest:
+            raise ValueError("LR CSM manifest resampling record differs; refusing relabel")
         manifest["coil_sens"] = "coil_sens"
         manifest["coil_sens_shape"] = list(read_shape(output_maps))
         manifest["coil_sens_source"] = str(source_maps)
-        manifest["coil_sens_resampling"] = (
-            "same-FOV centered Fourier PE resampling plus RSS normalization"
-        )
+        manifest["coil_sens_resampling"] = record
         _write_json(inputs / "manifest.json", manifest)
         print(f"Prepared LR sensitivity maps: {output_maps}")

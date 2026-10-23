@@ -496,8 +496,8 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
                 self.assertGreater(path.stat().st_size, 1000)
 
-    def test_lr_csm_fourier_resampling_is_rss_normalized(self) -> None:
-        """Resample PE only at unchanged readout and normalize coil RSS."""
+    def test_lr_csm_fourier_resampling_preserves_native_rss(self) -> None:
+        """Resample PE only, preserving the normal map's gain rather than forcing unit RSS."""
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -510,7 +510,7 @@ class GreCsmCommandAndOutputTests(unittest.TestCase):
             self.assertEqual(read_shape(root / "low")[:5], (4, 4, 6, 2, 1))
             maps = np.asarray(open_cfl(root / "low"))
             rss = np.sqrt(np.sum(np.abs(maps[..., 0]) ** 2, axis=3))
-            self.assertTrue(np.allclose(rss[rss > 0], 1.0, atol=1e-6))
+            self.assertTrue(np.allclose(rss[rss > 0], np.sqrt(2), atol=1e-6))
 
     def test_retro_wave_crop_preserves_readout_and_slices_only_pe(self) -> None:
         """Match MPRAGE's direct PE crop without interpolation or RO loss."""

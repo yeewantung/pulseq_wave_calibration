@@ -169,7 +169,12 @@ class MetalPipelineTests(unittest.TestCase):
                 self.assertEqual(lr_maps["candidate"]["shape"][:3], [24, 16, 20])
                 values = np.asarray(open_cfl(lr_maps["candidate"]["base"])).squeeze()
                 rss = np.linalg.norm(values, axis=3)
-                np.testing.assert_allclose(rss[rss > 0], 1, atol=1e-5)
+                from wave_retro_lr.retrospective import map_native_rss, CSM_RESAMPLING_POLICY
+                native_rss = np.linalg.norm(np.asarray(open_cfl(native["candidate"]["base"])).squeeze(), axis=3)
+                expected_rss, _ = map_native_rss(native_rss, rss.shape[1:])
+                np.testing.assert_allclose(rss, expected_rss, atol=1e-5)
+                policy = read_json(Path(lr_maps["candidate"]["base"]).with_name("coil_sens_resampling.json"))
+                self.assertEqual(policy["request"]["policy"], CSM_RESAMPLING_POLICY)
                 sidecar = next((destination/"retro/native_r3x3").rglob("*part-mag*.json"))
                 self.assertFalse(read_json(sidecar)["MetalCSM"]["RegularizationOptimizedForMetalCSM"])
                 sidecar.write_text("{}")

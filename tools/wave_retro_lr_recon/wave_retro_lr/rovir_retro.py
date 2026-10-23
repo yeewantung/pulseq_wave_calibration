@@ -26,6 +26,7 @@ from .mprage import (
     _sampling_from_manifest,
 )
 from .retrospective import (
+    CSM_RESAMPLING_POLICY,
     link_bart_pair,
     resample_sensitivity_maps,
     validate_same_grid_masked_wave,
@@ -256,16 +257,17 @@ def prepare_mprage_rovir_retro(
                 "resolution-matched evaluation of canonical calibrated PSF phase planes"
             )
         target = case.target_logical_matrix_ro_lin_par
+        csm_resampling = None
         if read_shape(source_csm)[:3] == target:
             link_bart_pair(source_csm, destination / "coil_sens")
             csm_operation = "exact link to canonical normal ROVir CSM"
         else:
-            resample_sensitivity_maps(
+            csm_resampling = resample_sensitivity_maps(
                 source_csm,
                 destination / "coil_sens",
                 target_lin_par=(target[1], target[2]),
             )
-            csm_operation = "same-FOV centered Fourier PE resampling plus RSS normalization"
+            csm_operation = CSM_RESAMPLING_POLICY
         reused_lambda = ROVIR_REUSED_WAVELET_LAMBDAS[case_name]
         same_grid_validation = None
         if target == geometry.logical_matrix_ro_lin_par:
@@ -301,6 +303,7 @@ def prepare_mprage_rovir_retro(
             "coil_sens": "coil_sens",
             "coil_sens_shape": list(read_shape(destination / "coil_sens")),
             "coil_sens_operation": csm_operation,
+            "coil_sens_resampling": csm_resampling,
             "echoes": [{
                 "echo": 1,
                 "wave_kspace": "wave_kspace",
@@ -555,6 +558,14 @@ def _validate_reuse(
     for name in ("wave_kspace", "psf", "coil_sens"):
         if manifest.get("artifacts", {}).get(name) != _cfl_hash_record(destination / name):
             raise ValueError(f"Existing ROVir retrospective {name} failed hash reuse.")
+    target = expected_case.target_logical_matrix_ro_lin_par
+    source_csm = contract_path.parent/"bart_output/coil_sens"
+    if read_shape(source_csm)[:3] != target:
+        if manifest.get("coil_sens_operation") != CSM_RESAMPLING_POLICY:
+            raise ValueError("Existing ROVir LR CSM uses legacy resampling; preserve it and use a fresh output root")
+        record = resample_sensitivity_maps(source_csm, destination/"coil_sens", target_lin_par=target[1:])
+        if manifest.get("coil_sens_resampling") != record:
+            raise ValueError("ROVir LR CSM support-transfer provenance mismatch")
 
 
 def _cfl_hash_record(base: Path) -> dict[str, Any]:

@@ -88,6 +88,15 @@ The unchanged collection command prefers complete, hash-validated metal results
 over matching same-VCC cases, preserving existing collection names and recording
 the selected source. Other VCCs and ROVir remain independent.
 
+For calibration review, an optional [uncropped CSM cache and crop diagnostic](docs/csm_calibration_cache.md)
+compares hard/soft crop variants for prepared MPRAGE, ROVir, or GRE ACS.
+It does not change the normal/retro defaults or run reconstruction.
+
+New LR CSM preparation preserves the selected native map's support and scalar
+RSS gain instead of turning Fourier tails into unit-RSS background. This applies
+to MPRAGE, GRE, ROVir and metal LR; see the
+[support-transfer and legacy-reuse rules](docs/csm_calibration_cache.md#retrospective-csm-support-and-gain-transfer).
+
 ## MPRAGE workflow
 
 For sagittal MPRAGE, logical `(RO, LIN, PAR)` corresponds to physical
@@ -585,8 +594,9 @@ transferred `0.015` value:
 
 All retrospective k-space comes from direct measured-Wave cropping and pure
 Cartesian masking, never from no-Wave forward simulation. The LIN-low CSM is
-derived from the accepted native map by centered Fourier PE resampling at
-unchanged FOV followed by coil-RSS normalization; readout maps are not resized.
+derived from the accepted native map by centered Fourier PE resampling of coil
+directions at unchanged FOV, with the native support and scalar RSS gain mapped
+separately and restored afterward; readout maps are not resized.
 For the adult grid, `target-Ny=148` and the crop is `[51:199]`; for the
 `Ny=196`, `172 mm` pediatric grid, `target-Ny=116` and the crop is `[40:156]`.
 
