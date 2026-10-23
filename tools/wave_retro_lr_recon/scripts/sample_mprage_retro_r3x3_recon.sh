@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Native R3x3 uses the exact explicitly selected native custom CSM.
+for argument in "$@"; do
+    if [[ "$argument" == --custom-csm || "$argument" == --custom-csm=* || "$argument" == --custom-prepare-only ]]; then
+        SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+        exec python "$SCRIPT_DIR/mprage_custom_pipeline.py" --mode r3x3 "$@"
+    fi
+done
+
 # Prepare and resumably reconstruct only native-grid R3x3 Wave-MPRAGE.
 
 # Explicit metal mode has isolated outputs and guarded CPU/GPU BART execution.

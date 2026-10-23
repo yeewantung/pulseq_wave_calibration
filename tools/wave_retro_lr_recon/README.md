@@ -66,6 +66,11 @@ count-specific standard reconstruction profiles but intentionally excludes
 ROVir and N4. The single `OUTPUT_ROOT/nifti_collection/` keeps complete `vccN`
 and MPRAGE ROVir variants additive.
 
+MPRAGE standard-PCA and ROVir normal/retro also accept an explicitly bound
+`--custom-csm MANIFEST.json`, with isolated fingerprinted outputs and no
+automatic collection replacement. This experimental path does not support GRE
+or combined N4/metal flags; see [custom CSM workflow](docs/mprage_custom_csm.md).
+
 Detailed PCA rationale, retained-energy provenance, immutable tree rules,
 profile semantics, and lambda history are in the
 [virtual-coil and reconstruction-profile reference](docs/virtual_coil_reconstruction_redesign_plan.md).

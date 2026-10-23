@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Keep the root-only compatibility entry point for the same custom-CSM backend.
+for argument in "$@"; do
+    if [[ "$argument" == --custom-csm || "$argument" == --custom-csm=* || "$argument" == --custom-prepare-only ]]; then
+        SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+        exec python "$SCRIPT_DIR/mprage_custom_pipeline.py" --mode retro --rovir --root-only "$@"
+    fi
+done
+
 # Reconstruct selected MPRAGE retro cases from the canonical normal ROVir branch.
 
 usage() {

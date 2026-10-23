@@ -55,6 +55,37 @@ three zero-based **logical** slice indices; the default uses grid centers.
 Select slices through the region of interest when reviewing a mouth defect.
 These are not NIfTI coordinates or anatomically oriented views.
 
+## ACS magnitude overlays (completed cache only)
+
+To compare crop support against anatomy, add an overlay figure without running
+ecalib or reconstruction again:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 nice -n 19 \
+  python tools/wave_retro_lr_recon/scripts/plot_csm_acs_overlay.py \
+  --diagnostics "$CONFIRMED_DIAGNOSTICS_DIR"
+```
+
+The background is the coil-wise centered 3D inverse FFT of the **same-basis
+ACS**, combined by RSS without CSM masking. For ROVir this is projected ACS,
+not the original physical-coil signal. Each view includes a plain ACS panel.
+Hard crops have cyan support contours; soft crops have a translucent weight
+layer and cyan contours at 0.1/0.5/0.9. Dashed yellow marks hard-0.6 support.
+All panels share one whole-volume percentile window (default 99.5) and display
+gamma (default 0.5); these do not change the underlying data. Logical axes
+remain explicit: no RAS orientation or registration is inferred. Use
+`--slices RO LIN PAR` for matching slices through the region of interest.
+
+New files are `figures/acs_csm_overlay_<hash>.png` and the matching
+`metadata/acs_csm_overlay_<hash>.json`. Existing calibration, weights, figures
+and reconstructed images are preserved; no ACS image volume or full CSM copy
+is saved. Provenance binds the source manifest, basis, ACS, calibration,
+variant hashes, plotting implementation and display settings. Exact resumes
+validate the PNG hash; changing display settings adds another figure. Source
+or weight mismatches fail rather than silently plotting unrelated data.
+The single-worker CPU FFT processes one coil at a time. An ACS overlay helps
+locate support exclusions, but is not evidence of recovered tissue or SNR.
+
 ## Files and disk use
 
 ```text

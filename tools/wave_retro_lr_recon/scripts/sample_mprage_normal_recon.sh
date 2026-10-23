@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# An explicitly bound custom CSM uses isolated outputs and never recalibrates.
+for argument in "$@"; do
+    if [[ "$argument" == --custom-csm || "$argument" == --custom-csm=* || "$argument" == --custom-prepare-only ]]; then
+        SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+        exec python "$SCRIPT_DIR/mprage_custom_pipeline.py" --mode normal "$@"
+    fi
+done
+
 # Prepare and resumably reconstruct one count-specific standard-PCA MPRAGE variant.
 
 # Explicit metal mode has isolated outputs and guarded CPU/GPU BART execution.
@@ -13,6 +21,7 @@ for argument in "$@"; do
 done
 
 usage() {
+    echo "Custom CSM: append --custom-csm MANIFEST.json [--custom-prepare-only]; see docs/mprage_custom_csm.md."
     echo "Usage: $0 TWIX.dat OUTPUT_ROOT SEQUENCE.seq [--virtual-coils N] [--noise-prewhitening | --no-noise-prewhitening] [--n4-bias-correction] [--ecalib-crop VALUE] [--r3-lambda VALUE] [-g]"
     echo "       [--reg-full | --wavelet-only | --fista-only] (default: --wavelet-only)"
     echo "       [--metal-csm-extrapolation [--metal-csm-config CASE.local.json] [--metal-prepare-only] [--cpu-threads 1..8]]"

@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Custom mode uses the already prepared ROVir transform, never a new ROI fit.
+for argument in "$@"; do
+    if [[ "$argument" == --custom-csm || "$argument" == --custom-csm=* || "$argument" == --custom-prepare-only ]]; then
+        [[ "${1:-}" == run ]] || { echo "Error: custom CSM requires ROVir run mode." >&2; exit 2; }
+        SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+        exec python "$SCRIPT_DIR/mprage_custom_pipeline.py" --mode normal --rovir "${@:2}"
+    fi
+done
+
 # Reconstruct prepared Wave-MPRAGE data with reviewed ROVir coils.
 
 usage() {
