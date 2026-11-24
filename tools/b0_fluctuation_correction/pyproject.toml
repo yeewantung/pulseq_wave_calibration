@@ -1,0 +1,18 @@
+[project]
+name = "b0-fluctuation-correction"
+version = "0.1.0"
+description = "Data-consistency (self-navigated) B0-fluctuation correction for measured Wave-CAIPI GRE"
+requires-python = ">=3.11,<3.14"
+dependencies = []
+
+[dependency-groups]
+recon = [
+    "matplotlib>=3.8",
+    "numpy>=1.26,<3",
+    "pymapvbvd>=0.6.1",
+    "torch>=2.2",
+]
+
+[tool.uv]
+package = false
+default-groups = ["recon"]
