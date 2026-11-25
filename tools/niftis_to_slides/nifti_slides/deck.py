@@ -259,18 +259,21 @@ class DeckBuilder:
         presentation: The deck under construction.
     """
 
-    def __init__(self, template_path: Path) -> None:
+    def __init__(self, template_path: Path, *, existing_path: Path | None = None) -> None:
         """Open the template and take its styling assets.
 
         Args:
             template_path: Template deck carrying the theme, the layouts and the
                 x/y axis indicator group.
+            existing_path: Optional deck to extend, retaining all its slides.
 
         Raises:
             ValueError: If the template lacks the axis indicator or a layout.
         """
         self.presentation = Presentation(str(template_path))
         self._axis_group = self._take_axis_group()
+        if existing_path is not None:
+            self.presentation = Presentation(str(existing_path))
         layouts = self.presentation.slide_masters[0].slide_layouts
         self._picture_layout = layouts.get_by_name(PICTURE_LAYOUT)
         self._section_layout = layouts.get_by_name(SECTION_LAYOUT)
@@ -278,7 +281,8 @@ class DeckBuilder:
             raise ValueError(
                 f"Template needs {PICTURE_LAYOUT!r} and {SECTION_LAYOUT!r} layouts."
             )
-        self._drop_template_slides()
+        if existing_path is None:
+            self._drop_template_slides()
 
     def add_section(self, title: str) -> None:
         """Append a section header slide.

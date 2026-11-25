@@ -9,6 +9,99 @@ a PowerPoint deck built to the reviewed slide pattern.
 > `~/Library/CloudStorage/Dropbox-PartnersHealthCare/<user>/SubtleMRI_DataShare/LowDose_R01_DataShare/waveCAIPI_scans`.
 > Quote any path containing spaces.
 
+## Retrospective comparisons without R3x1 data
+
+For a collection containing only retrospective reconstructions, use the separate
+visual-comparison entry point (supports MPRAGE and SWI magnitude images):
+
+```bash
+python scripts/build_retrospective_slides.py "path/to/collection" \
+    --output "path/to/collection/nifti_comparison.pptx"
+```
+
+It discovers `<subject>/<contrast>/<container>/<branch>/retro/<variant>/`
+automatically, keeping echoes and reconstruction suffixes in separate comparison
+groups. All magnitude inputs in this layout are included; phase images are
+excluded. Each group prefers `native_r3x2` as its **display reference** (override
+with `--reference-variant`), falling back to its first naturally sorted variant.
+There is no fully sampled reference and no accuracy scoring.
+
+Each group shares a canonical RAS grid, a display window (foreground p99.5),
+and least-squares intensity matching. Anisotropic voxel dimensions are respected
+in the sagittal/coronal/axial strips. `--scale none` disables gain matching;
+`--display-percentile` adjusts the shared window. The template and +20%
+brightness curve are the same as for the reference-based pipeline.
+
+The PPTX is written directly at `--output` (default:
+`<input>/nifti_comparison.pptx`). A sibling `<deck-stem>_assets/` directory holds
+16-bit TIFF strips and `manifest.csv`, recording source paths relative to the
+input, the display reference, window, gain and any geometry resampling.
+
+To insert R3x1 wavelet baselines into an already reviewed retrospective deck:
+
+```bash
+python scripts/insert_baseline_slides.py "path/to/collection" \
+    --reference-root "path/to/reference-share" \
+    --deck "path/to/collection/nifti_comparison.pptx" \
+    --output "path/to/updated/nifti_comparison.pptx"
+```
+
+The original deck and its sibling `<deck-stem>_assets/manifest.csv` are used to
+match each comparison group to a unique wavelet `normal/` reconstruction in the
+same subject, contrast and container (e.g. `vcc24_original`), with the same echo
+and acquisition tags. Missing or ambiguous matches stop the run. One baseline
+page is inserted before each group's retrospective pages, which retain their
+original slide XML and embedded images. Baselines are mapped to each group's
+existing display grid, window and gain-matching mode, then rendered with the
+same physical aspect ratio, 13-inch centered picture and +20% brightness curve.
+No accuracy metrics are computed. New TIFFs and `baseline_manifest.csv` go into
+the output deck's sibling assets directory; original comparison assets are not
+copied when output is written elsewhere.
+
+To add the original no-regularization FISTA reconstructions after each uncond
+pair in a deck that already includes baselines:
+
+```bash
+python scripts/insert_fista_slides.py "path/to/collection" \
+    --reference-root "path/to/reference-share" \
+    --deck "path/to/collection/nifti_comparison.pptx" \
+    --output "path/to/updated/nifti_comparison.pptx"
+```
+
+This reads the original retrospective `manifest.csv` beside the input deck
+(override with `--manifest` if needed). Raw `FISTAR0` magnitude files must match
+the same subject, contrast, container, variant, echo and acquisition; model
+outputs are excluded. All matches and insertion positions are checked before
+rendering. Each group's order becomes R3x1 wavelet, R3x2 uncond, R3x3 uncond,
+R3x2 FISTA, R3x3 FISTA. The new pages retain the group's existing display grid,
+window, intensity matching, physical aspect ratio, +20% brightness and layout.
+Existing slide XML and embedded images are preserved. New TIFFs are written
+under `original_fista/` in the output assets directory, with a separate
+`fista_manifest.csv` recording their provenance and display settings.
+
+## All-subject R3x1 wavelet deck
+
+```bash
+python scripts/build_wavelet_slides.py "path/to/reference-share" \
+    --output "path/to/reference-share/all_subjects_r3x1_wavelet.pptx"
+```
+
+This creates one image page per subject/contrast/echo/acquisition, with its
+identifiers in the title and no divider or comparison pages. Duplicate versions
+are resolved in this order: `original_nifti/rovir_optimal_wavelet`,
+`vcc24_original/wavelet_selected_vcc24`, `original_nifti/optimal_wavelet`, then
+`original_nifti/selected_wavelet`. ROVir versions are labelled in the page
+title. Masked copies, phase images, model outputs and retrospective cases are
+excluded. Ambiguous matches or subjects lacking any supported baseline stop
+the run, rather than silently dropping a subject.
+
+Each volume defines its own canonical RAS display grid and foreground p99.5
+window (`--display-percentile` to change it); its gain is 1. The renderer retains
+physical voxel aspect ratios and uses the same +20% brightness and centered
+13-inch picture layout. The sibling assets directory contains 16-bit TIFFs,
+`manifest.csv` with provenance/display settings, and `selection.csv` showing all
+supported unmasked candidates and which one was selected for each scan.
+
 ## Two shares are required
 
 The super-resolution share holds SR outputs only. It contains **no** `normal/`
@@ -197,7 +290,8 @@ and `Section Header` layouts and a group named `Group 8`.
 
 ## Scope
 
-MPRAGE only. SWI is deliberately excluded: it uses a `selected_wavelet` branch,
+The reference-based pipeline is MPRAGE only. SWI is deliberately excluded there:
+it uses a `selected_wavelet` branch,
 different retrospective case names, and a baseline file named `sub-native_r3x1_…`
 rather than `sub-normal_…`, so it needs its own naming map. (The masking tool
 does handle SWI, since it only needs the baseline.)

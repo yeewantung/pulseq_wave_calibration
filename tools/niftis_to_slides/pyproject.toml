@@ -8,6 +8,7 @@ dependencies = []
 [dependency-groups]
 slides = [
     "lxml>=5.0",
+    "matplotlib>=3.8",
     "nibabel>=5.2",
     "numpy>=1.26,<3",
     "pillow>=10.0",
