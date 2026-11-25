@@ -232,8 +232,6 @@ class NavigatorTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.sum(weights * result.parameters[1])), 0.0, delta=1e-3 * np.abs(result.parameters[1]).max())
         self.assertTrue(math.isfinite(result.history[-1]["data_residual_before_update"]))
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PipelineTreeTests(unittest.TestCase):
@@ -292,3 +290,97 @@ class PipelineTreeTests(unittest.TestCase):
             self.assertAlmostEqual(corrected_normal["echoes"][0]["wave_kspace_norm"], float(np.linalg.norm(values)), places=3)
             self.assertTrue((output / "estimation" / "figures" / "normal_traces.png").is_file())
             self.assertIn("uniform_hz_std", manifest["cases"]["normal"])
+
+
+class MotionTests(unittest.TestCase):
+    """Rigid transform and per-segment motion estimation on the toy Wave problem."""
+
+    voxel = (2.0, 2.0, 2.0)
+
+    def test_fourier_rotation_identity_and_inverse(self) -> None:
+        """Zero angles are exact, and a single-axis rotation is undone by its negative.
+
+        Returns:
+            None.
+        """
+        from b0_fluctuation.motion import fourier_rotate, rigid_transform
+
+        _, image, _ = _problem(seed=7)
+        zero = torch.zeros(6, device=DEVICE)
+        self.assertLess(float((rigid_transform(image, zero, self.voxel) - image).abs().max()), 1e-5)
+        for axis in range(3):
+            angles = torch.zeros(3, device=DEVICE)
+            angles[axis] = 4.0
+            back = fourier_rotate(fourier_rotate(image, angles, self.voxel), -angles, self.voxel)
+            error = float(torch.linalg.vector_norm(back - image) / torch.linalg.vector_norm(image))
+            self.assertLess(error, 0.05, msg=f"axis {axis}")
+
+    def test_rotation_gradient_matches_finite_difference_at_zero(self) -> None:
+        """The loss is smooth at zero rotation (no interpolation kink).
+
+        Returns:
+            None.
+        """
+        from b0_fluctuation.motion import rigid_transform, segment_loss
+
+        operator, image, timing = _problem(seed=8)
+        truth = torch.tensor([0.6, -0.4, 0.5, 1.5, -1.0, 1.2], device=DEVICE)
+        data = operator.forward(rigid_transform(image, truth, self.voxel))
+        lin = torch.as_tensor(timing.lin, device=DEVICE)
+        par = torch.as_tensor(timing.par, device=DEVICE)
+        norm = torch.sum(data[:, :, lin, par].abs() ** 2)
+        free = torch.zeros(6, device=DEVICE, requires_grad=True)
+        moved = rigid_transform(image, free, self.voxel)
+        _, image_gradient = segment_loss(operator, moved, data, lin, par, norm)
+        moved.backward(image_gradient)
+        for k in range(6):
+            step = torch.zeros(6, device=DEVICE)
+            step[k] = 1e-2
+            plus = float(segment_loss(operator, rigid_transform(image, step, self.voxel), data, lin, par, norm, gradient=False)[0])
+            minus = float(segment_loss(operator, rigid_transform(image, -step, self.voxel), data, lin, par, norm, gradient=False)[0])
+            finite = (plus - minus) / 2e-2
+            self.assertAlmostEqual(float(free.grad[k]), finite, delta=0.02 * abs(finite) + 1e-4, msg=f"parameter {k}")
+
+    def test_estimate_motion_recovers_known_motion(self) -> None:
+        """One segment of noiseless moved data is aligned back to the truth.
+
+        Returns:
+            None.
+        """
+        from b0_fluctuation.motion import estimate_motion, rigid_transform
+
+        operator, image, timing = _problem(seed=9)
+        truth = np.array([0.8, -0.5, 0.6, 2.0, -1.0, 1.5])
+        data = operator.forward(rigid_transform(image, torch.tensor(truth, dtype=torch.float32, device=DEVICE), self.voxel))
+        result = estimate_motion(
+            operator, image, data, timing, self.voxel, lines_per_segment=timing.count, iterations=40, log=lambda _: None
+        )
+        np.testing.assert_allclose(result.parameters[0], truth, atol=0.05)
+        self.assertLess(result.loss_final[0], 1e-4 * result.loss_initial[0])
+
+    def test_residual_profile_flags_motion_block_edges(self) -> None:
+        """A block of moved segments raises the edge score at the block boundaries.
+
+        Returns:
+            None.
+        """
+        from b0_fluctuation.motion import rigid_transform, segment_indices, segment_residual_profile
+
+        operator, image, timing = _problem(seed=10)
+        lines = image.shape[2]
+        segments = segment_indices(timing, lines)
+        data = operator.forward(image)
+        moved = operator.forward(rigid_transform(image, torch.tensor([1.0, 0.0, 0.8, 2.0, 0.0, 1.0], device=DEVICE), self.voxel))
+        lin = torch.as_tensor(timing.lin, device=DEVICE)
+        par = torch.as_tensor(timing.par, device=DEVICE)
+        for index in range(4, 8):
+            members = torch.as_tensor(segments[index], device=DEVICE)
+            data[:, :, lin[members], par[members]] = moved[:, :, lin[members], par[members]]
+        reference, _ = cg_sense(operator, data, iterations=60)
+        profile = segment_residual_profile(operator, reference, data, timing, lines_per_segment=lines)
+        self.assertIn(int(np.argmax(profile["edge_score"])), {3, 4, 7, 8})
+        self.assertGreater(float(np.max(profile["edge_score"])), 1.3)
+
+
+if __name__ == "__main__":
+    unittest.main()

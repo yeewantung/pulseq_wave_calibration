@@ -108,7 +108,17 @@ The gradient part is synthesized exactly.
 - **Only uniform and linear fields are modelled.** Local, nonlinear
   fluctuations, such as near the sinuses or in the CSF, are only partly
   captured. The per-coil modes give some extra spatial freedom.
-- **Bulk motion is not modelled.** Rigid motion is a different inconsistency.
+- **Bulk motion is not corrected.** Rigid motion is a different
+  inconsistency. `b0_fluctuation/motion.py` is an experimental per-segment
+  rigid alignment (Fourier-shear rotation, L-BFGS through the Wave
+  operator). It recovers a known motion when the reference image is correct.
+  With the sequential LIN order used here, though, the least-squares image
+  absorbs a block of moved segments, and only the segments at the block
+  edges stay inconsistent. On the real geometry it therefore did not recover
+  a simulated 1.5 mm / 1° block. `segment_residual_profile` turns this into a
+  detector: step-like motion shows as a per-segment residual 2–3× above its
+  time neighbours at the block edges. Correcting motion needs a distributed
+  phase-encoding order or navigators.
 - **`linear_field` is linearized in the gradient.** Use it for gradient
   phases well below 1 rad across the FOV; 1 Hz across the head at 20 ms TE is
   0.13 rad.
